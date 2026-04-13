@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   title: 'Is This Vibe-Coded?',
   description: 'Detect AI-generated websites, audit security headers, and identify tech stacks — instantly.',
   other: {
-    'vibecoded-verification': '586eced26824ffae11e3f336f690b3275938',
+    'vibecoded-verification': '3da58e179094f251086315103d2d8a9a8e86',
   },
 };
 
