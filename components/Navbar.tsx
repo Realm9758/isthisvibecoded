@@ -40,6 +40,9 @@ export function Navbar() {
           <Link href="/pricing" className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5">
             Pricing
           </Link>
+          <Link href="/privacy" className="px-3 py-1.5 text-xs text-white/30 hover:text-white/60 transition-colors rounded-lg hover:bg-white/5 hidden sm:block">
+            Privacy
+          </Link>
         </div>
 
         {/* Auth */}
@@ -55,7 +58,7 @@ export function Navbar() {
                 <div className="w-6 h-6 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold">
                   {user.name[0]?.toUpperCase()}
                 </div>
-                <span className="text-white/80 text-xs max-w-[80px] truncate hidden sm:block">{user.name}</span>
+                <span className="text-white/80 text-xs max-w-20 truncate hidden sm:block">{user.name}</span>
                 <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${PLAN_BADGE[user.plan]} hidden sm:block`}>
                   {user.plan.toUpperCase()}
                 </span>

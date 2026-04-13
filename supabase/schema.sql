@@ -61,10 +61,20 @@ end;
 $$;
 
 
+-- ── Verification Tokens (ownership proof) ────────────────────────────────
+
+create table if not exists verification_tokens (
+  domain      text primary key,
+  token       text not null,
+  created_at  bigint not null
+);
+
+
 -- ── Row Level Security ─────────────────────────────────────────────────────
 -- We use the service_role key server-side, so RLS is disabled.
 -- Enable and add policies if you ever expose these tables to client-side code.
 
-alter table users       disable row level security;
-alter table scans       disable row level security;
-alter table daily_usage disable row level security;
+alter table users                disable row level security;
+alter table scans                disable row level security;
+alter table daily_usage          disable row level security;
+alter table verification_tokens  disable row level security;

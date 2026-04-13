@@ -45,12 +45,13 @@ function Card({ title, badge, children, className = '' }: { title: string; badge
 interface Props {
   result: AnalysisResult & { scanId?: string; roasts?: string[]; scansRemaining?: number | null };
   onReset: () => void;
+  defaultRoastMode?: boolean;
 }
 
-export function ResultsDashboard({ result, onReset }: Props) {
+export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: Props) {
   const { user } = useAuth();
   const [tab, setTab] = useState<'overview' | 'security' | 'verify'>('overview');
-  const [roastMode, setRoastMode] = useState(false);
+  const [roastMode, setRoastMode] = useState(defaultRoastMode);
   const [shareOpen, setShareOpen] = useState(false);
 
   const vibeColor = getVibeColor(result.vibe.score);

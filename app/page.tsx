@@ -26,12 +26,13 @@ const SCAN_STEP_MS = 1400;
 
 export default function Home() {
   const { user, refreshUser } = useAuth();
-  const [url, setUrl]       = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
-  const [result, setResult] = useState<FullResult | null>(null);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [loadStep, setLoadStep] = useState(0);
-  const [confetti, setConfetti] = useState(false);
+  const [url, setUrl]             = useState('');
+  const [status, setStatus]       = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [result, setResult]       = useState<FullResult | null>(null);
+  const [errorMsg, setErrorMsg]   = useState('');
+  const [loadStep, setLoadStep]   = useState(0);
+  const [confetti, setConfetti]   = useState(false);
+  const [roastMode, setRoastMode] = useState(false);
   const stepRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -185,6 +186,21 @@ export default function Home() {
                 )}
               </div>
 
+              {/* Roast mode toggle */}
+              <div className="mt-4 flex justify-center">
+                <button
+                  onClick={() => setRoastMode(r => !r)}
+                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-medium transition-all ${
+                    roastMode
+                      ? 'bg-orange-500/15 border-orange-500/35 text-orange-400'
+                      : 'border-white/10 text-white/35 hover:border-white/20 hover:text-white/55'
+                  }`}
+                >
+                  <span>🔥</span>
+                  {roastMode ? 'Roast Mode On — results will be brutal' : 'Enable Roast Mode'}
+                </button>
+              </div>
+
               {/* Example sites */}
               <div className="mt-5 flex flex-wrap justify-center gap-2">
                 <span className="text-xs text-white/25 self-center">Try:</span>
@@ -226,7 +242,7 @@ export default function Home() {
           {/* Results */}
           {status === 'done' && result && (
             <section ref={resultsRef} className="px-6 pb-20">
-              <ResultsDashboard result={result} onReset={reset} />
+              <ResultsDashboard result={result} onReset={reset} defaultRoastMode={roastMode} />
             </section>
           )}
 
@@ -269,9 +285,13 @@ export default function Home() {
 
           {/* Footer */}
           <footer className="border-t border-white/5 px-6 py-6 print:hidden">
-            <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 flex-wrap">
               <p className="text-xs text-white/20">Is This Vibe-Coded? — passive analysis only</p>
-              <p className="text-xs text-white/20">No data is stored beyond your session.</p>
+              <div className="flex items-center gap-4">
+                <a href="/privacy" className="text-xs text-white/20 hover:text-white/50 transition-colors">Privacy Policy</a>
+                <a href="/pricing" className="text-xs text-white/20 hover:text-white/50 transition-colors">Pricing</a>
+                <p className="text-xs text-white/15">Scan only sites you own or have permission to test.</p>
+              </div>
             </div>
           </footer>
         </div>

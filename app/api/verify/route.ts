@@ -1,8 +1,8 @@
 import { resolveTxt } from 'dns/promises';
+import { supabase } from '@/lib/supabase';
 import type { VerificationToken } from '@/types/analysis';
 
-// In-memory token store (resets on restart; swap for a DB in production)
-const tokenStore = new Map<string, { token: string; createdAt: number }>();
+const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 function randomToken(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(18)))
@@ -29,14 +29,24 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Domain is required' }, { status: 400 });
   }
 
-  const existing = tokenStore.get(domain);
+  // Reuse existing token if still valid
+  const { data: existing } = await supabase
+    .from('verification_tokens')
+    .select('token, created_at')
+    .eq('domain', domain)
+    .maybeSingle();
+
   let token: string;
 
-  if (existing && Date.now() - existing.createdAt < 24 * 60 * 60 * 1000) {
+  if (existing && Date.now() - existing.created_at < TTL_MS) {
     token = existing.token;
   } else {
     token = randomToken();
-    tokenStore.set(domain, { token, createdAt: Date.now() });
+    await supabase.from('verification_tokens').upsert({
+      domain,
+      token,
+      created_at: Date.now(),
+    });
   }
 
   const result: VerificationToken = {
@@ -65,9 +75,15 @@ export async function GET(request: Request) {
     return Response.json({ error: 'domain and token are required' }, { status: 400 });
   }
 
-  const stored = tokenStore.get(domain);
-  if (!stored || stored.token !== token) {
-    return Response.json({ verified: false, error: 'Token not found or expired' });
+  // Validate token against DB
+  const { data: stored } = await supabase
+    .from('verification_tokens')
+    .select('token, created_at')
+    .eq('domain', domain)
+    .maybeSingle();
+
+  if (!stored || stored.token !== token || Date.now() - stored.created_at > TTL_MS) {
+    return Response.json({ verified: false, error: 'Token not found or expired. Generate a new one.' });
   }
 
   if (method === 'dns') {
@@ -84,7 +100,7 @@ export async function GET(request: Request) {
   if (method === 'meta') {
     try {
       const res = await fetch(`https://${domain}`, {
-        headers: { 'User-Agent': 'VibeCheck-Verifier/1.0' },
+        headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
         signal: AbortSignal.timeout(8000),
       });
       const html = await res.text();
@@ -98,7 +114,7 @@ export async function GET(request: Request) {
   if (method === 'file') {
     try {
       const res = await fetch(`https://${domain}/.well-known/vibecoded.txt`, {
-        headers: { 'User-Agent': 'VibeCheck-Verifier/1.0' },
+        headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
         signal: AbortSignal.timeout(8000),
       });
       const text = (await res.text()).trim();
