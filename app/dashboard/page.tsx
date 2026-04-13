@@ -20,6 +20,13 @@ interface ScanSummary {
   };
 }
 
+interface DeepScanEntry {
+  id: string;
+  domain: string;
+  result: DeepScanResult;
+  created_at: number;
+}
+
 function vibeColor(s: number) { return s >= 70 ? '#8b5cf6' : s >= 30 ? '#f59e0b' : '#22c55e'; }
 function secColor(s: number)  { return s >= 70 ? '#22c55e' : s >= 40 ? '#f59e0b' : '#ef4444'; }
 function domain(url: string)  { try { return new URL(url.startsWith('http') ? url : `https://${url}`).hostname; } catch { return url; } }
@@ -66,7 +73,9 @@ function AuthGate() {
             className="w-12 h-12 rounded-2xl flex items-center justify-center mx-auto mb-4"
             style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)' }}
           >
-            <span className="text-2xl">⚡</span>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(248,113,113,0.9)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
           </div>
           <h1 className="text-2xl font-bold text-white mb-1">
             {mode === 'login' ? 'Sign in to your scans' : 'Create your account'}
@@ -638,7 +647,9 @@ function DeepScanPanel() {
             className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
             style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)' }}
           >
-            ⚡
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(248,113,113,0.9)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
           </div>
           <div>
             <h2 className="text-sm font-bold text-white/85">Deep Vulnerability Scan</h2>
@@ -742,7 +753,7 @@ function DeepScanPanel() {
                 className="flex-1 py-3 rounded-xl text-sm font-bold text-white transition-all"
                 style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)', boxShadow: '0 0 20px rgba(220,38,38,0.25)' }}
               >
-                ⚡ Run Deep Scan Now
+                Run Deep Scan Now
               </button>
               <button onClick={reset} className="px-4 py-3 rounded-xl text-sm border border-white/8 text-white/40 hover:bg-white/5 transition-colors">
                 Cancel
@@ -762,6 +773,51 @@ function DeepScanPanel() {
         {step === 'results' && scanResult && (
           <DeepScanResults result={scanResult} domain={scanDomain} onReset={reset} />
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Deep scan history card ─────────────────────────────────────────────────
+
+function DeepScanHistoryCard({ entry }: { entry: DeepScanEntry }) {
+  const { summary, findings } = entry.result;
+  const grade = GRADE(summary.score);
+  const gradeColor = GRADE_COLOR(grade);
+  const criticalCount = summary.critical ?? 0;
+  const highCount = summary.high ?? 0;
+
+  return (
+    <div className="flex items-center justify-between gap-4 px-4 py-3.5 rounded-xl border border-white/6 bg-white/2 hover:bg-white/3 hover:border-white/10 transition-all">
+      <div className="min-w-0 flex-1">
+        <p className="font-mono text-sm font-semibold text-white/75 truncate">{entry.domain}</p>
+        <div className="flex items-center gap-2 mt-1 flex-wrap">
+          {criticalCount > 0 && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ color: SEV_COLOR.critical, background: SEV_BG.critical, border: `1px solid ${SEV_BORDER.critical}` }}>
+              {criticalCount} critical
+            </span>
+          )}
+          {highCount > 0 && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ color: SEV_COLOR.high, background: SEV_BG.high, border: `1px solid ${SEV_BORDER.high}` }}>
+              {highCount} high
+            </span>
+          )}
+          {findings.length === 0 && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded text-emerald-400" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)' }}>
+              Clean
+            </span>
+          )}
+          <span className="text-[10px] text-white/25">{timeAgo(entry.created_at)}</span>
+        </div>
+      </div>
+      <div className="text-center shrink-0">
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center"
+          style={{ background: `${gradeColor}18`, border: `1.5px solid ${gradeColor}40` }}
+        >
+          <span className="text-lg font-black" style={{ color: gradeColor }}>{grade}</span>
+        </div>
+        <p className="text-[10px] text-white/25 mt-0.5">{summary.score}/100</p>
       </div>
     </div>
   );
@@ -816,6 +872,8 @@ export default function DashboardPage() {
   const { user, loading } = useAuth();
   const [scans, setScans] = useState<ScanSummary[]>([]);
   const [scansLoading, setScansLoading] = useState(false);
+  const [deepScans, setDeepScans] = useState<DeepScanEntry[]>([]);
+  const [deepScansLoading, setDeepScansLoading] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -825,6 +883,12 @@ export default function DashboardPage() {
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setScans(data); })
       .finally(() => setScansLoading(false));
+
+    setDeepScansLoading(true);
+    fetch('/api/user/deep-scans')
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setDeepScans(data); })
+      .finally(() => setDeepScansLoading(false));
   }, [user]);
 
   if (loading) {
@@ -881,7 +945,7 @@ export default function DashboardPage() {
               ← Run passive scan
             </Link>
             <Link
-              href="/vulnerability"
+              href="/security"
               className="px-4 py-2 rounded-xl text-xs font-medium border border-red-500/25 bg-red-500/8 text-red-400 hover:bg-red-500/12 transition-colors"
             >
               About deep scans
@@ -892,6 +956,46 @@ export default function DashboardPage() {
         {/* Deep scan panel */}
         <div className="mb-8">
           <DeepScanPanel />
+        </div>
+
+        {/* Deep scan history */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-bold text-white/70 uppercase tracking-wider">Past Deep Scans</h2>
+            <span className="text-xs text-white/25">{deepScans.length} scan{deepScans.length !== 1 ? 's' : ''}</span>
+          </div>
+
+          {deepScansLoading ? (
+            <div className="space-y-2">
+              {[1, 2].map(i => (
+                <div key={i} className="h-16 rounded-xl border border-white/5 bg-white/2 animate-pulse" />
+              ))}
+            </div>
+          ) : deepScans.length === 0 ? (
+            <div
+              className="rounded-xl border border-white/6 px-5 py-6 flex items-center justify-between gap-4"
+              style={{ background: 'rgba(255,255,255,0.015)' }}
+            >
+              <div>
+                <p className="text-sm text-white/45 mb-0.5">No deep scans yet</p>
+                <p className="text-xs text-white/25">Run your first active OWASP audit from the panel above.</p>
+              </div>
+              <div
+                className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="text-white/25">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {deepScans.map(entry => (
+                <DeepScanHistoryCard key={entry.id} entry={entry} />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* My Scans */}

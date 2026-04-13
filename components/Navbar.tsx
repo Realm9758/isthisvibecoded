@@ -80,11 +80,11 @@ export function Navbar() {
             <IconScan />
             <span>Scanner</span>
           </Link>
-          <Link href="/security" className="flex items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden sm:flex">
+          <Link href="/security" className="items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden sm:flex">
             <IconShield />
             <span>Deep Scan</span>
           </Link>
-          <Link href="/feed" className="flex items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden md:flex">
+          <Link href="/feed" className="items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden md:flex">
             <IconFeed />
             <span>Recent Scans</span>
           </Link>
@@ -110,7 +110,7 @@ export function Navbar() {
                 >
                   {user.name[0]?.toUpperCase()}
                 </div>
-                <span className="text-white/65 text-xs max-w-[80px] truncate hidden sm:block">{user.name}</span>
+                <span className="text-white/65 text-xs max-w-20 truncate hidden sm:block">{user.name}</span>
                 <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border hidden sm:block ${PLAN_BADGE[user.plan]}`}>
                   {user.plan.toUpperCase()}
                 </span>
