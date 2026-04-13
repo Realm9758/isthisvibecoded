@@ -557,6 +557,174 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
   ];
 }
 
+// ── Admin path discovery ──────────────────────────────────────────────────
+
+const ADMIN_PATHS = [
+  '/admin', '/admin/', '/administrator', '/wp-admin', '/wp-admin/',
+  '/dashboard', '/cpanel', '/phpmyadmin', '/pma', '/manager',
+  '/admin/login', '/admin/index', '/adminpanel', '/cms', '/backend',
+  '/controlpanel', '/portal', '/superadmin', '/root',
+];
+
+async function checkAdminPaths(baseUrl: string): Promise<DeepFinding[]> {
+  const results = await Promise.allSettled(
+    ADMIN_PATHS.map(async (path) => {
+      const res = await safeFetch(`${baseUrl}${path}`, { redirect: 'follow' });
+      return { path, status: res?.status ?? 0 };
+    })
+  );
+
+  const exposed = results
+    .filter(r => r.status === 'fulfilled' && r.value.status === 200)
+    .map(r => (r as PromiseFulfilledResult<{ path: string; status: number }>).value.path);
+
+  if (!exposed.length) return [];
+
+  return [{
+    id: 'admin-paths-exposed',
+    category: 'exposed-files',
+    severity: 'high',
+    title: `Admin Panel Accessible: ${exposed.slice(0, 3).join(', ')}${exposed.length > 3 ? '…' : ''}`,
+    description: `${exposed.length} admin path${exposed.length > 1 ? 's' : ''} returned HTTP 200 without redirecting to a login page. Exposed admin panels are high-value targets.`,
+    evidence: exposed.map(p => `GET ${baseUrl}${p} → 200 OK`).join('\n'),
+    remediation: 'Restrict admin paths to specific IP ranges, require authentication, or move them to a non-public subdomain.',
+  }];
+}
+
+// ── SQL injection error detection ─────────────────────────────────────────
+
+const SQL_PAYLOADS = ["'", "1'", `"`, `1 OR 1=1`, `' OR '1'='1`];
+const SQL_ERROR_PATTERNS = [
+  /sql syntax/i, /mysql_fetch/i, /ORA-\d{5}/i, /pg_query/i,
+  /sqlite_/i, /SQLSTATE/i, /syntax error.*near/i, /unclosed quotation/i,
+  /Microsoft.*ODBC.*SQL/i, /Warning.*mysql/i, /valid MySQL result/i,
+];
+
+async function checkSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
+  // Look for forms or query parameters in common endpoints
+  const testPaths = ['/?id=', '/search?q=', '/product?id=', '/user?id=', '/page?id=', '/item?id='];
+
+  for (const path of testPaths) {
+    for (const payload of SQL_PAYLOADS) {
+      const url = `${baseUrl}${path}${encodeURIComponent(payload)}`;
+      const res = await safeFetch(url);
+      if (!res) continue;
+      const text = await res.text().catch(() => '');
+      const match = SQL_ERROR_PATTERNS.find(re => re.test(text));
+      if (match) {
+        return [{
+          id: 'sqli-error-based',
+          category: 'exposed-files',
+          severity: 'critical',
+          title: 'SQL Injection — Error-Based',
+          description: 'A SQL error message was returned in response to a crafted input. This indicates unsanitised database queries and likely full database compromise.',
+          evidence: `GET ${url}\n→ SQL error: ${text.match(match)?.[0] ?? 'pattern matched'}`,
+          remediation: 'Use parameterised queries / prepared statements. Never concatenate user input into SQL strings. Enable generic error pages in production.',
+          url,
+        }];
+      }
+    }
+  }
+  return [];
+}
+
+// ── Error verbosity / stack trace disclosure ──────────────────────────────
+
+async function checkErrorVerbosity(baseUrl: string): Promise<DeepFinding[]> {
+  const testUrls = [
+    `${baseUrl}/this-page-does-not-exist-xyz123`,
+    `${baseUrl}/api/nonexistent`,
+    `${baseUrl}/?debug=true`,
+  ];
+
+  const STACK_PATTERNS = [
+    /at \w+\.?\w* \(.+:\d+:\d+\)/,        // JS stack trace
+    /Traceback \(most recent call last\)/i, // Python
+    /Exception in thread/i,                 // Java
+    /System\.Exception/i,                   // .NET
+    /Fatal error:/i,                         // PHP
+    /undefined method/i,                    // Ruby
+    /stack trace:/i,
+    /at line \d+ in/i,
+  ];
+
+  for (const url of testUrls) {
+    const res = await safeFetch(url);
+    if (!res) continue;
+    const text = await res.text().catch(() => '');
+    const match = STACK_PATTERNS.find(re => re.test(text));
+    if (match) {
+      const snippet = text.substring(text.search(match), text.search(match) + 120).replace(/<[^>]+>/g, '').trim();
+      return [{
+        id: 'error-stack-trace',
+        category: 'info-disclosure',
+        severity: 'medium',
+        title: 'Stack Trace / Verbose Error Disclosed',
+        description: 'The server returns detailed error messages or stack traces to the public. These reveal internal file paths, library versions, and code structure.',
+        evidence: `GET ${url}\n→ ${snippet}…`,
+        remediation: 'Set production error handling to return generic messages. Log detailed errors server-side only.',
+        url,
+      }];
+    }
+  }
+  return [];
+}
+
+// ── Open redirect ─────────────────────────────────────────────────────────
+
+async function checkOpenRedirect(baseUrl: string): Promise<DeepFinding[]> {
+  const REDIRECT_PARAMS = ['?redirect=', '?url=', '?next=', '?return=', '?returnUrl=', '?goto=', '?continue='];
+  const TARGET = 'https://evil-attacker-test.com';
+
+  for (const param of REDIRECT_PARAMS) {
+    const url = `${baseUrl}${param}${encodeURIComponent(TARGET)}`;
+    const res = await safeFetch(url, { redirect: 'manual' });
+    if (!res) continue;
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location') ?? '';
+      if (loc.startsWith(TARGET) || loc.includes('evil-attacker-test.com')) {
+        return [{
+          id: 'open-redirect',
+          category: 'authentication',
+          severity: 'medium',
+          title: 'Open Redirect Vulnerability',
+          description: `The ${param.replace('?','').replace('=','')} parameter is not validated and redirects to arbitrary external URLs. Attackers use this for phishing by sending links that appear to originate from your domain.`,
+          evidence: `GET ${url}\n→ ${res.status} Location: ${loc}`,
+          remediation: 'Validate redirect URLs against an allowlist of trusted destinations. Reject any URL pointing outside your domain.',
+          url,
+        }];
+      }
+    }
+  }
+  return [];
+}
+
+// ── Directory listing ─────────────────────────────────────────────────────
+
+async function checkDirectoryListing(baseUrl: string): Promise<DeepFinding[]> {
+  const paths = ['/uploads/', '/static/', '/assets/', '/files/', '/images/', '/media/', '/backup/', '/logs/'];
+  const DIR_PATTERNS = [/Index of\s+\//i, /\[To Parent Directory\]/i, /Parent Directory<\/a>/i, /<title>Index of/i];
+
+  for (const path of paths) {
+    const res = await safeFetch(`${baseUrl}${path}`);
+    if (!res || res.status !== 200) continue;
+    const text = await res.text().catch(() => '');
+    if (DIR_PATTERNS.some(re => re.test(text))) {
+      return [{
+        id: 'directory-listing',
+        category: 'info-disclosure',
+        severity: 'medium',
+        title: `Directory Listing Enabled: ${path}`,
+        description: `Directory listing is enabled at ${path}. Attackers can browse all files in this directory, potentially finding backups, configs, or sensitive data.`,
+        evidence: `GET ${baseUrl}${path} → 200 with directory listing HTML`,
+        remediation: 'Disable directory listing in your web server config (e.g., `Options -Indexes` in Apache, `autoindex off` in Nginx).',
+        url: `${baseUrl}${path}`,
+      }];
+    }
+  }
+  return [];
+}
+
 // ── Score calculation ─────────────────────────────────────────────────────
 
 function calculateScore(findings: DeepFinding[]): number {
@@ -567,44 +735,71 @@ function calculateScore(findings: DeepFinding[]): number {
   return Math.max(0, 100 - deductions);
 }
 
-// ── Main export ───────────────────────────────────────────────────────────
+// ── Check phases (for streaming progress) ────────────────────────────────
 
-export async function deepScanDomain(domain: string): Promise<DeepScanResult> {
+export type ScanPhase = {
+  id: string;
+  label: string;
+  detail: string;
+};
+
+export const SCAN_PHASES: ScanPhase[] = [
+  { id: 'init',      label: 'Connecting',             detail: 'Establishing connection and reading HTTP response…' },
+  { id: 'files',     label: 'Sensitive Files',         detail: 'Probing 15 sensitive paths: .env, .git, wp-config, phpinfo…' },
+  { id: 'sqli',      label: 'SQL Injection',           detail: "Injecting payloads: ' OR 1=1, \\\" OR \\\"1\\\"=\\\"1 — watching for DB errors…" },
+  { id: 'cors',      label: 'CORS Policy',             detail: 'Sending null origin & evil-attacker.com — testing reflection with credentials…' },
+  { id: 'headers',   label: 'Security Headers',        detail: 'Auditing CSP, HSTS, X-Frame-Options, Referrer-Policy, Permissions-Policy…' },
+  { id: 'cookies',   label: 'Cookie Flags',            detail: 'Checking Set-Cookie for HttpOnly, Secure, SameSite flags…' },
+  { id: 'methods',   label: 'HTTP Methods',            detail: 'OPTIONS request — checking for TRACE, PUT, DELETE…' },
+  { id: 'ssl',       label: 'SSL / HTTPS',             detail: 'Testing plain HTTP access and redirect chain…' },
+  { id: 'admin',     label: 'Admin Path Discovery',    detail: 'Probing /admin, /wp-admin, /phpmyadmin, /cpanel, 14 more…' },
+  { id: 'errors',    label: 'Error Verbosity',         detail: 'Triggering 404s and debug params — checking for stack traces…' },
+  { id: 'redirect',  label: 'Open Redirect',           detail: 'Testing ?redirect=, ?url=, ?next= params with external URL…' },
+  { id: 'dirlist',   label: 'Directory Listing',       detail: 'Checking /uploads, /static, /assets, /files for open indexes…' },
+  { id: 'robots',    label: 'robots.txt Analysis',     detail: 'Parsing Disallow entries for accidentally mapped sensitive paths…' },
+  { id: 'info',      label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, X-AspNet-Version headers…' },
+  { id: 'done',      label: 'Report',                  detail: 'Scoring findings and compiling vulnerability report…' },
+];
+
+// ── Main export (with progress callback) ─────────────────────────────────
+
+export async function deepScanDomain(
+  domain: string,
+  onPhase?: (phase: ScanPhase, findings: DeepFinding[]) => void,
+): Promise<DeepScanResult> {
   const start = Date.now();
   const baseUrl = `https://${domain}`;
+  const allFindings: DeepFinding[] = [];
 
+  async function run<T extends DeepFinding[]>(phaseId: string, fn: () => Promise<T>): Promise<T> {
+    const phase = SCAN_PHASES.find(p => p.id === phaseId)!;
+    onPhase?.(phase, []);
+    const results = await fn();
+    onPhase?.(phase, results);
+    allFindings.push(...results);
+    return results;
+  }
+
+  onPhase?.(SCAN_PHASES[0], []);
   const mainRes = await safeFetch(baseUrl, { redirect: 'follow' });
 
-  const [
-    exposedFiles,
-    cors,
-    headers,
-    cookies,
-    infoDisclosure,
-    httpMethods,
-    ssl,
-    robots,
-  ] = await Promise.all([
-    checkSensitiveFiles(baseUrl),
-    checkCORS(baseUrl),
-    checkSecurityHeaders(mainRes),
-    checkCookies(mainRes),
-    checkInfoDisclosure(mainRes),
-    checkHTTPMethods(baseUrl),
-    checkSSL(domain),
-    checkRobotsTxt(baseUrl),
-  ]);
+  await run('files',    () => checkSensitiveFiles(baseUrl));
+  await run('sqli',     () => checkSQLInjection(baseUrl));
+  await run('cors',     () => checkCORS(baseUrl));
+  await run('headers',  () => checkSecurityHeaders(mainRes));
+  await run('cookies',  () => checkCookies(mainRes));
+  await run('methods',  () => checkHTTPMethods(baseUrl));
+  await run('ssl',      () => checkSSL(domain));
+  await run('admin',    () => checkAdminPaths(baseUrl));
+  await run('errors',   () => checkErrorVerbosity(baseUrl));
+  await run('redirect', () => checkOpenRedirect(baseUrl));
+  await run('dirlist',  () => checkDirectoryListing(baseUrl));
+  await run('robots',   () => checkRobotsTxt(baseUrl));
+  await run('info',     () => checkInfoDisclosure(mainRes));
 
-  const findings: DeepFinding[] = [
-    ...exposedFiles,
-    ...cors,
-    ...headers,
-    ...cookies,
-    ...infoDisclosure,
-    ...httpMethods,
-    ...ssl,
-    ...robots,
-  ];
+  onPhase?.(SCAN_PHASES[SCAN_PHASES.length - 1], allFindings);
+
+  const findings = allFindings;
 
   const count = (sev: DeepFinding['severity']) => findings.filter(f => f.severity === sev).length;
 

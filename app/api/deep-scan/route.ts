@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
-import { deepScanDomain } from '@/lib/deep-scanner';
+import { deepScanDomain, SCAN_PHASES } from '@/lib/deep-scanner';
+import type { DeepFinding } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
 export const maxDuration = 55;
@@ -9,6 +10,10 @@ export const maxDuration = 55;
 function getDomain(url: string): string {
   const normalized = url.startsWith('http') ? url : `https://${url}`;
   return new URL(normalized).hostname;
+}
+
+function sse(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
 export async function POST(request: Request) {
@@ -28,22 +33,16 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  if (!domain) {
-    return Response.json({ error: 'Domain is required' }, { status: 400 });
-  }
+  if (!domain) return Response.json({ error: 'Domain is required' }, { status: 400 });
 
-  // Block private/local addresses
   if (
-    domain === 'localhost' ||
-    domain === '127.0.0.1' ||
-    domain.startsWith('192.168.') ||
-    domain.startsWith('10.') ||
-    domain.endsWith('.local')
+    domain === 'localhost' || domain === '127.0.0.1' ||
+    domain.startsWith('192.168.') || domain.startsWith('10.') || domain.endsWith('.local')
   ) {
     return Response.json({ error: 'Private/local domains are not allowed' }, { status: 400 });
   }
 
-  // Verify ownership — must have a verified token in the DB
+  // Ownership check
   const { data: verif } = await supabase
     .from('verification_tokens')
     .select('token, verified')
@@ -57,11 +56,35 @@ export async function POST(request: Request) {
     );
   }
 
-  try {
-    const result = await deepScanDomain(domain);
-    return Response.json(result);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Scan failed';
-    return Response.json({ error: message }, { status: 500 });
-  }
+  // Stream SSE
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      function emit(event: string, data: unknown) {
+        controller.enqueue(encoder.encode(sse(event, data)));
+      }
+
+      try {
+        emit('phases', SCAN_PHASES);
+
+        const result = await deepScanDomain(domain, (phase, findings: DeepFinding[]) => {
+          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings });
+        });
+
+        emit('result', result);
+      } catch (err) {
+        emit('error', { error: err instanceof Error ? err.message : 'Scan failed' });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
 }
