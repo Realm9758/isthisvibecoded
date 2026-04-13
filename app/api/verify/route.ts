@@ -104,7 +104,12 @@ export async function GET(request: Request) {
         signal: AbortSignal.timeout(8000),
       });
       const html = await res.text();
-      const verified = html.includes(`name="vibecoded-verification" content="${token}"`);
+      // Match regardless of attribute order or whitespace
+      const metaRegex = new RegExp(
+        `<meta[^>]+vibecoded-verification[^>]+${token}|<meta[^>]+${token}[^>]+vibecoded-verification`,
+        'i'
+      );
+      const verified = metaRegex.test(html);
       return Response.json({ verified, method: 'meta' });
     } catch {
       return Response.json({ verified: false, method: 'meta', error: 'Could not fetch site' });
