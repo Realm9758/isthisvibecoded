@@ -13,7 +13,7 @@ create table if not exists users (
   password_hash         text not null,
   plan                  text not null default 'free'
                           check (plan in ('free', 'pro', 'team')),
-  stripe_customer_id    text,
+  stripe_customer_id    text,o
   stripe_subscription_id text,
   created_at            bigint not null
 );

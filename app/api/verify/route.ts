@@ -94,49 +94,53 @@ export async function GET(request: Request) {
     return Response.json({ verified: false, error: 'Token not found. Generate a verification token first.' });
   }
 
+  let verified = false;
+
   if (method === 'dns') {
     try {
       const records = await resolveTxt(`_vibecoded-verification.${domain}`);
       const flat = records.flat().join(' ');
-      const verified = flat.includes(`vibecoded-verification=${token}`);
-      return Response.json({ verified, method: 'dns' });
+      verified = flat.includes(`vibecoded-verification=${token}`);
     } catch {
       return Response.json({ verified: false, method: 'dns', error: 'DNS record not found' });
     }
-  }
-
-  if (method === 'meta') {
+  } else if (method === 'meta') {
     try {
       const res = await fetch(`https://${domain}`, {
         headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
         signal: AbortSignal.timeout(8000),
       });
       const html = await res.text();
-      // Match regardless of attribute order or whitespace
       const metaRegex = new RegExp(
         `<meta[^>]+vibecoded-verification[^>]+${token}|<meta[^>]+${token}[^>]+vibecoded-verification`,
         'i'
       );
-      const verified = metaRegex.test(html);
-      return Response.json({ verified, method: 'meta' });
+      verified = metaRegex.test(html);
     } catch {
       return Response.json({ verified: false, method: 'meta', error: 'Could not fetch site' });
     }
-  }
-
-  if (method === 'file') {
+  } else if (method === 'file') {
     try {
       const res = await fetch(`https://${domain}/.well-known/vibecoded.txt`, {
         headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
         signal: AbortSignal.timeout(8000),
       });
       const text = (await res.text()).trim();
-      const verified = text === token;
-      return Response.json({ verified, method: 'file' });
+      verified = text === token;
     } catch {
       return Response.json({ verified: false, method: 'file', error: 'Could not fetch verification file' });
     }
+  } else {
+    return Response.json({ error: 'Invalid method' }, { status: 400 });
   }
 
-  return Response.json({ error: 'Invalid method' }, { status: 400 });
+  // Mark domain as verified in DB so deep scan can run
+  if (verified) {
+    await supabase
+      .from('verification_tokens')
+      .update({ verified: true })
+      .eq('domain', domain);
+  }
+
+  return Response.json({ verified, method });
 }
