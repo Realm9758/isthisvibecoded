@@ -107,12 +107,25 @@ export function Navbar() {
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/8 hover:bg-white/4 transition-colors text-sm"
                 style={{ background: 'rgba(255,255,255,0.03)' }}
               >
-                <div
-                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-                  style={{ background: 'rgba(139,92,246,0.2)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.25)' }}
-                >
-                  {user.name[0]?.toUpperCase()}
-                </div>
+                {user.avatarUrl ? (
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.name}
+                    className="w-6 h-6 rounded-full object-cover shrink-0"
+                    style={{ border: `1px solid ${(user.avatarColor ?? '#8b5cf6')}40` }}
+                  />
+                ) : (
+                  <div
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                    style={{
+                      background: `${user.avatarColor ?? '#8b5cf6'}30`,
+                      color: user.avatarColor ?? '#a78bfa',
+                      border: `1px solid ${user.avatarColor ?? '#8b5cf6'}50`,
+                    }}
+                  >
+                    {user.name[0]?.toUpperCase()}
+                  </div>
+                )}
                 <span className="text-white/65 text-xs max-w-20 truncate hidden sm:block">{user.name}</span>
                 <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border hidden sm:block ${PLAN_BADGE[user.plan]}`}>
                   {user.plan.toUpperCase()}
