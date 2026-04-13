@@ -7,56 +7,103 @@ function genId() {
   return randomBytes(8).toString('base64url');
 }
 
+async function getCurrentUserId(): Promise<string | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(AUTH_COOKIE)?.value;
+  const payload = token ? await verifyToken(token) : null;
+  return payload?.userId ?? null;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const scanId = searchParams.get('scanId');
   if (!scanId) return Response.json({ error: 'scanId required' }, { status: 400 });
 
-  const { data, error } = await supabase
+  const currentUserId = await getCurrentUserId();
+
+  const { data: rows, error } = await supabase
     .from('comments')
-    .select('id, user_name, body, created_at')
+    .select('id, user_id, user_name, body, created_at, edited_at, parent_id')
     .eq('scan_id', scanId)
-    .order('created_at', { ascending: false })
-    .limit(50);
+    .order('created_at', { ascending: true });
 
   if (error) return Response.json({ error: error.message }, { status: 500 });
-  return Response.json(data ?? []);
+  if (!rows || rows.length === 0) return Response.json([]);
+
+  // Fetch like counts for all comments in one query
+  const ids = rows.map(r => r.id);
+  const { data: likes } = await supabase
+    .from('comment_likes')
+    .select('comment_id, user_id')
+    .in('comment_id', ids);
+
+  const likeMap = new Map<string, { count: number; likedByMe: boolean }>();
+  for (const l of likes ?? []) {
+    const entry = likeMap.get(l.comment_id) ?? { count: 0, likedByMe: false };
+    entry.count++;
+    if (currentUserId && l.user_id === currentUserId) entry.likedByMe = true;
+    likeMap.set(l.comment_id, entry);
+  }
+
+  const comments = rows.map(r => ({
+    id: r.id,
+    user_name: r.user_name as string,
+    body: r.body as string,
+    created_at: r.created_at as number,
+    edited_at: r.edited_at as number | null,
+    parent_id: r.parent_id as string | null,
+    is_mine: currentUserId ? r.user_id === currentUserId : false,
+    like_count: likeMap.get(r.id)?.count ?? 0,
+    liked_by_me: likeMap.get(r.id)?.likedByMe ?? false,
+  }));
+
+  return Response.json(comments);
 }
 
 export async function POST(request: Request) {
-  const cookieStore = await cookies();
-  const token = cookieStore.get(AUTH_COOKIE)?.value;
-  const payload = token ? await verifyToken(token) : null;
-  if (!payload) return Response.json({ error: 'Sign in to post a comment' }, { status: 401 });
+  const currentUserId = await getCurrentUserId();
+  if (!currentUserId) return Response.json({ error: 'Sign in to post a comment' }, { status: 401 });
 
-  let scanId: string, body: string;
+  let scanId: string, body: string, parentId: string | null;
   try {
     const json = await request.json();
     scanId = (json.scanId ?? '').trim();
     body = (json.body ?? '').trim();
+    parentId = json.parentId ?? null;
   } catch {
     return Response.json({ error: 'Invalid request' }, { status: 400 });
   }
 
   if (!scanId) return Response.json({ error: 'scanId required' }, { status: 400 });
-  if (!body || body.length < 1) return Response.json({ error: 'Comment cannot be empty' }, { status: 400 });
+  if (!body) return Response.json({ error: 'Comment cannot be empty' }, { status: 400 });
   if (body.length > 500) return Response.json({ error: 'Comment too long (max 500 chars)' }, { status: 400 });
 
-  // Get user name
-  const { data: user } = await supabase.from('users').select('name').eq('id', payload.userId).maybeSingle();
+  const { data: user } = await supabase.from('users').select('name').eq('id', currentUserId).maybeSingle();
   const userName = user?.name ?? 'Anonymous';
 
   const comment = {
     id: genId(),
     scan_id: scanId,
-    user_id: payload.userId,
+    user_id: currentUserId,
     user_name: userName,
     body,
+    parent_id: parentId ?? null,
     created_at: Date.now(),
+    edited_at: null,
   };
 
   const { error } = await supabase.from('comments').insert(comment);
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
-  return Response.json({ id: comment.id, user_name: userName, body, created_at: comment.created_at });
+  return Response.json({
+    id: comment.id,
+    user_name: userName,
+    body,
+    created_at: comment.created_at,
+    edited_at: null,
+    parent_id: comment.parent_id,
+    is_mine: true,
+    like_count: 0,
+    liked_by_me: false,
+  });
 }

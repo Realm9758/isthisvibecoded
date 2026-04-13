@@ -6,6 +6,288 @@ import { ScoreRing } from './ScoreRing';
 import { ShareModal } from './ShareModal';
 import { useAuth } from '@/contexts/AuthContext';
 
+// ── AI Prompt Section ─────────────────────────────────────────────────────
+
+type AiTool = 'lovable' | 'v0' | 'bolt' | 'cursor' | 'claude' | 'replit';
+
+interface ToolDef {
+  id: AiTool;
+  name: string;
+  tagline: string;
+  accent: string;
+  bg: string;
+  border: string;
+}
+
+const TOOLS: ToolDef[] = [
+  { id: 'lovable',  name: 'Lovable',  tagline: 'Full-stack with Supabase', accent: '#f43f5e', bg: 'rgba(244,63,94,0.08)',  border: 'rgba(244,63,94,0.2)' },
+  { id: 'v0',       name: 'v0',       tagline: 'Next.js + shadcn/ui',      accent: '#a78bfa', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.2)' },
+  { id: 'bolt',     name: 'Bolt',     tagline: 'React + Firebase',         accent: '#38bdf8', bg: 'rgba(56,189,248,0.08)',  border: 'rgba(56,189,248,0.2)' },
+  { id: 'cursor',   name: 'Cursor',   tagline: 'Full-stack, any stack',    accent: '#4ade80', bg: 'rgba(74,222,128,0.08)',  border: 'rgba(74,222,128,0.2)' },
+  { id: 'claude',   name: 'Claude',   tagline: 'Code-heavy, TypeScript',   accent: '#fb923c', bg: 'rgba(251,146,60,0.08)',  border: 'rgba(251,146,60,0.2)' },
+  { id: 'replit',   name: 'Replit',   tagline: 'Deploy-first, fast',       accent: '#e879f9', bg: 'rgba(232,121,249,0.08)', border: 'rgba(232,121,249,0.2)' },
+];
+
+function detectLikelyTool(result: AnalysisResult): AiTool {
+  const names = result.techStack.map(t => t.name.toLowerCase());
+  const hosting = (result.hosting.provider ?? '').toLowerCase();
+  const hasSupabase  = names.some(n => n.includes('supabase'));
+  const hasFirebase  = names.some(n => n.includes('firebase'));
+  const hasNextJs    = names.some(n => n.includes('next'));
+  const hasShadcn    = names.some(n => n.includes('shadcn') || n.includes('radix'));
+  const hasReact     = names.some(n => n.includes('react'));
+  const onVercel     = hosting.includes('vercel');
+  const onReplit     = hosting.includes('replit');
+
+  if (onReplit) return 'replit';
+  if (hasSupabase && hasNextJs && hasShadcn) return 'lovable';
+  if (hasNextJs && hasShadcn && onVercel) return 'v0';
+  if (hasFirebase && hasReact) return 'bolt';
+  if (hasSupabase && hasReact) return 'lovable';
+  if (hasNextJs && onVercel) return 'cursor';
+  if (hasNextJs) return 'claude';
+  return 'cursor';
+}
+
+function inferSiteType(result: AnalysisResult): string {
+  const names = result.techStack.map(t => t.name.toLowerCase());
+  const hasAuth     = names.some(n => n.includes('supabase') || n.includes('firebase') || n.includes('auth'));
+  const hasPayments = names.some(n => n.includes('stripe'));
+  const hasDB       = names.some(n => n.includes('supabase') || n.includes('firebase') || n.includes('postgres') || n.includes('mongo'));
+  const hasCMS      = names.some(n => n.includes('wordpress') || n.includes('contentful') || n.includes('sanity'));
+
+  if (hasCMS) return 'content/blog site';
+  if (hasPayments && hasAuth) return 'SaaS application with payments and user accounts';
+  if (hasAuth && hasDB) return 'web application with user authentication and database';
+  if (hasPayments) return 'e-commerce or subscription site';
+  if (hasDB) return 'data-driven web application';
+  return 'web application or landing page';
+}
+
+function buildPrompt(tool: AiTool, result: AnalysisResult): string {
+  const techNames = result.techStack.map(t => t.name);
+  const hosting = result.hosting.provider;
+  const siteType = inferSiteType(result);
+  const domain = (() => { try { return new URL(result.url).hostname; } catch { return result.url; } })();
+  const stack = [...techNames, hosting].filter(Boolean).join(', ');
+
+  const prompts: Record<AiTool, string> = {
+    lovable: `Build a ${siteType} similar to ${domain}.
+
+Tech stack to use:
+- Frontend: React + TypeScript + Tailwind CSS
+- Backend: Supabase (auth, database, storage)
+- UI components: shadcn/ui
+${hosting ? `- Deploy to: ${hosting}\n` : ''}
+Detected stack from the reference site: ${stack}
+
+Requirements:
+1. Implement user authentication (sign up, sign in, sign out)
+2. Create a clean, modern dark-mode UI matching the style of ${domain}
+3. Set up Supabase tables for the core data model
+4. Add responsive layout that works on mobile and desktop
+5. Include proper loading states and error handling
+
+Start by scaffolding the project structure and the main page layout.`,
+
+    v0: `Create a ${siteType} inspired by ${domain}.
+
+Use this exact stack:
+- Next.js 14 App Router + TypeScript
+- shadcn/ui for all components
+- Tailwind CSS for styling
+- Lucide React for icons
+${techNames.includes('Supabase') ? '- Supabase for auth and database\n' : ''}
+Reference site tech: ${stack}
+
+Build the following:
+1. Main landing/dashboard page with clean layout
+2. Responsive navigation with mobile menu
+3. Core feature sections matching ${domain}'s structure
+4. Proper TypeScript types for all data
+5. Dark mode support using next-themes
+
+Use shadcn/ui Card, Button, Badge, and Dialog components throughout. Keep the design minimal and professional.`,
+
+    bolt: `Build a full-stack ${siteType} like ${domain}.
+
+Stack:
+- React + TypeScript + Vite
+- Tailwind CSS + shadcn/ui
+${techNames.includes('Firebase') ? '- Firebase (Firestore, Auth, Storage)\n' : '- Supabase (auth + database)\n'}
+- React Router for navigation
+
+Tech detected on reference site: ${stack}
+
+Implement:
+1. User authentication flow (register, login, protected routes)
+2. Main dashboard/app layout
+3. Core CRUD operations for the primary data model
+4. Real-time updates where applicable
+5. Mobile-responsive design
+
+Start with the project setup, routing, and auth. Then build the main feature screens.`,
+
+    cursor: `I want to build a ${siteType} similar to ${domain}.
+
+The reference site uses: ${stack}
+
+Please scaffold a production-ready Next.js 14 project with:
+- TypeScript strict mode
+- Tailwind CSS + shadcn/ui
+${techNames.includes('Supabase') ? '- Supabase client setup (auth + database)\n' : ''}
+${techNames.includes('Stripe') ? '- Stripe integration for payments\n' : ''}
+- ESLint + Prettier configured
+- Proper folder structure (app/, components/, lib/, types/)
+
+Then implement:
+1. Authentication with protected routes
+2. Main layout with navbar and sidebar
+3. Primary feature from ${domain} — replicate the core value proposition
+4. Database schema and API routes
+5. Responsive design
+
+Write clean, well-typed TypeScript throughout. No shortcuts.`,
+
+    claude: `Help me build a ${siteType} inspired by ${domain}.
+
+The site I'm replicating uses: ${stack}
+
+I want a clean, production-quality implementation using:
+- Next.js 14 (App Router) + TypeScript
+- Tailwind CSS for styling
+- shadcn/ui for components
+${techNames.includes('Supabase') ? '- Supabase for auth and Postgres database\n' : ''}
+${techNames.includes('Stripe') ? '- Stripe for billing\n' : ''}
+
+Please:
+1. Design the database schema first
+2. Set up the Next.js project structure
+3. Implement authentication (email/password)
+4. Build the core pages: home, dashboard, settings
+5. Add proper error boundaries and loading states
+
+Focus on correctness and security. Use server components where possible. Validate all inputs server-side.`,
+
+    replit: `Build a ${siteType} similar to ${domain} that I can deploy directly on Replit.
+
+Reference stack: ${stack}
+
+Use:
+- Node.js backend (Express or Next.js)
+- React frontend with Tailwind CSS
+- PostgreSQL (Replit DB) or Supabase
+- Simple session-based auth
+
+Make it work out of the box on Replit with:
+1. Single-command startup (npm run dev)
+2. Environment variable setup for secrets
+3. Basic auth (register / login)
+4. Core feature that matches ${domain}
+5. Simple, readable code — avoid complex abstractions
+
+Keep dependencies minimal. It should run immediately after clone.`,
+  };
+
+  return prompts[tool];
+}
+
+function PromptSection({ result }: { result: AnalysisResult }) {
+  const detected = detectLikelyTool(result);
+  const [activeTool, setActiveTool] = useState<AiTool>(detected);
+  const [copied, setCopied] = useState(false);
+
+  const prompt = buildPrompt(activeTool, result);
+  const toolDef = TOOLS.find(t => t.id === activeTool)!;
+  const detectedDef = TOOLS.find(t => t.id === detected)!;
+
+  function copyPrompt() {
+    navigator.clipboard.writeText(prompt).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="rounded-2xl border border-white/8 overflow-hidden mb-4" style={{ background: 'rgba(255,255,255,0.015)' }}>
+      {/* Header */}
+      <div className="px-5 py-4 border-b border-white/6 flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 mb-0.5">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgba(167,139,250,0.8)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+            </svg>
+            <p className="text-xs font-semibold text-white/60 uppercase tracking-wider">Recreate Prompt</p>
+          </div>
+          <p className="text-xs text-white/30">
+            Likely built with{' '}
+            <span className="font-semibold" style={{ color: detectedDef.accent }}>{detectedDef.name}</span>
+            {' '}· paste into your AI of choice to rebuild it
+          </p>
+        </div>
+        <button
+          onClick={copyPrompt}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0"
+          style={copied
+            ? { background: 'rgba(74,222,128,0.12)', border: '1px solid rgba(74,222,128,0.3)', color: '#4ade80' }
+            : { background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa' }
+          }
+        >
+          {copied ? (
+            <>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+              Copied
+            </>
+          ) : (
+            <>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+              </svg>
+              Copy Prompt
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Tool tabs */}
+      <div className="flex gap-1 px-3 pt-3 overflow-x-auto pb-1">
+        {TOOLS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTool(t.id)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all shrink-0"
+            style={activeTool === t.id
+              ? { background: t.bg, border: `1px solid ${t.border}`, color: t.accent }
+              : { background: 'transparent', border: '1px solid transparent', color: 'rgba(255,255,255,0.3)' }
+            }
+          >
+            {t.name}
+            {t.id === detected && (
+              <span className="text-[9px] px-1 rounded" style={{ background: t.bg, color: t.accent }}>detected</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Prompt display */}
+      <div className="px-3 pb-3 pt-2">
+        <div
+          className="relative rounded-xl border overflow-hidden"
+          style={{ borderColor: toolDef.border, background: 'rgba(0,0,0,0.3)' }}
+        >
+          <div className="px-2 py-1.5 border-b flex items-center gap-2" style={{ borderColor: toolDef.border, background: toolDef.bg }}>
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: toolDef.accent }} />
+            <span className="text-[10px] font-medium" style={{ color: toolDef.accent }}>{toolDef.name} — {toolDef.tagline}</span>
+          </div>
+          <pre className="text-[11px] leading-relaxed text-white/55 p-4 whitespace-pre-wrap font-mono overflow-x-auto max-h-52 overflow-y-auto">
+            {prompt}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const CATEGORY_COLORS: Record<string, string> = {
   framework: '#8b5cf6', library: '#06b6d4', hosting: '#22c55e',
   cdn: '#f59e0b', analytics: '#ec4899', backend: '#f97316', database: '#6366f1',
@@ -326,6 +608,11 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             )}
           </div>
         </div>
+      )}
+
+      {/* ── AI Recreate Prompt ── */}
+      {result.vibe.score >= 25 && result.techStack.length > 0 && (
+        <PromptSection result={result} />
       )}
 
       {/* ── Passive vulnerability scan toggle ── */}
