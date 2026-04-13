@@ -10,6 +10,9 @@ const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin']
 export const metadata: Metadata = {
   title: 'Is This Vibe-Coded?',
   description: 'Detect AI-generated websites, audit security headers, and identify tech stacks — instantly.',
+  other: {
+    'vibecoded-verification': '586eced26824ffae11e3f336f690b3275938',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
