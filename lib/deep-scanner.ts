@@ -173,9 +173,7 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
   const findings: DeepFinding[] = [];
 
   // Test null origin
-  const nullRes = await safeFetch(baseUrl, {
-    headers: { Origin: 'null' },
-  });
+  const nullRes = await safeFetch(baseUrl, { headers: { Origin: 'null' } });
   if (nullRes) {
     const acao = nullRes.headers.get('access-control-allow-origin');
     if (acao === 'null') {
@@ -189,36 +187,46 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
         remediation: 'Never allow the null origin in your CORS policy.',
       });
     }
-    if (acao === '*') {
-      findings.push({
-        id: 'cors-wildcard',
-        category: 'cors',
-        severity: 'medium',
-        title: 'CORS Wildcard Origin',
-        description: 'Access-Control-Allow-Origin: * allows any site to read responses. Dangerous on authenticated endpoints.',
-        evidence: 'Access-Control-Allow-Origin: *',
-        remediation: 'Restrict CORS to an explicit allowlist of trusted origins.',
-      });
-    }
+    // Wildcard on the HTML page itself is only a real issue if credentials are also allowed
+    // Don't flag it on regular pages — only flag on API routes
   }
 
-  // Test arbitrary origin reflection with credentials
-  const evilRes = await safeFetch(baseUrl, {
-    headers: { Origin: 'https://evil-attacker.com' },
-  });
-  if (evilRes) {
-    const acao = evilRes.headers.get('access-control-allow-origin');
-    const acac = evilRes.headers.get('access-control-allow-credentials');
+  // Test CORS on API endpoints — this is where wildcard is actually dangerous
+  const apiPaths = ['/api', '/api/user', '/api/me', '/api/auth', '/api/data'];
+  for (const path of apiPaths) {
+    const apiRes = await safeFetch(`${baseUrl}${path}`, {
+      headers: { Origin: 'https://evil-attacker.com' },
+    });
+    if (!apiRes) continue;
+    const acao = apiRes.headers.get('access-control-allow-origin');
+    const acac = apiRes.headers.get('access-control-allow-credentials');
+
+    if (acao === '*' && acac === 'true') {
+      findings.push({
+        id: 'cors-wildcard-credentials',
+        category: 'cors',
+        severity: 'critical',
+        title: 'API CORS: Wildcard + Credentials',
+        description: `${path} returns Access-Control-Allow-Origin: * with Allow-Credentials: true. Any site can make authenticated API requests on behalf of your users.`,
+        evidence: `GET ${baseUrl}${path}\nAccess-Control-Allow-Origin: *\nAccess-Control-Allow-Credentials: true`,
+        remediation: 'You cannot use * with credentials. Switch to an explicit origin allowlist.',
+        url: `${baseUrl}${path}`,
+      });
+      break;
+    }
+
     if (acao === 'https://evil-attacker.com' && acac === 'true') {
       findings.push({
         id: 'cors-reflect-credentials',
         category: 'cors',
         severity: 'critical',
-        title: 'CORS Reflects Arbitrary Origin with Credentials',
-        description: 'The server reflects any origin and allows credentials. Attackers can make authenticated requests from any site and read the response — full account takeover risk.',
-        evidence: `Access-Control-Allow-Origin: https://evil-attacker.com\nAccess-Control-Allow-Credentials: true`,
+        title: 'API CORS Reflects Arbitrary Origin with Credentials',
+        description: `${path} reflects any arbitrary Origin header back and allows credentials. Attackers can make authenticated API requests from any domain — full account takeover risk.`,
+        evidence: `GET ${baseUrl}${path}\nOrigin: https://evil-attacker.com\n→ Access-Control-Allow-Origin: https://evil-attacker.com\n→ Access-Control-Allow-Credentials: true`,
         remediation: 'Use a strict origin allowlist. Never combine Allow-Credentials: true with dynamic origin reflection.',
+        url: `${baseUrl}${path}`,
       });
+      break;
     }
   }
 
@@ -227,36 +235,56 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── Security headers ──────────────────────────────────────────────────────
 
+function detectFramework(res: Response | null): { isVercel: boolean; isNextJS: boolean; isCDN: boolean } {
+  if (!res) return { isVercel: false, isNextJS: false, isCDN: false };
+  const server = (res.headers.get('server') ?? '').toLowerCase();
+  const via = (res.headers.get('via') ?? '').toLowerCase();
+  const xVercel = res.headers.get('x-vercel-id') ?? res.headers.get('x-vercel-cache');
+  const powered = (res.headers.get('x-powered-by') ?? '').toLowerCase();
+  const isVercel = !!xVercel || server.includes('vercel');
+  const isNextJS = powered.includes('next') || server.includes('next');
+  const isCDN = isVercel || server.includes('cloudflare') || server.includes('fastly') || via.includes('cloudfront');
+  return { isVercel, isNextJS, isCDN };
+}
+
 async function checkSecurityHeaders(res: Response | null): Promise<DeepFinding[]> {
   const findings: DeepFinding[] = [];
   if (!res) return findings;
 
-  const csp = res.headers.get('content-security-policy');
-  const xfo = res.headers.get('x-frame-options');
+  const { isVercel, isNextJS, isCDN } = detectFramework(res);
+
+  const csp  = res.headers.get('content-security-policy');
+  const xfo  = res.headers.get('x-frame-options');
   const xcto = res.headers.get('x-content-type-options');
   const hsts = res.headers.get('strict-transport-security');
-  const rp = res.headers.get('referrer-policy');
-  const pp = res.headers.get('permissions-policy');
+  const rp   = res.headers.get('referrer-policy');
+  const pp   = res.headers.get('permissions-policy');
 
+  // CSP — always worth flagging, but tell Next.js users where to add it
   if (!csp) {
+    const remediation = isNextJS
+      ? "Add to next.config.js headers():\n  { key: 'Content-Security-Policy', value: \"default-src 'self'; script-src 'self' 'unsafe-inline'\" }\nOr use the next-safe package."
+      : "Add response header: Content-Security-Policy: default-src 'self'; script-src 'self'";
     findings.push({
       id: 'header-csp-missing',
       category: 'headers',
-      severity: 'high',
+      // Downgrade to medium for CDN/Vercel — they often enforce at edge but don't pass the header through
+      severity: isCDN ? 'medium' : 'high',
       title: 'Missing Content-Security-Policy',
-      description: 'No CSP header. The site is fully vulnerable to XSS attacks — any injected script can run without restriction.',
-      remediation: "Add: Content-Security-Policy: default-src 'self'; script-src 'self'",
+      description: "No CSP header found on this response. Without CSP, any XSS vulnerability has no secondary defence — injected scripts can run freely, steal cookies, and exfiltrate data."
+        + (isCDN ? ' Note: if you set this at the CDN/edge layer, ensure it\'s also forwarded in the response.' : ''),
+      remediation,
     });
   } else {
-    if (csp.includes("'unsafe-inline'")) {
+    if (csp.includes("'unsafe-inline'") && !csp.includes('nonce-') && !csp.includes('strict-dynamic')) {
       findings.push({
         id: 'header-csp-unsafe-inline',
         category: 'headers',
         severity: 'medium',
-        title: "CSP Contains 'unsafe-inline'",
-        description: "Allowing 'unsafe-inline' enables inline script execution, negating most XSS protection.",
-        evidence: `CSP: ...${csp.includes("'unsafe-inline'") ? "'unsafe-inline'" : ''}...`,
-        remediation: "Replace 'unsafe-inline' with nonces or hashes for legitimate inline scripts.",
+        title: "CSP Uses 'unsafe-inline' Without Nonces",
+        description: "'unsafe-inline' allows arbitrary inline scripts, negating most XSS protection. Use nonces or hashes instead.",
+        evidence: `Content-Security-Policy: ${csp.substring(0, 200)}`,
+        remediation: "Replace 'unsafe-inline' with per-request nonces: script-src 'nonce-{random}'. Next.js supports this via middleware.",
       });
     }
     if (csp.includes("'unsafe-eval'")) {
@@ -265,43 +293,55 @@ async function checkSecurityHeaders(res: Response | null): Promise<DeepFinding[]
         category: 'headers',
         severity: 'medium',
         title: "CSP Contains 'unsafe-eval'",
-        description: "'unsafe-eval' allows eval() and similar dynamic execution functions, increasing XSS risk.",
+        description: "'unsafe-eval' permits eval(), new Function(), and setTimeout(string) — common XSS escalation vectors.",
         evidence: `CSP contains 'unsafe-eval'`,
-        remediation: "Remove 'unsafe-eval'. Refactor any code using eval(), setTimeout(string), or Function().",
+        remediation: "Remove 'unsafe-eval'. Refactor code using eval() or Function(). Some bundlers add this — check your build config.",
       });
     }
   }
 
+  // Clickjacking — only meaningful if the page has interactive content
   if (!xfo && !csp?.includes('frame-ancestors')) {
     findings.push({
       id: 'header-xfo-missing',
       category: 'headers',
       severity: 'medium',
-      title: 'Missing Clickjacking Protection',
-      description: 'No X-Frame-Options or CSP frame-ancestors directive. The site can be embedded in iframes to trick users into clicking on hidden buttons (clickjacking).',
-      remediation: 'Add X-Frame-Options: DENY or include frame-ancestors in your CSP.',
+      title: 'No Clickjacking Protection (X-Frame-Options / frame-ancestors)',
+      description: 'The page can be embedded in a hidden iframe on an attacker\'s site. Users can be tricked into clicking buttons invisibly overlaid on your UI — "likejacking", fake payments, or account actions.',
+      remediation: isNextJS
+        ? "In next.config.js headers(): { key: 'X-Frame-Options', value: 'DENY' }"
+        : "Add header: X-Frame-Options: DENY\nOr CSP: frame-ancestors 'none'",
     });
   }
 
+  // X-Content-Type-Options — low severity, informational
   if (!xcto) {
     findings.push({
       id: 'header-xcto-missing',
       category: 'headers',
       severity: 'low',
-      title: 'Missing X-Content-Type-Options',
-      description: 'Without nosniff, browsers may MIME-sniff responses and execute non-script content as scripts.',
-      remediation: 'Add X-Content-Type-Options: nosniff',
+      title: 'Missing X-Content-Type-Options: nosniff',
+      description: 'Without nosniff, browsers may MIME-sniff responses and interpret a text file as JavaScript — useful in some upload-based XSS attacks.',
+      remediation: isNextJS
+        ? "next.config.js headers(): { key: 'X-Content-Type-Options', value: 'nosniff' }"
+        : 'Add header: X-Content-Type-Options: nosniff',
     });
   }
 
+  // HSTS — CDNs like Vercel inject HSTS at the edge. Downgrade if CDN detected.
   if (!hsts) {
     findings.push({
       id: 'header-hsts-missing',
       category: 'headers',
-      severity: 'medium',
-      title: 'Missing HSTS Header',
-      description: 'No Strict-Transport-Security. Browsers may access the site over HTTP, enabling downgrade attacks and cookie interception.',
-      remediation: 'Add Strict-Transport-Security: max-age=31536000; includeSubDomains; preload',
+      severity: isCDN ? 'low' : 'medium',
+      title: 'Missing HSTS Header' + (isCDN ? ' (may be set at CDN edge)' : ''),
+      description: 'No Strict-Transport-Security header in this response. '
+        + (isVercel
+          ? 'Vercel injects HSTS at the edge for custom domains, but not for *.vercel.app subdomains. If you\'re on a custom domain, verify it\'s enabled in Vercel project settings.'
+          : 'Without HSTS, browsers may access the site over HTTP on first visit, enabling MITM and cookie theft.'),
+      remediation: isNextJS
+        ? "next.config.js headers(): { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains; preload' }"
+        : 'Add header: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload',
     });
   } else {
     const match = hsts.match(/max-age=(\d+)/);
@@ -310,33 +350,35 @@ async function checkSecurityHeaders(res: Response | null): Promise<DeepFinding[]
         id: 'header-hsts-short',
         category: 'headers',
         severity: 'low',
-        title: 'HSTS max-age Too Short',
-        description: `HSTS max-age is ${match[1]}s (under 1 year). Short durations weaken protection against downgrade attacks.`,
+        title: 'HSTS max-age Below 1 Year',
+        description: `HSTS max-age is ${parseInt(match[1]) / 86400} days. Short durations reduce protection — browsers re-check over HTTP sooner.`,
         evidence: `Strict-Transport-Security: ${hsts}`,
-        remediation: 'Set max-age to at least 31536000 (1 year). Add includeSubDomains and preload.',
+        remediation: 'Set max-age=31536000 (1 year minimum for preload eligibility).',
       });
     }
   }
 
+  // Referrer-Policy — low severity, informational
   if (!rp) {
     findings.push({
       id: 'header-rp-missing',
       category: 'headers',
       severity: 'low',
       title: 'Missing Referrer-Policy',
-      description: 'No Referrer-Policy. Full page URLs including sensitive query parameters may leak to third-party sites.',
-      remediation: 'Add Referrer-Policy: strict-origin-when-cross-origin',
+      description: 'Without Referrer-Policy, full URLs (including sensitive query params like tokens or IDs) are sent in the Referer header to third-party sites loaded on the page.',
+      remediation: "Add: Referrer-Policy: strict-origin-when-cross-origin",
     });
   }
 
+  // Permissions-Policy — info only, not truly a vulnerability for most sites
   if (!pp) {
     findings.push({
       id: 'header-pp-missing',
       category: 'headers',
-      severity: 'low',
-      title: 'Missing Permissions-Policy',
-      description: 'No Permissions-Policy header. Browser features like camera and geolocation are not explicitly restricted.',
-      remediation: 'Add a Permissions-Policy header to restrict unneeded browser APIs.',
+      severity: 'info',
+      title: 'No Permissions-Policy',
+      description: 'Permissions-Policy is not set. This header restricts which browser APIs (camera, microphone, geolocation) embedded scripts and iframes can access. Good defence-in-depth.',
+      remediation: "Add: Permissions-Policy: camera=(), microphone=(), geolocation=()",
     });
   }
 
@@ -725,6 +767,117 @@ async function checkDirectoryListing(baseUrl: string): Promise<DeepFinding[]> {
   return [];
 }
 
+// ── Vibe-code specific checks ─────────────────────────────────────────────
+
+async function checkVibeCodePatterns(baseUrl: string, mainRes: Response | null): Promise<DeepFinding[]> {
+  const findings: DeepFinding[] = [];
+  if (!mainRes) return findings;
+
+  const html = await mainRes.clone().text().catch(() => '');
+
+  // Exposed Supabase URL + anon key in client HTML
+  const supabaseUrl = html.match(/https:\/\/[a-z0-9]+\.supabase\.co/);
+  const supabaseAnonKey = html.match(/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+  if (supabaseUrl && supabaseAnonKey) {
+    // Decode to check if it's anon (not service role)
+    let isServiceRole = false;
+    try {
+      const payload = JSON.parse(atob(supabaseAnonKey[0].split('.')[1]));
+      isServiceRole = payload.role === 'service_role';
+    } catch { /* ignore */ }
+
+    if (isServiceRole) {
+      findings.push({
+        id: 'vibe-supabase-service-role',
+        category: 'exposed-files',
+        severity: 'critical',
+        title: 'Supabase Service Role Key Exposed in Client HTML',
+        description: 'A Supabase SERVICE ROLE key is embedded in the client-side HTML. This key bypasses Row Level Security and gives full database access — read, write, and delete everything. Immediate action required.',
+        evidence: `Supabase URL: ${supabaseUrl[0]}\nService role JWT found in page HTML`,
+        remediation: '1. Rotate the key immediately in Supabase → Project Settings → API.\n2. Never use the service_role key client-side — only use the anon key in the browser.\n3. Move service_role to server-side only (API routes, server components).',
+      });
+    } else {
+      findings.push({
+        id: 'vibe-supabase-anon-key',
+        category: 'info-disclosure',
+        severity: 'info',
+        title: 'Supabase Anon Key Visible in Client HTML',
+        description: 'The Supabase anon (public) key is embedded in the client HTML. This is normal and expected for client-side Supabase usage — the anon key is designed to be public. Security depends entirely on your Row Level Security (RLS) policies.',
+        evidence: `Supabase project: ${supabaseUrl[0]}`,
+        remediation: 'Verify your Supabase tables have RLS enabled with appropriate policies. The anon key is safe to expose — but RLS must be configured correctly.',
+      });
+    }
+  }
+
+  // Exposed Firebase config
+  const firebaseConfig = html.match(/apiKey:\s*["']AIza[A-Za-z0-9_-]{35}["']/);
+  if (firebaseConfig) {
+    findings.push({
+      id: 'vibe-firebase-config',
+      category: 'info-disclosure',
+      severity: 'info',
+      title: 'Firebase Config Visible in Client HTML',
+      description: 'Firebase configuration (apiKey, projectId, etc.) is embedded in the HTML. Firebase API keys are designed to be public — security depends on Firebase Security Rules, not key secrecy.',
+      evidence: firebaseConfig[0].substring(0, 60) + '…',
+      remediation: 'Verify your Firestore and Storage security rules are configured correctly. Firebase API keys are public by design — rules are your security layer.',
+    });
+  }
+
+  // Exposed Stripe publishable key (fine) vs secret key (not fine)
+  const stripeSecret = html.match(/sk_(?:live|test)_[A-Za-z0-9]{24,}/);
+  if (stripeSecret) {
+    findings.push({
+      id: 'vibe-stripe-secret',
+      category: 'exposed-files',
+      severity: 'critical',
+      title: 'Stripe Secret Key Exposed in Client HTML',
+      description: 'A Stripe SECRET key is embedded in the client-side HTML. Anyone can use this to read your customers, create charges, issue refunds, and access all payment data.',
+      evidence: `sk_...${stripeSecret[0].slice(-6)} found in page source`,
+      remediation: '1. Rotate the key immediately at dashboard.stripe.com → Developers → API Keys.\n2. Move all Stripe secret key usage to server-side API routes only.\n3. The publishable key (pk_...) is safe for client use.',
+    });
+  }
+
+  // Generic API key patterns in HTML
+  const genericApiKey = html.match(/(?:api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*["']([A-Za-z0-9_\-]{20,})["']/i);
+  if (genericApiKey && !html.includes('REPLACE_ME') && !html.includes('your-api-key')) {
+    findings.push({
+      id: 'vibe-api-key-html',
+      category: 'exposed-files',
+      severity: 'high',
+      title: 'API Key Pattern Detected in HTML Source',
+      description: 'An API key or secret appears to be embedded in the page HTML. If this is a server-side secret, it should never appear in client-rendered HTML.',
+      evidence: genericApiKey[0].substring(0, 80),
+      remediation: 'Move secrets to environment variables and access them only in server-side code (API routes, getServerSideProps, server actions).',
+    });
+  }
+
+  // Missing RLS warning for Supabase sites with no auth headers
+  const hasSupabase = html.includes('supabase');
+  if (hasSupabase && !supabaseAnonKey) {
+    // Check if any API endpoint returns data without auth
+    const apiRes = await safeFetch(`${baseUrl}/api/user`, {
+      headers: { 'Accept': 'application/json' },
+    });
+    if (apiRes?.status === 200) {
+      const body = await apiRes.text().catch(() => '');
+      if (body.includes('"email"') || body.includes('"userId"') || body.includes('"id"')) {
+        findings.push({
+          id: 'vibe-api-no-auth',
+          category: 'authentication',
+          severity: 'high',
+          title: 'User Data API Endpoint Unauthenticated',
+          description: '/api/user returns what appears to be user data without requiring authentication. This may expose personal information to unauthenticated requests.',
+          evidence: `GET ${baseUrl}/api/user → 200 with user-like JSON fields`,
+          remediation: 'Add authentication checks to all API routes that return user data. Verify the auth cookie/token before returning any sensitive data.',
+          url: `${baseUrl}/api/user`,
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
 // ── Reflected XSS detection ───────────────────────────────────────────────
 
 async function checkXSS(baseUrl: string): Promise<DeepFinding[]> {
@@ -797,9 +950,16 @@ async function checkSRI(baseUrl: string, mainRes: Response | null): Promise<Deep
 // ── Score calculation ─────────────────────────────────────────────────────
 
 function calculateScore(findings: DeepFinding[]): number {
-  const WEIGHTS = { critical: 25, high: 15, medium: 8, low: 3, info: 0 };
-  const deductions = findings
-    .reduce((sum, f) => sum + (WEIGHTS[f.severity] ?? 0), 0);
+  // Only count real vulnerabilities — info is never penalised
+  const WEIGHTS: Record<string, number> = { critical: 30, high: 15, medium: 7, low: 2, info: 0 };
+  // Deduplicate by category — multiple low/medium in same category count once at that severity
+  const worstPerCategory = new Map<string, number>();
+  for (const f of findings) {
+    const w = WEIGHTS[f.severity] ?? 0;
+    const key = `${f.category}:${f.severity}`;
+    worstPerCategory.set(key, Math.max(worstPerCategory.get(key) ?? 0, w));
+  }
+  const deductions = Array.from(worstPerCategory.values()).reduce((sum, w) => sum + w, 0);
   return Math.max(0, 100 - deductions);
 }
 
@@ -827,28 +987,29 @@ function buildChecked(findings: DeepFinding[], mainRes: Response | null): import
   const httpsOk = !findings.find(f => f.id === 'ssl-http-accessible');
 
   return [
-    item('https',      'HTTPS Enforcement',          'Does plain HTTP redirect to HTTPS?',                  findingsFor('ssl-'), httpsOk ? 'HTTP correctly redirects to HTTPS' : 'HTTPS redirect configured'),
-    item('headers',    'Security Headers',            'CSP, HSTS, X-Frame-Options, Referrer-Policy',        findingsFor('header-'), 'All critical security headers present'),
-    item('cors',       'CORS Policy',                 'No wildcard or credential-reflecting origins',        findingsFor('cors-'), 'CORS policy is properly restricted'),
-    item('cookies',    'Cookie Security Flags',       'HttpOnly, Secure, SameSite on session cookies',      findingsFor('cookie-'), 'All cookies have correct security flags'),
-    item('sqli',       'SQL Injection',               "Error-based SQLi via ' OR 1=1 payloads",             findingsFor('sqli-'), 'No SQL errors triggered by injection payloads'),
-    item('xss',        'Reflected XSS',               'Script tag injection into query parameters',          findingsFor('xss-'), 'Input is correctly encoded — no XSS reflection found'),
-    item('files',      'Sensitive File Exposure',     '.env, .git, wp-config, phpinfo, backups, .htaccess', findingsFor('exposed-'), 'No sensitive files or paths exposed publicly'),
-    item('admin',      'Admin Panel Exposure',        '/admin, /wp-admin, /phpmyadmin, /cpanel, 14 paths',  findingsFor('admin-'), 'No unauthenticated admin panels found'),
-    item('dirlist',    'Directory Listing',           '/uploads, /static, /files — open index pages',       findingsFor('directory-'), 'No open directory listings detected'),
-    item('redirect',   'Open Redirect',               '?redirect=, ?url=, ?next= parameter hijacking',      findingsFor('open-redirect'), 'No open redirect vectors found'),
-    item('methods',    'Dangerous HTTP Methods',      'TRACE, PUT, DELETE method exposure',                  findingsFor('methods-'), 'No dangerous HTTP methods advertised'),
-    item('errors',     'Error Verbosity',             'Stack traces, file paths in error responses',         findingsFor('error-'), 'Error responses do not disclose internals'),
-    item('info',       'Technology Disclosure',       'Server version, X-Powered-By, framework headers',    findingsFor('info-'), 'No detailed server version info disclosed'),
-    item('sri',        'Subresource Integrity',       'External CDN scripts/styles have integrity hashes',   findingsFor('sri-'), 'External resources use integrity hashes or are same-origin'),
-    item('robots',     'robots.txt Path Disclosure',  'Sensitive paths accidentally mapped in robots.txt',   findingsFor('robots-'), 'robots.txt does not reveal sensitive paths'),
     {
       id: 'https-tls',
       label: 'TLS Certificate',
-      description: 'Site is reachable over HTTPS with a valid certificate',
+      description: 'Site reachable over HTTPS with a valid certificate',
       status: mainRes ? 'pass' : 'skip',
-      detail: mainRes ? 'HTTPS connection successful — valid TLS certificate' : 'Could not reach site over HTTPS',
+      detail: mainRes ? 'HTTPS connection successful — valid TLS certificate in use' : 'Could not reach site over HTTPS',
     },
+    item('https',      'HTTPS Enforcement',           'Does plain HTTP redirect to HTTPS?',                                     findingsFor('ssl-http'), httpsOk ? 'HTTP correctly redirects to HTTPS — no plain HTTP access' : 'HTTPS redirect in place'),
+    item('headers',    'Security Headers',             'CSP, HSTS, X-Frame-Options, XCTO, Referrer-Policy',                     findingsFor('header-'), 'All critical security headers present and correctly configured'),
+    item('cors',       'CORS Policy',                  'No wildcard+credentials or arbitrary origin reflection on API routes',   findingsFor('cors-'), 'CORS policy is correctly restricted — no dangerous origin reflection found'),
+    item('cookies',    'Cookie Security Flags',        'HttpOnly, Secure, SameSite on session/auth cookies',                    findingsFor('cookie-'), 'All cookies have correct HttpOnly, Secure, and SameSite flags'),
+    item('sqli',       'SQL Injection',                "Error-based SQLi via ' OR 1=1, SQLSTATE payloads on query params",      findingsFor('sqli-'), 'No SQL errors returned — injection payloads did not trigger database errors'),
+    item('xss',        'Reflected XSS',                'Script tag injection into search/query parameters',                     findingsFor('xss-'), 'Input correctly encoded — no unencoded script reflection found'),
+    item('vibe',       'Exposed Secrets in HTML',      'Supabase service role key, Stripe secret, API keys in page source',     findingsFor('vibe-'), 'No exposed secrets or dangerous keys found in page HTML'),
+    item('files',      'Sensitive File Exposure',      '.env, .git, wp-config.php, phpinfo.php, backup.sql, .htaccess',         findingsFor('exposed-'), 'No sensitive files or paths accessible publicly'),
+    item('admin',      'Admin Panel Exposure',         '/admin, /wp-admin, /phpmyadmin, /cpanel, /manager, 13 more',            findingsFor('admin-'), 'No unauthenticated admin panels found at tested paths'),
+    item('dirlist',    'Directory Listing',            '/uploads, /static, /assets, /files, /backup — open indexes',            findingsFor('directory-'), 'No open directory listings detected'),
+    item('redirect',   'Open Redirect',                '?redirect=, ?url=, ?next=, ?return=, ?goto= hijacking',                 findingsFor('open-redirect'), 'No open redirect vectors found — redirect params are absent or validated'),
+    item('methods',    'Dangerous HTTP Methods',       'TRACE (XST), unauthenticated PUT/DELETE',                               findingsFor('methods-'), 'No dangerous HTTP methods advertised via OPTIONS'),
+    item('errors',     'Error Verbosity',              'Stack traces, file paths, framework versions in error pages',            findingsFor('error-'), 'Error responses use generic messages — no internals disclosed'),
+    item('info',       'Technology Disclosure',        'Server version, X-Powered-By, X-AspNet-Version in headers',             findingsFor('info-'), 'No detailed server/framework version info disclosed in response headers'),
+    item('sri',        'Subresource Integrity',        'External CDN scripts and stylesheets have integrity= hashes',           findingsFor('sri-'), 'External resources either have integrity hashes or are same-origin'),
+    item('robots',     'robots.txt Path Disclosure',   'Sensitive admin/backup/config paths in Disallow entries',               findingsFor('robots-'), 'robots.txt does not reveal sensitive internal paths'),
   ];
 }
 
@@ -863,22 +1024,23 @@ export type ScanPhase = {
 const MIN_PHASE_MS = 900;
 
 export const SCAN_PHASES: ScanPhase[] = [
-  { id: 'init',      label: 'Connecting',             detail: 'Establishing HTTPS connection, reading response headers…' },
+  { id: 'init',      label: 'Connecting',             detail: 'Establishing HTTPS connection, reading response headers and framework fingerprint…' },
+  { id: 'vibe',      label: 'Secrets in HTML',        detail: 'Scanning page source for Supabase keys, Firebase config, Stripe secrets, exposed API keys…' },
   { id: 'files',     label: 'Sensitive Files',         detail: 'Probing 17 paths: .env, .env.local, .git/HEAD, .git/config, wp-config.php, phpinfo.php, backup.sql…' },
   { id: 'xss',       label: 'Cross-Site Scripting',   detail: "Injecting <script>alert(1)</script> into ?q=, ?s=, ?name= — checking if input is reflected unencoded…" },
   { id: 'sqli',      label: 'SQL Injection',           detail: "Sending ' OR 1=1, \\\" OR \\\"1\\\"=\\\"1, SQLSTATE payloads — watching for database error messages…" },
-  { id: 'cors',      label: 'CORS Policy',             detail: 'Origin: null + Origin: https://evil-attacker.com — checking for wildcard or credential reflection…' },
-  { id: 'headers',   label: 'Security Headers',        detail: 'Auditing CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy…' },
-  { id: 'cookies',   label: 'Cookie Security',         detail: 'Inspecting Set-Cookie headers for HttpOnly, Secure, SameSite=Lax/Strict flags…' },
+  { id: 'cors',      label: 'CORS Policy',             detail: 'Null origin + evil-attacker.com on /api routes — testing for wildcard+credentials or arbitrary origin reflection…' },
+  { id: 'headers',   label: 'Security Headers',        detail: 'Auditing CSP (with nonce check), HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy…' },
+  { id: 'cookies',   label: 'Cookie Security',         detail: 'Inspecting Set-Cookie for HttpOnly, Secure, SameSite=Lax/Strict flags on session/auth cookies…' },
   { id: 'methods',   label: 'HTTP Methods',            detail: 'OPTIONS request — detecting TRACE (XST attacks), PUT, DELETE without authentication…' },
-  { id: 'ssl',       label: 'HTTPS / TLS',             detail: 'HTTP → HTTPS redirect check, testing for plain HTTP access, HSTS preload…' },
+  { id: 'ssl',       label: 'HTTPS / TLS',             detail: 'HTTP → HTTPS redirect check, testing plain HTTP access, checking HSTS preload status…' },
   { id: 'admin',     label: 'Admin Discovery',         detail: 'Probing 18 paths: /admin, /wp-admin, /phpmyadmin, /cpanel, /manager, /backend, /portal…' },
   { id: 'errors',    label: 'Error Verbosity',         detail: 'Triggering 404, /api/nonexistent, ?debug=true — checking for JS/Python/PHP stack traces…' },
   { id: 'redirect',  label: 'Open Redirect',           detail: 'Testing ?redirect=, ?url=, ?next=, ?return=, ?goto= with external target URL…' },
   { id: 'dirlist',   label: 'Directory Listing',       detail: 'Requesting /uploads/, /static/, /assets/, /files/, /backup/ — checking for open indexes…' },
   { id: 'robots',    label: 'robots.txt',              detail: 'Fetching /robots.txt — parsing Disallow entries for accidentally exposed sensitive paths…' },
   { id: 'sri',       label: 'Subresource Integrity',   detail: 'Parsing HTML for external <script> and <link> tags missing integrity= hashes…' },
-  { id: 'info',      label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, X-AspNet-Version — checking for version numbers…' },
+  { id: 'info',      label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, X-AspNet-Version — checking for version numbers in headers…' },
   { id: 'done',      label: 'Compiling Report',        detail: 'Scoring all findings, computing security grade, building detailed report…' },
 ];
 
@@ -908,6 +1070,7 @@ export async function deepScanDomain(
   onPhase?.(SCAN_PHASES[0], []);
   const mainRes = await safeFetch(baseUrl, { redirect: 'follow' });
 
+  await run('vibe',     () => checkVibeCodePatterns(baseUrl, mainRes));
   await run('files',    () => checkSensitiveFiles(baseUrl));
   await run('xss',      () => checkXSS(baseUrl));
   await run('sqli',     () => checkSQLInjection(baseUrl));
