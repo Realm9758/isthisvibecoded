@@ -130,7 +130,16 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
               {status === 'checking' ? 'Checking...' : 'Check Verification'}
             </button>
             <button
-              onClick={() => { setToken(null); setStatus('idle'); setError(null); }}
+              onClick={async () => {
+                await fetch('/api/verify', {
+                  method: 'DELETE',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ domain }),
+                });
+                setToken(null);
+                setStatus('idle');
+                setError(null);
+              }}
               className="text-xs text-white/30 hover:text-white/60 transition-colors"
             >
               Reset

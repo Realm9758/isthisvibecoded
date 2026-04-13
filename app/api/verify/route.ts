@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Domain is required' }, { status: 400 });
   }
 
-  // Reuse existing token if still valid
+  // Always reuse existing token — only generate once per domain
   const { data: existing } = await supabase
     .from('verification_tokens')
     .select('token, created_at')
@@ -38,11 +38,11 @@ export async function POST(request: Request) {
 
   let token: string;
 
-  if (existing && Date.now() - existing.created_at < TTL_MS) {
+  if (existing) {
     token = existing.token;
   } else {
     token = randomToken();
-    await supabase.from('verification_tokens').upsert({
+    await supabase.from('verification_tokens').insert({
       domain,
       token,
       created_at: Date.now(),
@@ -64,6 +64,14 @@ export async function POST(request: Request) {
   return Response.json(result);
 }
 
+// DELETE /api/verify — reset token for a domain
+export async function DELETE(request: Request) {
+  const { domain } = await request.json();
+  if (!domain) return Response.json({ error: 'Domain required' }, { status: 400 });
+  await supabase.from('verification_tokens').delete().eq('domain', domain);
+  return Response.json({ ok: true });
+}
+
 // GET /api/verify?domain=example.com&token=abc&method=dns|meta|file
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -82,8 +90,8 @@ export async function GET(request: Request) {
     .eq('domain', domain)
     .maybeSingle();
 
-  if (!stored || stored.token !== token || Date.now() - stored.created_at > TTL_MS) {
-    return Response.json({ verified: false, error: 'Token not found or expired. Generate a new one.' });
+  if (!stored || stored.token !== token) {
+    return Response.json({ verified: false, error: 'Token not found. Generate a verification token first.' });
   }
 
   if (method === 'dns') {
