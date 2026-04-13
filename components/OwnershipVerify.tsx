@@ -7,9 +7,10 @@ type Method = 'dns' | 'meta' | 'file';
 
 interface Props {
   domain: string;
+  onVerified?: () => void;
 }
 
-export function OwnershipVerify({ domain }: Props) {
+export function OwnershipVerify({ domain, onVerified }: Props) {
   const [token, setToken] = useState<VerificationToken | null>(null);
   const [method, setMethod] = useState<Method>('dns');
   const [status, setStatus] = useState<'idle' | 'generating' | 'checking' | 'verified' | 'failed'>('idle');
@@ -44,6 +45,7 @@ export function OwnershipVerify({ domain }: Props) {
       const data = await res.json();
       if (data.verified) {
         setStatus('verified');
+        onVerified?.();
       } else {
         setStatus('failed');
         setError(data.error ?? 'Verification record not found yet. Try again after adding it.');

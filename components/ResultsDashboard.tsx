@@ -4,7 +4,8 @@ import { useState } from 'react';
 import type { AnalysisResult } from '@/types/analysis';
 import { ScoreRing } from './ScoreRing';
 import { OwnershipVerify } from './OwnershipVerify';
-import { SharingButtons } from './SharingButtons';
+import { ShareModal } from './ShareModal';
+import { VulnScanSection } from './VulnScanSection';
 import { UpgradeGate, ProBadge } from './UpgradeGate';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -48,8 +49,9 @@ interface Props {
 
 export function ResultsDashboard({ result, onReset }: Props) {
   const { user } = useAuth();
-  const [tab, setTab] = useState<'overview' | 'security' | 'share' | 'verify'>('overview');
+  const [tab, setTab] = useState<'overview' | 'security' | 'verify'>('overview');
   const [roastMode, setRoastMode] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const vibeColor = getVibeColor(result.vibe.score);
   const secColor = getSecColor(result.security.score);
@@ -64,6 +66,11 @@ export function ResultsDashboard({ result, onReset }: Props) {
 
   return (
     <div className="w-full max-w-5xl mx-auto animate-fade-in-up">
+      {/* Share modal */}
+      {shareOpen && result.scanId && (
+        <ShareModal result={result} onClose={() => setShareOpen(false)} />
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
         <div>
@@ -80,12 +87,17 @@ export function ResultsDashboard({ result, onReset }: Props) {
           >
             {roastMode ? '🔥 Roast On' : '🔥 Roast Mode'}
           </button>
-          <button
-            onClick={() => setTab('share')}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-white/10 text-white/50 hover:bg-white/5 transition-colors"
-          >
-            Share
-          </button>
+          {result.scanId && (
+            <button
+              onClick={() => setShareOpen(true)}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-violet-500/30 bg-violet-500/10 text-violet-400 hover:bg-violet-500/15 transition-colors flex items-center gap-1.5"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+              Share
+            </button>
+          )}
           <button onClick={onReset} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-white/10 text-white/50 hover:bg-white/5 transition-colors">
             Try Another
           </button>
@@ -111,13 +123,13 @@ export function ResultsDashboard({ result, onReset }: Props) {
           <p className="text-xs text-yellow-400">
             {result.scansRemaining === 0 ? "You've used all free scans today." : "1 free scan remaining today."}
           </p>
-          <a href="/pricing" className="text-xs font-semibold text-violet-400 hover:text-violet-300 transition-colors shrink-0">Upgrade →</a>
+          <a href="/pricing" className="text-xs font-semibold text-violet-400 hover:text-violet-300 transition-colors shrink-0">View Plans →</a>
         </div>
       )}
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 p-1 rounded-xl bg-white/3 border border-white/6 w-fit">
-        {(['overview', 'security', 'share', 'verify'] as const).map(t => (
+        {(['overview', 'security', 'verify'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -131,7 +143,6 @@ export function ResultsDashboard({ result, onReset }: Props) {
       {/* ── OVERVIEW TAB ── */}
       {tab === 'overview' && (
         <div className="space-y-4">
-          {/* Scores */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Card title="Vibe Code Detection">
               <div className="flex items-center gap-6">
@@ -173,7 +184,6 @@ export function ResultsDashboard({ result, onReset }: Props) {
             </Card>
           </div>
 
-          {/* Tech stack */}
           <Card title="Tech Stack">
             {result.techStack.length === 0
               ? <p className="text-sm text-white/40 italic">No frameworks detected.</p>
@@ -197,7 +207,6 @@ export function ResultsDashboard({ result, onReset }: Props) {
             )}
           </Card>
 
-          {/* Detected keys */}
           {result.publicKeys.length > 0 && (
             <Card title="Detected Public Keys">
               <div className="space-y-2">
@@ -216,17 +225,14 @@ export function ResultsDashboard({ result, onReset }: Props) {
             </Card>
           )}
 
-          {/* PDF Export */}
-          <div>
-            <UpgradeGate feature="PDF Export">
-              <button
-                onClick={printReport}
-                className="w-full py-3 rounded-xl border border-white/10 bg-white/3 text-sm text-white/60 hover:bg-white/5 transition-colors"
-              >
-                Export PDF Report
-              </button>
-            </UpgradeGate>
-          </div>
+          <UpgradeGate feature="PDF Export">
+            <button
+              onClick={printReport}
+              className="w-full py-3 rounded-xl border border-white/10 bg-white/3 text-sm text-white/60 hover:bg-white/5 transition-colors"
+            >
+              Export PDF Report
+            </button>
+          </UpgradeGate>
         </div>
       )}
 
@@ -275,7 +281,6 @@ export function ResultsDashboard({ result, onReset }: Props) {
             </Card>
           </div>
 
-          {/* Recommendations */}
           <Card title="Recommendations">
             <div className="space-y-2">
               {!result.security.httpsEnabled && (
@@ -302,7 +307,6 @@ export function ResultsDashboard({ result, onReset }: Props) {
             </div>
           </Card>
 
-          {/* Verified badge */}
           {result.security.score >= 80 && (
             <UpgradeGate feature="Verified Secure Badge">
               <Card title={<span className="flex items-center gap-1">Verified Secure Badge <ProBadge /></span> as unknown as string}>
@@ -318,20 +322,10 @@ export function ResultsDashboard({ result, onReset }: Props) {
               </Card>
             </UpgradeGate>
           )}
-        </div>
-      )}
 
-      {/* ── SHARE TAB ── */}
-      {tab === 'share' && result.scanId && (
-        <Card title="Share Results">
-          <SharingButtons
-            scanId={result.scanId}
-            vibeScore={result.vibe.score}
-            vibeLabel={result.vibe.label}
-            securityScore={result.security.score}
-            domain={displayUrl}
-          />
-        </Card>
+          {/* Vulnerability scan section */}
+          <VulnScanSection domain={displayUrl} />
+        </div>
       )}
 
       {/* ── VERIFY TAB ── */}

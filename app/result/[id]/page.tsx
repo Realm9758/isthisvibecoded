@@ -2,8 +2,44 @@ import { getScan } from '@/lib/store';
 import { SharedResult } from './SharedResult';
 import Link from 'next/link';
 import type { AnalysisResult } from '@/types/analysis';
+import type { Metadata } from 'next';
 
 export const dynamic = 'force-dynamic';
+
+export async function generateMetadata(
+  { params }: { params: Promise<{ id: string }> }
+): Promise<Metadata> {
+  const { id } = await params;
+  const scan = await getScan(id);
+  if (!scan) return { title: 'Scan not found — VibeScan' };
+
+  const domain = (() => { try { return new URL(scan.result.url).hostname; } catch { return scan.result.url; } })();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://isthisvibecoded.com';
+  const cardUrl = `${appUrl}/api/sharecard/${id}`;
+  const pageUrl = `${appUrl}/result/${id}`;
+
+  const title = `${domain} is ${scan.result.vibe.score}% Vibe-Coded`;
+  const description =
+    `Security: ${scan.result.security.score}/100 · ${scan.result.security.riskLevel} risk · ` +
+    `${scan.result.techStack.slice(0, 3).map(t => t.name).join(', ') || 'Unknown stack'}`;
+
+  return {
+    title: `${title} | VibeScan`,
+    description,
+    openGraph: {
+      title,
+      description,
+      url: pageUrl,
+      images: [{ url: cardUrl, width: 600, height: 315 }],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description,
+      images: [cardUrl],
+    },
+  };
+}
 
 export default async function ResultPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

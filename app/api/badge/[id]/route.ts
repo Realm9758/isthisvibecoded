@@ -1,8 +1,8 @@
-import { store } from '@/lib/store';
+import { getScan } from '@/lib/store';
 
 export async function GET(_req: Request, ctx: RouteContext<'/api/badge/[id]'>) {
   const { id } = await ctx.params;
-  const scan = store.getScan(id);
+  const scan = await getScan(id);
   if (!scan) return new Response('Not found', { status: 404 });
 
   const { vibe, security } = scan.result;
@@ -22,22 +22,12 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/badge/[id]'>) {
   </defs>
   <rect width="${w}" height="72" rx="8" fill="url(#bg)" stroke="${vibeColor}" stroke-width="1.5" stroke-opacity="0.6"/>
   <rect x="0" y="0" width="6" height="72" rx="3" fill="${vibeColor}"/>
-
-  <!-- VibeScan label -->
   <text x="18" y="20" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="${vibeColor}" font-weight="700" letter-spacing="1">VIBESCAN</text>
-
-  <!-- Domain -->
   <text x="18" y="38" font-family="system-ui,-apple-system,sans-serif" font-size="13" fill="#ffffff" font-weight="600">${hostname.slice(0, 28)}${hostname.length > 28 ? '…' : ''}</text>
-
-  <!-- Label -->
   <text x="18" y="55" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="${vibeColor}">${label}</text>
-
-  <!-- Scores -->
   <text x="${w - 12}" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="#ffffff" font-weight="700" text-anchor="end">V: ${vibe.score}</text>
   <text x="${w - 12}" y="48" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="${secColor}" font-weight="700" text-anchor="end">S: ${security.score}</text>
-
-  <!-- Powered by -->
-  <text x="${w - 12}" y="64" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#444466" text-anchor="end">vibecoded.dev</text>
+  <text x="${w - 12}" y="64" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#444466" text-anchor="end">isthisvibecoded.com</text>
 </svg>`;
 
   return new Response(svg, {
