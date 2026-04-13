@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers';
-import { store } from '@/lib/store';
+import { getUserByEmail, createUser } from '@/lib/store';
 import { hashPassword, signToken, AUTH_COOKIE, COOKIE_OPTIONS } from '@/lib/auth';
 
 export async function POST(request: Request) {
@@ -11,12 +11,12 @@ export async function POST(request: Request) {
   if (password.length < 8) {
     return Response.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
   }
-  if (store.getUserByEmail(email)) {
+  if (await getUserByEmail(email)) {
     return Response.json({ error: 'An account with this email already exists' }, { status: 409 });
   }
 
   const passwordHash = await hashPassword(password);
-  const user = store.createUser({
+  const user = await createUser({
     email: email.toLowerCase().trim(),
     name: (name ?? email.split('@')[0]).trim(),
     passwordHash,

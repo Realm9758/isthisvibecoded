@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
-import { store } from '@/lib/store';
+import { getUserById } from '@/lib/store';
 
 export async function POST() {
   if (!stripe) return Response.json({ error: 'Stripe not configured' }, { status: 503 });
@@ -11,7 +11,7 @@ export async function POST() {
   const payload = token ? await verifyToken(token) : null;
   if (!payload) return Response.json({ error: 'Not authenticated' }, { status: 401 });
 
-  const user = store.getUserById(payload.userId);
+  const user = await getUserById(payload.userId);
   if (!user?.stripeCustomerId) {
     return Response.json({ error: 'No billing account found' }, { status: 400 });
   }

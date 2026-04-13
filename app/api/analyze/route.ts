@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { analyzeUrl } from '@/lib/analyzer';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
-import { store } from '@/lib/store';
+import { getUserById, getDailyCount, incrementUsage, saveScan, getRemainingScans } from '@/lib/store';
 import { generateRoasts } from '@/lib/roast';
 
 export const runtime = 'nodejs';
@@ -42,10 +42,11 @@ export async function POST(request: Request) {
 
   // Rate limiting
   const limitKey = payload ? payload.userId : getClientIp(request);
-  const plan = payload ? (store.getUserById(payload.userId)?.plan ?? 'free') : 'free';
+  const user = payload ? await getUserById(payload.userId) : null;
+  const plan = user?.plan ?? 'free';
 
   if (plan === 'free') {
-    const used = store.getDailyCount(limitKey);
+    const used = await getDailyCount(limitKey);
     if (used >= 5) {
       return Response.json({
         error: 'Daily scan limit reached (5/day on free tier). Upgrade to Pro for unlimited scans.',
@@ -56,20 +57,20 @@ export async function POST(request: Request) {
     }
   }
 
-  store.incrementUsage(limitKey);
+  await incrementUsage(limitKey);
 
   try {
     const result = await analyzeUrl(url);
     const roasts = generateRoasts(result);
 
-    const scan = store.saveScan({
+    const scan = await saveScan({
       result,
       userId: payload?.userId,
       isPublic: true,
       roasts,
     });
 
-    const remaining = plan === 'free' ? store.getRemainingScans(limitKey, 'free') : null;
+    const remaining = plan === 'free' ? await getRemainingScans(limitKey, 'free') : null;
 
     return Response.json({
       ...result,

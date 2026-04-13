@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { stripe, PLANS, type PlanId } from '@/lib/stripe';
-import { store } from '@/lib/store';
+import { getUserById } from '@/lib/store';
 
 export async function POST(request: Request) {
   if (!stripe) {
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     return Response.json({ error: `Price ID for ${plan} not configured` }, { status: 503 });
   }
 
-  const user = store.getUserById(payload.userId);
+  const user = await getUserById(payload.userId);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 
   const session = await stripe.checkout.sessions.create({

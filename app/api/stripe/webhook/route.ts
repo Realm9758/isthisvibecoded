@@ -1,5 +1,5 @@
 import { stripe } from '@/lib/stripe';
-import { store } from '@/lib/store';
+import { updateUser, getUserByStripeCustomerId } from '@/lib/store';
 import type { Plan } from '@/lib/store';
 
 export async function POST(request: Request) {
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     const userId = session.metadata?.userId;
     const plan = session.metadata?.plan as Plan;
     if (userId && plan) {
-      store.updateUser(userId, {
+      await updateUser(userId, {
         plan,
         stripeCustomerId: session.customer as string,
         stripeSubscriptionId: session.subscription as string,
@@ -33,11 +33,9 @@ export async function POST(request: Request) {
   if (event.type === 'customer.subscription.deleted') {
     const sub = event.data.object;
     const customerId = sub.customer as string;
-    for (const user of store.users.values()) {
-      if (user.stripeCustomerId === customerId) {
-        store.updateUser(user.id, { plan: 'free', stripeSubscriptionId: undefined });
-        break;
-      }
+    const user = await getUserByStripeCustomerId(customerId);
+    if (user) {
+      await updateUser(user.id, { plan: 'free', stripeSubscriptionId: undefined });
     }
   }
 

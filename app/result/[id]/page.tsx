@@ -1,4 +1,4 @@
-import { store } from '@/lib/store';
+import { getScan } from '@/lib/store';
 import { SharedResult } from './SharedResult';
 import Link from 'next/link';
 import type { AnalysisResult } from '@/types/analysis';
@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function ResultPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const scan = store.getScan(id);
+  const scan = await getScan(id);
 
   if (!scan) {
     return (

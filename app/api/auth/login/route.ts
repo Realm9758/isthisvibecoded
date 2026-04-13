@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers';
-import { store } from '@/lib/store';
+import { getUserByEmail } from '@/lib/store';
 import { verifyPassword, signToken, AUTH_COOKIE, COOKIE_OPTIONS } from '@/lib/auth';
 
 export async function POST(request: Request) {
@@ -8,7 +8,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Email and password are required' }, { status: 400 });
   }
 
-  const user = store.getUserByEmail(email);
+  const user = await getUserByEmail(email);
   if (!user) {
     return Response.json({ error: 'Invalid email or password' }, { status: 401 });
   }

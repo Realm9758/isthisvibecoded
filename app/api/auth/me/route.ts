@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
-import { store } from '@/lib/store';
+import { getUserById, getRemainingScans } from '@/lib/store';
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -10,10 +10,10 @@ export async function GET() {
   const payload = await verifyToken(token);
   if (!payload) return Response.json(null);
 
-  const user = store.getUserById(payload.userId);
+  const user = await getUserById(payload.userId);
   if (!user) return Response.json(null);
 
-  const remaining = store.getRemainingScans(user.id, user.plan);
+  const remaining = await getRemainingScans(user.id, user.plan);
 
   return Response.json({
     id: user.id,
