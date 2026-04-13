@@ -10,6 +10,7 @@ export async function PATCH(request: Request) {
 
   let name: string | undefined;
   let avatarColor: string | undefined;
+  let bio: string | undefined;
   let notifEmail: boolean | undefined;
   let notifInApp: boolean | undefined;
 
@@ -17,6 +18,7 @@ export async function PATCH(request: Request) {
     const body = await request.json();
     if (typeof body.name === 'string') name = body.name.trim();
     if (typeof body.avatarColor === 'string') avatarColor = body.avatarColor.trim();
+    if (typeof body.bio === 'string') bio = body.bio.trim().slice(0, 200);
     if (typeof body.notifEmail === 'boolean') notifEmail = body.notifEmail;
     if (typeof body.notifInApp === 'boolean') notifInApp = body.notifInApp;
   } catch {
@@ -30,6 +32,7 @@ export async function PATCH(request: Request) {
   const patch: Record<string, unknown> = {};
   if (name !== undefined) patch.name = name;
   if (avatarColor !== undefined) patch.avatarColor = avatarColor;
+  if (bio !== undefined) patch.bio = bio;
   if (notifEmail !== undefined) patch.notifEmail = notifEmail;
   if (notifInApp !== undefined) patch.notifInApp = notifInApp;
 

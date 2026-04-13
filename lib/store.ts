@@ -11,6 +11,8 @@ export interface User {
   passwordHash: string;
   plan: Plan;
   avatarColor?: string;
+  avatarUrl?: string;
+  bio?: string;
   notifEmail: boolean;
   notifInApp: boolean;
   stripeCustomerId?: string;
@@ -44,6 +46,8 @@ function rowToUser(row: any): User {
     passwordHash: row.password_hash,
     plan: row.plan as Plan,
     avatarColor: row.avatar_color ?? undefined,
+    avatarUrl: row.avatar_url ?? undefined,
+    bio: row.bio ?? undefined,
     notifEmail: row.notif_email ?? false,
     notifInApp: row.notif_inapp ?? true,
     stripeCustomerId: row.stripe_customer_id ?? undefined,
@@ -74,6 +78,8 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
     name: user.name,
     password_hash: user.passwordHash,
     plan: user.plan,
+    notif_email: user.notifEmail,
+    notif_inapp: user.notifInApp,
     stripe_customer_id: user.stripeCustomerId ?? null,
     stripe_subscription_id: user.stripeSubscriptionId ?? null,
     created_at: user.createdAt,
@@ -100,6 +106,8 @@ export async function updateUser(id: string, patch: Partial<User>): Promise<User
   const updates: Record<string, unknown> = {};
   if (patch.name !== undefined) updates.name = patch.name;
   if (patch.avatarColor !== undefined) updates.avatar_color = patch.avatarColor;
+  if (patch.avatarUrl !== undefined) updates.avatar_url = patch.avatarUrl;
+  if (patch.bio !== undefined) updates.bio = patch.bio;
   if (patch.notifEmail !== undefined) updates.notif_email = patch.notifEmail;
   if (patch.notifInApp !== undefined) updates.notif_inapp = patch.notifInApp;
   if (patch.plan !== undefined) updates.plan = patch.plan;

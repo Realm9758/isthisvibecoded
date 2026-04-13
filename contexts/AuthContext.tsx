@@ -9,6 +9,8 @@ export interface AuthUser {
   name: string;
   plan: Plan;
   avatarColor: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
   notifEmail: boolean;
   notifInApp: boolean;
   scansRemaining: number | null;

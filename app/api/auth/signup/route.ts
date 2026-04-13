@@ -21,6 +21,8 @@ export async function POST(request: Request) {
     name: (name ?? email.split('@')[0]).trim(),
     passwordHash,
     plan: 'free',
+    notifEmail: false,
+    notifInApp: true,
   });
 
   const token = await signToken({ userId: user.id, email: user.email, plan: user.plan, name: user.name });
