@@ -241,8 +241,61 @@ export default function Home() {
 
           {/* Results */}
           {status === 'done' && result && (
-            <section ref={resultsRef} className="px-6 pb-20">
+            <section ref={resultsRef} className="px-6 pb-6">
               <ResultsDashboard result={result} onReset={reset} defaultRoastMode={roastMode} />
+            </section>
+          )}
+
+          {/* Deep scan CTA — shown after a passive scan completes */}
+          {status === 'done' && result && (
+            <section className="px-6 pb-20 max-w-5xl mx-auto">
+              <div
+                className="rounded-2xl border border-red-500/15 p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-5"
+                style={{ background: 'rgba(239,68,68,0.04)' }}
+              >
+                <div className="flex items-start gap-4">
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-lg"
+                    style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}
+                  >
+                    ⚡
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white/80 mb-0.5">Want to go deeper?</h3>
+                    <p className="text-xs text-white/40 max-w-md leading-relaxed">
+                      This was a passive read-only scan. Deep vulnerability testing — SQL injection, XSS, auth bypass, and more —
+                      requires proving you own the site. Sign in or create a free account to get started.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2 shrink-0 flex-wrap">
+                  {user ? (
+                    <a
+                      href="/dashboard"
+                      className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all"
+                      style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)', boxShadow: '0 0 16px rgba(220,38,38,0.2)' }}
+                    >
+                      My Scans →
+                    </a>
+                  ) : (
+                    <>
+                      <a
+                        href="/dashboard"
+                        className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all"
+                        style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)', boxShadow: '0 0 16px rgba(220,38,38,0.2)' }}
+                      >
+                        Sign up free →
+                      </a>
+                      <a
+                        href="/vulnerability"
+                        className="px-4 py-2.5 rounded-xl text-sm text-white/45 border border-white/8 hover:bg-white/5 transition-colors"
+                      >
+                        How it works
+                      </a>
+                    </>
+                  )}
+                </div>
+              </div>
             </section>
           )}
 

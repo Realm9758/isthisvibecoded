@@ -37,10 +37,14 @@ export function Navbar() {
           <Link href="/feed" className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5">
             Feed
           </Link>
+          <Link href="/vulnerability" className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5 hidden sm:flex items-center gap-1">
+            <span className="text-red-400/70">⚡</span>
+            Deep Scan
+          </Link>
           <Link href="/pricing" className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5">
             Pricing
           </Link>
-          <Link href="/privacy" className="px-3 py-1.5 text-xs text-white/30 hover:text-white/60 transition-colors rounded-lg hover:bg-white/5 hidden sm:block">
+          <Link href="/privacy" className="px-3 py-1.5 text-xs text-white/30 hover:text-white/60 transition-colors rounded-lg hover:bg-white/5 hidden lg:block">
             Privacy
           </Link>
         </div>
@@ -74,6 +78,14 @@ export function Navbar() {
                       </p>
                     )}
                   </div>
+                  <Link
+                    href="/dashboard"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs text-white/60 hover:bg-white/5 transition-colors"
+                  >
+                    <span className="text-red-400/70">⚡</span>
+                    My Scans &amp; Deep Scan
+                  </Link>
                   {user.plan === 'free' && (
                     <Link
                       href="/pricing"
