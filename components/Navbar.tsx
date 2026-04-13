@@ -86,7 +86,7 @@ export function Navbar() {
           </Link>
           <Link href="/feed" className="items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden md:flex">
             <IconFeed />
-            <span>Recent Scans</span>
+            <span>Leaderboard</span>
           </Link>
           <Link href="/pricing" className="px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4">
             Pricing
