@@ -280,6 +280,125 @@ function CheckRow({ item }: { item: { id: string; label: string; description: st
   );
 }
 
+// ── AI Fix Prompt Section (deep scan) ────────────────────────────────────
+
+type AiTool = 'cursor' | 'claude' | 'lovable' | 'v0' | 'bolt' | 'replit';
+
+const TOOLS: { id: AiTool; name: string; tagline: string; accent: string; bg: string; border: string }[] = [
+  { id: 'cursor',  name: 'Cursor',  tagline: 'Full-stack, any stack',    accent: '#4ade80', bg: 'rgba(74,222,128,0.08)',  border: 'rgba(74,222,128,0.2)' },
+  { id: 'claude',  name: 'Claude',  tagline: 'Security-focused',         accent: '#fb923c', bg: 'rgba(251,146,60,0.08)',  border: 'rgba(251,146,60,0.2)' },
+  { id: 'lovable', name: 'Lovable', tagline: 'Full-stack with Supabase', accent: '#f43f5e', bg: 'rgba(244,63,94,0.08)',  border: 'rgba(244,63,94,0.2)' },
+  { id: 'v0',      name: 'v0',      tagline: 'Next.js + shadcn/ui',      accent: '#a78bfa', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.2)' },
+  { id: 'bolt',    name: 'Bolt',    tagline: 'React + Firebase',         accent: '#38bdf8', bg: 'rgba(56,189,248,0.08)',  border: 'rgba(56,189,248,0.2)' },
+  { id: 'replit',  name: 'Replit',  tagline: 'Deploy-first, fast',       accent: '#e879f9', bg: 'rgba(232,121,249,0.08)', border: 'rgba(232,121,249,0.2)' },
+];
+
+function buildFixPrompt(tool: AiTool, result: DeepScanResult): string {
+  const { domain, summary, findings } = result;
+  const order: DeepFinding['severity'][] = ['critical', 'high', 'medium', 'low'];
+  const actionable = findings
+    .filter(f => f.severity !== 'info')
+    .sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
+
+  const findingLines = actionable.slice(0, 12).map(f =>
+    `[${f.severity.toUpperCase()}] ${f.title}\n  Issue: ${f.description}\n  Fix: ${f.remediation}`
+  ).join('\n\n');
+
+  const scoreBlurb = `Security score: ${summary.score}/100 · ${summary.critical} critical · ${summary.high} high · ${summary.medium} medium`;
+
+  const shared = `I ran a security audit on ${domain} and found ${actionable.length} issues that need fixing.\n\n${scoreBlurb}\n\n--- Vulnerabilities ---\n\n${findingLines || 'No critical/high issues — but medium/low findings need attention.'}`;
+
+  const suffix: Record<AiTool, string> = {
+    cursor: `\n\n---\nPlease go through each issue one by one. For each:\n1. Identify the affected file(s) in the codebase\n2. Show me the exact code change needed\n3. Explain why the fix works\n\nStart with the critical issues first.`,
+    claude: `\n\n---\nFor each vulnerability:\n- Explain the attack vector clearly\n- Show the exact code fix (before/after)\n- Suggest any related hardening improvements\n\nPrioritise critical > high > medium. Be precise about file paths.`,
+    lovable: `\n\n---\nI'm using Lovable (React + Supabase). Help me fix each issue:\n1. Which file and component needs changing\n2. The updated code\n3. Any Supabase RLS policies that need updating\n\nFix critical issues first.`,
+    v0: `\n\n---\nMy project uses Next.js App Router + shadcn/ui. For each issue:\n1. Which route, component or middleware is affected\n2. The corrected code snippet\n3. Any next.config.js or middleware changes needed`,
+    bolt: `\n\n---\nI'm using React + Vite + Firebase. Help me fix these step by step:\n1. Affected component or Firebase rule\n2. The exact code fix\n3. Any Firebase security rule updates needed`,
+    replit: `\n\n---\nI'm hosting on Replit (Node.js + Express). For each issue:\n1. Which endpoint or middleware to change\n2. The corrected code\n3. Any environment variable or config changes\n\nKeep it simple and clear.`,
+  };
+
+  return shared + suffix[tool];
+}
+
+function DeepScanPromptSection({ result }: { result: DeepScanResult }) {
+  const [activeTool, setActiveTool] = useState<AiTool>('cursor');
+  const [copied, setCopied] = useState(false);
+  const prompt = buildFixPrompt(activeTool, result);
+  const toolDef = TOOLS.find(t => t.id === activeTool)!;
+  const hasIssues = result.summary.critical + result.summary.high + result.summary.medium > 0;
+
+  function copyPrompt() {
+    navigator.clipboard.writeText(prompt).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div className="rounded-2xl border border-white/8 overflow-hidden" style={{ background: 'rgba(255,255,255,0.015)' }}>
+      <div className="px-5 py-4 border-b border-white/6 flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 mb-0.5">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgba(167,139,250,0.8)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+            </svg>
+            <p className="text-xs font-semibold text-white/60 uppercase tracking-wider">AI Fix Prompt</p>
+          </div>
+          <p className="text-xs text-white/30">
+            {hasIssues
+              ? `${result.summary.critical + result.summary.high} critical/high issues · paste into your AI to get exact code fixes`
+              : 'No critical issues · paste into your AI for hardening advice'}
+          </p>
+        </div>
+        <button
+          onClick={copyPrompt}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0"
+          style={copied
+            ? { background: 'rgba(74,222,128,0.12)', border: '1px solid rgba(74,222,128,0.3)', color: '#4ade80' }
+            : { background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: '#a78bfa' }
+          }
+        >
+          {copied ? (
+            <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Copied</>
+          ) : (
+            <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>Copy Prompt</>
+          )}
+        </button>
+      </div>
+
+      {/* Tool tabs */}
+      <div className="flex gap-1 px-3 pt-3 overflow-x-auto pb-1">
+        {TOOLS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTool(t.id)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all shrink-0"
+            style={activeTool === t.id
+              ? { background: t.bg, border: `1px solid ${t.border}`, color: t.accent }
+              : { background: 'transparent', border: '1px solid transparent', color: 'rgba(255,255,255,0.3)' }
+            }
+          >
+            {t.name}
+          </button>
+        ))}
+      </div>
+
+      {/* Prompt preview */}
+      <div className="px-3 pb-3 pt-2">
+        <div className="relative rounded-xl border overflow-hidden" style={{ borderColor: toolDef.border, background: 'rgba(0,0,0,0.3)' }}>
+          <div className="px-3 py-1.5 border-b flex items-center gap-2" style={{ borderColor: toolDef.border, background: toolDef.bg }}>
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: toolDef.accent }} />
+            <span className="text-[10px] font-medium" style={{ color: toolDef.accent }}>{toolDef.name} — {toolDef.tagline}</span>
+          </div>
+          <pre className="text-[11px] leading-relaxed text-white/55 p-4 whitespace-pre-wrap font-mono overflow-x-auto max-h-52 overflow-y-auto">
+            {prompt}
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DeepScanResults({ result, domain, onReset }: { result: DeepScanResult; domain: string; onReset: () => void }) {
   const [tab, setTab] = useState<'findings' | 'checked'>('findings');
   const { summary, findings, checked } = result;
@@ -388,6 +507,9 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResult; 
           {checked.map(item => <CheckRow key={item.id} item={item} />)}
         </div>
       )}
+
+      {/* AI Fix Prompt */}
+      <DeepScanPromptSection result={result} />
 
       <button onClick={onReset} className="text-xs text-white/25 hover:text-white/55 transition-colors">
         ← Scan another domain

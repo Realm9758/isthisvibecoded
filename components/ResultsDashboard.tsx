@@ -742,11 +742,6 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
         </div>
       )}
 
-      {/* ── AI Recreate Prompt ── */}
-      {result.vibe.score >= 25 && result.techStack.length > 0 && (
-        <PromptSection result={result} />
-      )}
-
       {/* ── Passive vulnerability scan toggle ── */}
       <div className="rounded-2xl border overflow-hidden" style={{ borderColor: vulnOpen ? 'rgba(239,68,68,0.22)' : 'rgba(255,255,255,0.07)' }}>
         <button
