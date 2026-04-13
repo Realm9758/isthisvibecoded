@@ -8,7 +8,8 @@ export type DeepFindingCategory =
   | 'http-methods'
   | 'info-disclosure'
   | 'ssl'
-  | 'authentication';
+  | 'authentication'
+  | 'injection';
 
 export interface DeepFinding {
   id: string;
@@ -19,6 +20,14 @@ export interface DeepFinding {
   evidence?: string;
   remediation: string;
   url?: string;
+}
+
+export interface CheckedItem {
+  id: string;
+  label: string;
+  description: string;
+  status: 'pass' | 'warn' | 'fail' | 'skip';
+  detail: string;
 }
 
 export interface DeepScanResult {
@@ -34,4 +43,5 @@ export interface DeepScanResult {
     score: number;
   };
   findings: DeepFinding[];
+  checked: CheckedItem[];
 }

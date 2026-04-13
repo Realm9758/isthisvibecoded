@@ -725,14 +725,131 @@ async function checkDirectoryListing(baseUrl: string): Promise<DeepFinding[]> {
   return [];
 }
 
+// ── Reflected XSS detection ───────────────────────────────────────────────
+
+async function checkXSS(baseUrl: string): Promise<DeepFinding[]> {
+  const XSS_PAYLOAD = '<script>alert(1)</script>';
+  const testPaths = ['/?q=', '/search?q=', '/?s=', '/?name=', '/?message='];
+
+  for (const path of testPaths) {
+    const url = `${baseUrl}${path}${encodeURIComponent(XSS_PAYLOAD)}`;
+    const res = await safeFetch(url);
+    if (!res) continue;
+    const text = await res.text().catch(() => '');
+    // Reflected unencoded — actual XSS
+    if (text.includes('<script>alert(1)</script>')) {
+      return [{
+        id: 'xss-reflected',
+        category: 'injection',
+        severity: 'critical',
+        title: 'Reflected XSS — Unencoded Script Tag',
+        description: `Input injected into ${path} is reflected back in the HTML without encoding. Any script tag sent by an attacker will execute in the victim's browser — enabling session theft, keylogging, or full account takeover.`,
+        evidence: `GET ${url}\n→ Response contains: <script>alert(1)</script> (unencoded)`,
+        remediation: 'HTML-encode all user input before rendering. Use Content-Security-Policy to block inline scripts. Use a templating engine that escapes by default.',
+        url,
+      }];
+    }
+    // Input reflected but partially encoded — warn
+    if (text.includes('alert(1)') && !text.includes('&lt;script&gt;')) {
+      return [{
+        id: 'xss-partial-reflection',
+        category: 'injection',
+        severity: 'high',
+        title: 'Potential XSS — Input Reflected in Response',
+        description: `Input from ${path} appears in the HTML response. Partial encoding was detected — may still be exploitable depending on context.`,
+        evidence: `GET ${url}\n→ Response contains reflected input`,
+        remediation: 'Ensure all user input is fully HTML-encoded. Use context-aware output encoding.',
+        url,
+      }];
+    }
+  }
+  return [];
+}
+
+// ── Subresource Integrity ─────────────────────────────────────────────────
+
+async function checkSRI(baseUrl: string, mainRes: Response | null): Promise<DeepFinding[]> {
+  if (!mainRes) return [];
+  const html = await mainRes.clone().text().catch(() => '');
+
+  // Find external scripts/stylesheets without integrity attribute
+  const externalScripts = [...html.matchAll(/<script[^>]+src=["']https?:\/\/(?!.*localhost)[^"']+["'][^>]*>/gi)];
+  const externalStyles  = [...html.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]+href=["']https?:\/\/[^"']+["'][^>]*>/gi)];
+
+  const noIntegrity = [...externalScripts, ...externalStyles]
+    .map(m => m[0])
+    .filter(tag => !tag.includes('integrity='))
+    .slice(0, 5);
+
+  if (!noIntegrity.length) return [];
+
+  return [{
+    id: 'sri-missing',
+    category: 'headers',
+    severity: 'medium',
+    title: `${noIntegrity.length} External Resource${noIntegrity.length > 1 ? 's' : ''} Without Subresource Integrity`,
+    description: `External scripts/stylesheets loaded from CDNs without integrity hashes. If the CDN is compromised, attackers can inject malicious code into your site.`,
+    evidence: noIntegrity.map(t => t.substring(0, 120)).join('\n'),
+    remediation: 'Add integrity="sha384-..." and crossorigin="anonymous" to all external <script> and <link> tags. Use srihash.org to generate hashes.',
+  }];
+}
+
 // ── Score calculation ─────────────────────────────────────────────────────
 
 function calculateScore(findings: DeepFinding[]): number {
   const WEIGHTS = { critical: 25, high: 15, medium: 8, low: 3, info: 0 };
   const deductions = findings
-    .filter(f => !f.id.endsWith('-ok'))
     .reduce((sum, f) => sum + (WEIGHTS[f.severity] ?? 0), 0);
   return Math.max(0, 100 - deductions);
+}
+
+// ── Build checked[] summary ───────────────────────────────────────────────
+
+function buildChecked(findings: DeepFinding[], mainRes: Response | null): import('@/types/deep-scan').CheckedItem[] {
+  function findingsFor(...ids: string[]) {
+    return findings.filter(f => ids.some(id => f.id.startsWith(id)));
+  }
+
+  function item(
+    id: string, label: string, description: string,
+    relevant: DeepFinding[],
+    passDetail: string,
+  ): import('@/types/deep-scan').CheckedItem {
+    if (!relevant.length) return { id, label, description, status: 'pass', detail: passDetail };
+    const worst = relevant.reduce((a, b) => {
+      const order = ['critical','high','medium','low','info'];
+      return order.indexOf(a.severity) < order.indexOf(b.severity) ? a : b;
+    });
+    const status = worst.severity === 'low' || worst.severity === 'info' ? 'warn' : 'fail';
+    return { id, label, description, status, detail: relevant.map(f => f.title).join(' · ') };
+  }
+
+  const httpsOk = !findings.find(f => f.id === 'ssl-http-accessible');
+
+  return [
+    item('https',      'HTTPS Enforcement',          'Does plain HTTP redirect to HTTPS?',                  findingsFor('ssl-'), httpsOk ? 'HTTP correctly redirects to HTTPS' : 'HTTPS redirect configured'),
+    item('headers',    'Security Headers',            'CSP, HSTS, X-Frame-Options, Referrer-Policy',        findingsFor('header-'), 'All critical security headers present'),
+    item('cors',       'CORS Policy',                 'No wildcard or credential-reflecting origins',        findingsFor('cors-'), 'CORS policy is properly restricted'),
+    item('cookies',    'Cookie Security Flags',       'HttpOnly, Secure, SameSite on session cookies',      findingsFor('cookie-'), 'All cookies have correct security flags'),
+    item('sqli',       'SQL Injection',               "Error-based SQLi via ' OR 1=1 payloads",             findingsFor('sqli-'), 'No SQL errors triggered by injection payloads'),
+    item('xss',        'Reflected XSS',               'Script tag injection into query parameters',          findingsFor('xss-'), 'Input is correctly encoded — no XSS reflection found'),
+    item('files',      'Sensitive File Exposure',     '.env, .git, wp-config, phpinfo, backups, .htaccess', findingsFor('exposed-'), 'No sensitive files or paths exposed publicly'),
+    item('admin',      'Admin Panel Exposure',        '/admin, /wp-admin, /phpmyadmin, /cpanel, 14 paths',  findingsFor('admin-'), 'No unauthenticated admin panels found'),
+    item('dirlist',    'Directory Listing',           '/uploads, /static, /files — open index pages',       findingsFor('directory-'), 'No open directory listings detected'),
+    item('redirect',   'Open Redirect',               '?redirect=, ?url=, ?next= parameter hijacking',      findingsFor('open-redirect'), 'No open redirect vectors found'),
+    item('methods',    'Dangerous HTTP Methods',      'TRACE, PUT, DELETE method exposure',                  findingsFor('methods-'), 'No dangerous HTTP methods advertised'),
+    item('errors',     'Error Verbosity',             'Stack traces, file paths in error responses',         findingsFor('error-'), 'Error responses do not disclose internals'),
+    item('info',       'Technology Disclosure',       'Server version, X-Powered-By, framework headers',    findingsFor('info-'), 'No detailed server version info disclosed'),
+    item('sri',        'Subresource Integrity',       'External CDN scripts/styles have integrity hashes',   findingsFor('sri-'), 'External resources use integrity hashes or are same-origin'),
+    item('robots',     'robots.txt Path Disclosure',  'Sensitive paths accidentally mapped in robots.txt',   findingsFor('robots-'), 'robots.txt does not reveal sensitive paths'),
+    {
+      id: 'https-tls',
+      label: 'TLS Certificate',
+      description: 'Site is reachable over HTTPS with a valid certificate',
+      status: mainRes ? 'pass' : 'skip',
+      detail: mainRes ? 'HTTPS connection successful — valid TLS certificate' : 'Could not reach site over HTTPS',
+    },
+  ];
 }
 
 // ── Check phases (for streaming progress) ────────────────────────────────
@@ -743,22 +860,26 @@ export type ScanPhase = {
   detail: string;
 };
 
+const MIN_PHASE_MS = 900;
+
 export const SCAN_PHASES: ScanPhase[] = [
-  { id: 'init',      label: 'Connecting',             detail: 'Establishing connection and reading HTTP response…' },
-  { id: 'files',     label: 'Sensitive Files',         detail: 'Probing 15 sensitive paths: .env, .git, wp-config, phpinfo…' },
-  { id: 'sqli',      label: 'SQL Injection',           detail: "Injecting payloads: ' OR 1=1, \\\" OR \\\"1\\\"=\\\"1 — watching for DB errors…" },
-  { id: 'cors',      label: 'CORS Policy',             detail: 'Sending null origin & evil-attacker.com — testing reflection with credentials…' },
-  { id: 'headers',   label: 'Security Headers',        detail: 'Auditing CSP, HSTS, X-Frame-Options, Referrer-Policy, Permissions-Policy…' },
-  { id: 'cookies',   label: 'Cookie Flags',            detail: 'Checking Set-Cookie for HttpOnly, Secure, SameSite flags…' },
-  { id: 'methods',   label: 'HTTP Methods',            detail: 'OPTIONS request — checking for TRACE, PUT, DELETE…' },
-  { id: 'ssl',       label: 'SSL / HTTPS',             detail: 'Testing plain HTTP access and redirect chain…' },
-  { id: 'admin',     label: 'Admin Path Discovery',    detail: 'Probing /admin, /wp-admin, /phpmyadmin, /cpanel, 14 more…' },
-  { id: 'errors',    label: 'Error Verbosity',         detail: 'Triggering 404s and debug params — checking for stack traces…' },
-  { id: 'redirect',  label: 'Open Redirect',           detail: 'Testing ?redirect=, ?url=, ?next= params with external URL…' },
-  { id: 'dirlist',   label: 'Directory Listing',       detail: 'Checking /uploads, /static, /assets, /files for open indexes…' },
-  { id: 'robots',    label: 'robots.txt Analysis',     detail: 'Parsing Disallow entries for accidentally mapped sensitive paths…' },
-  { id: 'info',      label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, X-AspNet-Version headers…' },
-  { id: 'done',      label: 'Report',                  detail: 'Scoring findings and compiling vulnerability report…' },
+  { id: 'init',      label: 'Connecting',             detail: 'Establishing HTTPS connection, reading response headers…' },
+  { id: 'files',     label: 'Sensitive Files',         detail: 'Probing 17 paths: .env, .env.local, .git/HEAD, .git/config, wp-config.php, phpinfo.php, backup.sql…' },
+  { id: 'xss',       label: 'Cross-Site Scripting',   detail: "Injecting <script>alert(1)</script> into ?q=, ?s=, ?name= — checking if input is reflected unencoded…" },
+  { id: 'sqli',      label: 'SQL Injection',           detail: "Sending ' OR 1=1, \\\" OR \\\"1\\\"=\\\"1, SQLSTATE payloads — watching for database error messages…" },
+  { id: 'cors',      label: 'CORS Policy',             detail: 'Origin: null + Origin: https://evil-attacker.com — checking for wildcard or credential reflection…' },
+  { id: 'headers',   label: 'Security Headers',        detail: 'Auditing CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy…' },
+  { id: 'cookies',   label: 'Cookie Security',         detail: 'Inspecting Set-Cookie headers for HttpOnly, Secure, SameSite=Lax/Strict flags…' },
+  { id: 'methods',   label: 'HTTP Methods',            detail: 'OPTIONS request — detecting TRACE (XST attacks), PUT, DELETE without authentication…' },
+  { id: 'ssl',       label: 'HTTPS / TLS',             detail: 'HTTP → HTTPS redirect check, testing for plain HTTP access, HSTS preload…' },
+  { id: 'admin',     label: 'Admin Discovery',         detail: 'Probing 18 paths: /admin, /wp-admin, /phpmyadmin, /cpanel, /manager, /backend, /portal…' },
+  { id: 'errors',    label: 'Error Verbosity',         detail: 'Triggering 404, /api/nonexistent, ?debug=true — checking for JS/Python/PHP stack traces…' },
+  { id: 'redirect',  label: 'Open Redirect',           detail: 'Testing ?redirect=, ?url=, ?next=, ?return=, ?goto= with external target URL…' },
+  { id: 'dirlist',   label: 'Directory Listing',       detail: 'Requesting /uploads/, /static/, /assets/, /files/, /backup/ — checking for open indexes…' },
+  { id: 'robots',    label: 'robots.txt',              detail: 'Fetching /robots.txt — parsing Disallow entries for accidentally exposed sensitive paths…' },
+  { id: 'sri',       label: 'Subresource Integrity',   detail: 'Parsing HTML for external <script> and <link> tags missing integrity= hashes…' },
+  { id: 'info',      label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, X-AspNet-Version — checking for version numbers…' },
+  { id: 'done',      label: 'Compiling Report',        detail: 'Scoring all findings, computing security grade, building detailed report…' },
 ];
 
 // ── Main export (with progress callback) ─────────────────────────────────
@@ -774,7 +895,11 @@ export async function deepScanDomain(
   async function run<T extends DeepFinding[]>(phaseId: string, fn: () => Promise<T>): Promise<T> {
     const phase = SCAN_PHASES.find(p => p.id === phaseId)!;
     onPhase?.(phase, []);
+    const t0 = Date.now();
     const results = await fn();
+    // Enforce minimum phase duration so the terminal is readable
+    const elapsed = Date.now() - t0;
+    if (elapsed < MIN_PHASE_MS) await new Promise(r => setTimeout(r, MIN_PHASE_MS - elapsed));
     onPhase?.(phase, results);
     allFindings.push(...results);
     return results;
@@ -784,6 +909,7 @@ export async function deepScanDomain(
   const mainRes = await safeFetch(baseUrl, { redirect: 'follow' });
 
   await run('files',    () => checkSensitiveFiles(baseUrl));
+  await run('xss',      () => checkXSS(baseUrl));
   await run('sqli',     () => checkSQLInjection(baseUrl));
   await run('cors',     () => checkCORS(baseUrl));
   await run('headers',  () => checkSecurityHeaders(mainRes));
@@ -795,12 +921,12 @@ export async function deepScanDomain(
   await run('redirect', () => checkOpenRedirect(baseUrl));
   await run('dirlist',  () => checkDirectoryListing(baseUrl));
   await run('robots',   () => checkRobotsTxt(baseUrl));
+  await run('sri',      () => checkSRI(baseUrl, mainRes));
   await run('info',     () => checkInfoDisclosure(mainRes));
 
   onPhase?.(SCAN_PHASES[SCAN_PHASES.length - 1], allFindings);
 
   const findings = allFindings;
-
   const count = (sev: DeepFinding['severity']) => findings.filter(f => f.severity === sev).length;
 
   return {
@@ -816,5 +942,6 @@ export async function deepScanDomain(
       score: calculateScore(findings),
     },
     findings,
+    checked: buildChecked(findings, mainRes),
   };
 }

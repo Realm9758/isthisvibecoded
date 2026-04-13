@@ -233,53 +233,154 @@ function FindingCard({ f }: { f: DeepFinding }) {
   );
 }
 
-function DeepScanResults({ result, domain, onReset }: { result: DeepScanResult; domain: string; onReset: () => void }) {
-  const { summary, findings } = result;
-  const scoreColor = summary.score >= 70 ? '#22c55e' : summary.score >= 40 ? '#f59e0b' : '#ef4444';
-  const order: DeepFinding['severity'][] = ['critical', 'high', 'medium', 'low', 'info'];
-  const sorted = [...findings].sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
+const GRADE = (s: number) => s >= 90 ? 'A' : s >= 75 ? 'B' : s >= 55 ? 'C' : s >= 35 ? 'D' : 'F';
+const GRADE_COLOR = (g: string) => g === 'A' ? '#22c55e' : g === 'B' ? '#84cc16' : g === 'C' ? '#f59e0b' : g === 'D' ? '#f97316' : '#ef4444';
+
+function CheckRow({ item }: { item: { id: string; label: string; description: string; status: string; detail: string } }) {
+  const [open, setOpen] = useState(false);
+  const icon = item.status === 'pass' ? '✓' : item.status === 'warn' ? '⚠' : item.status === 'fail' ? '✗' : '–';
+  const color = item.status === 'pass' ? '#4ade80' : item.status === 'warn' ? '#fbbf24' : item.status === 'fail' ? '#f87171' : '#ffffff30';
 
   return (
-    <div className="space-y-6">
-      {/* Score bar */}
-      <div className="rounded-2xl border border-white/8 bg-white/2 p-5">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-xs text-white/40 mb-0.5">Security Score for</p>
-            <p className="font-mono font-bold text-white/80">{domain}</p>
-            <p className="text-xs text-white/25 mt-0.5">
-              Scanned in {(result.duration / 1000).toFixed(1)}s · {findings.length} findings
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-4xl font-black" style={{ color: scoreColor }}>{summary.score}</p>
-            <p className="text-xs text-white/30">/100</p>
+    <button
+      onClick={() => setOpen(o => !o)}
+      className="w-full text-left rounded-xl border px-4 py-3 transition-all hover:bg-white/3"
+      style={{
+        background: item.status === 'fail' ? 'rgba(239,68,68,0.04)' : item.status === 'warn' ? 'rgba(251,191,36,0.04)' : 'rgba(255,255,255,0.02)',
+        borderColor: item.status === 'fail' ? 'rgba(239,68,68,0.2)' : item.status === 'warn' ? 'rgba(251,191,36,0.15)' : 'rgba(255,255,255,0.06)',
+      }}
+    >
+      <div className="flex items-center gap-3">
+        <span className="text-sm font-bold w-4 shrink-0" style={{ color }}>{icon}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-white/75">{item.label}</span>
+            <span className="text-[10px] text-white/30 hidden sm:block">{item.description}</span>
           </div>
         </div>
-        <div className="flex gap-3 mt-4 flex-wrap">
-          {(['critical','high','medium','low','info'] as const).map(sev => (
-            summary[sev] > 0 && (
-              <span
-                key={sev}
-                className="text-xs font-semibold px-2.5 py-1 rounded-full"
-                style={{ color: SEV_COLOR[sev], background: SEV_BG[sev], border: `1px solid ${SEV_BORDER[sev]}` }}
-              >
-                {summary[sev]} {sev}
-              </span>
-            )
-          ))}
+        <svg className="w-3 h-3 text-white/20 shrink-0 transition-transform" style={{ transform: open ? 'rotate(180deg)' : '' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </div>
+      {open && (
+        <div className="mt-2 pt-2 border-t border-white/5 text-xs text-white/45 leading-relaxed" style={{ color: item.status === 'pass' ? '#4ade80cc' : item.status === 'warn' ? '#fbbf24cc' : '#f87171cc' }}>
+          {item.detail}
         </div>
-      </div>
+      )}
+    </button>
+  );
+}
 
-      {/* Findings */}
-      <div className="space-y-2">
-        {sorted.map(f => <FindingCard key={f.id} f={f} />)}
-      </div>
+function DeepScanResults({ result, domain, onReset }: { result: DeepScanResult; domain: string; onReset: () => void }) {
+  const [tab, setTab] = useState<'findings' | 'checked'>('findings');
+  const { summary, findings, checked } = result;
+  const grade = GRADE(summary.score);
+  const gradeColor = GRADE_COLOR(grade);
+  const order: DeepFinding['severity'][] = ['critical', 'high', 'medium', 'low', 'info'];
+  const sorted = [...findings].sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
+  const passCount = checked?.filter(c => c.status === 'pass').length ?? 0;
+  const failCount = checked?.filter(c => c.status === 'fail').length ?? 0;
+  const warnCount = checked?.filter(c => c.status === 'warn').length ?? 0;
 
-      <button
-        onClick={onReset}
-        className="text-xs text-white/25 hover:text-white/55 transition-colors"
+  return (
+    <div className="space-y-5">
+      {/* Score header */}
+      <div
+        className="rounded-2xl border p-5"
+        style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}
       >
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-white/35 mb-0.5">Deep Scan Results for</p>
+            <p className="font-mono text-base font-bold text-white/85 truncate">{domain}</p>
+            <p className="text-xs text-white/25 mt-0.5">
+              {findings.length} finding{findings.length !== 1 ? 's' : ''} · {checked?.length ?? 0} checks · {(result.duration / 1000).toFixed(1)}s
+            </p>
+            <div className="flex gap-2 mt-3 flex-wrap">
+              {(['critical','high','medium','low'] as const).map(sev =>
+                summary[sev] > 0 && (
+                  <span key={sev} className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ color: SEV_COLOR[sev], background: SEV_BG[sev], border: `1px solid ${SEV_BORDER[sev]}` }}>
+                    {summary[sev]} {sev}
+                  </span>
+                )
+              )}
+              {findings.length === 0 && (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full text-emerald-400 bg-emerald-500/10 border border-emerald-500/20">
+                  No vulnerabilities found
+                </span>
+              )}
+            </div>
+          </div>
+          {/* Grade */}
+          <div className="text-center shrink-0">
+            <div
+              className="w-16 h-16 rounded-2xl flex items-center justify-center"
+              style={{ background: `${gradeColor}18`, border: `2px solid ${gradeColor}40` }}
+            >
+              <span className="text-3xl font-black" style={{ color: gradeColor }}>{grade}</span>
+            </div>
+            <p className="text-xs text-white/30 mt-1">{summary.score}/100</p>
+          </div>
+        </div>
+
+        {/* Stats row */}
+        <div className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-white/5">
+          <div className="text-center">
+            <p className="text-lg font-bold text-emerald-400">{passCount}</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">Passed</p>
+          </div>
+          <div className="text-center">
+            <p className="text-lg font-bold text-amber-400">{warnCount}</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">Warnings</p>
+          </div>
+          <div className="text-center">
+            <p className="text-lg font-bold text-red-400">{failCount}</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">Failed</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 p-1 rounded-xl bg-white/3 border border-white/6">
+        <button
+          onClick={() => setTab('findings')}
+          className="flex-1 py-2 rounded-lg text-xs font-semibold transition-all"
+          style={{ background: tab === 'findings' ? 'rgba(239,68,68,0.15)' : 'transparent', color: tab === 'findings' ? '#f87171' : 'rgba(255,255,255,0.4)' }}
+        >
+          {findings.length} Vulnerabilities
+        </button>
+        <button
+          onClick={() => setTab('checked')}
+          className="flex-1 py-2 rounded-lg text-xs font-semibold transition-all"
+          style={{ background: tab === 'checked' ? 'rgba(255,255,255,0.06)' : 'transparent', color: tab === 'checked' ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.4)' }}
+        >
+          {checked?.length ?? 0} Checks Run
+        </button>
+      </div>
+
+      {/* Findings tab */}
+      {tab === 'findings' && (
+        <div className="space-y-2">
+          {sorted.length === 0 ? (
+            <div className="text-center py-10 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
+              <p className="text-2xl mb-2">🛡</p>
+              <p className="text-sm font-semibold text-emerald-300">No vulnerabilities detected</p>
+              <p className="text-xs text-white/35 mt-1">All {checked?.length ?? 0} checks passed clean.</p>
+            </div>
+          ) : (
+            sorted.map(f => <FindingCard key={f.id} f={f} />)
+          )}
+        </div>
+      )}
+
+      {/* All checks tab */}
+      {tab === 'checked' && checked && (
+        <div className="space-y-1.5">
+          {checked.map(item => <CheckRow key={item.id} item={item} />)}
+        </div>
+      )}
+
+      <button onClick={onReset} className="text-xs text-white/25 hover:text-white/55 transition-colors">
         ← Scan another domain
       </button>
     </div>
