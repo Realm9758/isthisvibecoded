@@ -1,4 +1,6 @@
 import { resolveTxt } from 'dns/promises';
+import { cookies } from 'next/headers';
+import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import type { VerificationToken } from '@/types/analysis';
 
@@ -15,8 +17,21 @@ function getDomain(url: string): string {
   return new URL(normalized).hostname;
 }
 
-// POST /api/verify — generate a token for a domain
+async function getAuthUserId(): Promise<string | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(AUTH_COOKIE)?.value;
+  if (!token) return null;
+  const payload = await verifyToken(token);
+  return payload?.userId ?? null;
+}
+
+// POST /api/verify — generate a token for a domain (auth required)
 export async function POST(request: Request) {
+  const userId = await getAuthUserId();
+  if (!userId) {
+    return Response.json({ error: 'You must be logged in to verify a domain' }, { status: 401 });
+  }
+
   let domain: string;
   try {
     const body = await request.json();
@@ -29,11 +44,12 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Domain is required' }, { status: 400 });
   }
 
-  // Always reuse existing token — only generate once per domain
+  // Check if this user already has a token for this domain
   const { data: existing } = await supabase
     .from('verification_tokens')
-    .select('token, created_at')
+    .select('token, created_at, user_id')
     .eq('domain', domain)
+    .eq('user_id', userId)
     .maybeSingle();
 
   let token: string;
@@ -45,6 +61,7 @@ export async function POST(request: Request) {
     await supabase.from('verification_tokens').insert({
       domain,
       token,
+      user_id: userId,
       created_at: Date.now(),
     });
   }
@@ -64,16 +81,33 @@ export async function POST(request: Request) {
   return Response.json(result);
 }
 
-// DELETE /api/verify — reset token for a domain
+// DELETE /api/verify — reset token for a domain (auth required, own tokens only)
 export async function DELETE(request: Request) {
+  const userId = await getAuthUserId();
+  if (!userId) {
+    return Response.json({ error: 'Unauthorised' }, { status: 401 });
+  }
+
   const { domain } = await request.json();
   if (!domain) return Response.json({ error: 'Domain required' }, { status: 400 });
-  await supabase.from('verification_tokens').delete().eq('domain', domain);
+
+  // Only delete the token belonging to this user
+  await supabase
+    .from('verification_tokens')
+    .delete()
+    .eq('domain', domain)
+    .eq('user_id', userId);
+
   return Response.json({ ok: true });
 }
 
-// GET /api/verify?domain=example.com&token=abc&method=dns|meta|file
+// GET /api/verify?domain=example.com&token=abc&method=dns|meta|file (auth required)
 export async function GET(request: Request) {
+  const userId = await getAuthUserId();
+  if (!userId) {
+    return Response.json({ error: 'You must be logged in to verify a domain' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const domain = searchParams.get('domain') ?? '';
   const token = searchParams.get('token') ?? '';
@@ -83,11 +117,12 @@ export async function GET(request: Request) {
     return Response.json({ error: 'domain and token are required' }, { status: 400 });
   }
 
-  // Validate token against DB
+  // Validate token against DB — must belong to this user
   const { data: stored } = await supabase
     .from('verification_tokens')
-    .select('token, created_at')
+    .select('token, created_at, user_id')
     .eq('domain', domain)
+    .eq('user_id', userId)
     .maybeSingle();
 
   if (!stored || stored.token !== token) {
@@ -134,12 +169,13 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Invalid method' }, { status: 400 });
   }
 
-  // Mark domain as verified in DB so deep scan can run
+  // Mark domain as verified in DB — scoped to this user's token
   if (verified) {
     await supabase
       .from('verification_tokens')
       .update({ verified: true })
-      .eq('domain', domain);
+      .eq('domain', domain)
+      .eq('user_id', userId);
   }
 
   return Response.json({ verified, method });
