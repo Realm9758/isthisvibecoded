@@ -8,6 +8,7 @@ export interface AuthUser {
   email: string;
   name: string;
   plan: Plan;
+  avatarColor: string | null;
   scansRemaining: number | null;
 }
 
