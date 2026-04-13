@@ -201,7 +201,13 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
         body: JSON.stringify({ domain }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error ?? 'Failed to generate token');
+      // If domain already verified, skip straight to success state
+      if ((data as { alreadyVerified?: boolean }).alreadyVerified) {
+        setStatus('verified');
+        onVerified?.();
+        return;
+      }
       setToken(data);
       setStatus('idle');
     } catch (e) {

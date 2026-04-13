@@ -21,6 +21,8 @@ export async function GET() {
     name: user.name,
     plan: user.plan,
     avatarColor: user.avatarColor ?? null,
+    notifEmail: user.notifEmail,
+    notifInApp: user.notifInApp,
     scansRemaining: remaining,
   });
 }

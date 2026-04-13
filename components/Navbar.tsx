@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { NotificationBell } from './NotificationBell';
 
 const PLAN_BADGE: Record<string, string> = {
   pro:  'bg-violet-500/15 text-violet-300 border-violet-500/25',
@@ -98,6 +99,8 @@ export function Navbar() {
           {loading ? (
             <div className="w-24 h-7 rounded-lg bg-white/5 animate-pulse" />
           ) : user ? (
+            <>
+            <NotificationBell />
             <div className="relative">
               <button
                 onClick={() => setMenuOpen(v => !v)}
@@ -173,6 +176,7 @@ export function Navbar() {
                 </div>
               )}
             </div>
+            </>
           ) : (
             <>
               <Link href="/login" className="px-3 py-1.5 text-xs text-white/45 hover:text-white/75 transition-colors">

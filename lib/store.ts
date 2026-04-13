@@ -11,6 +11,8 @@ export interface User {
   passwordHash: string;
   plan: Plan;
   avatarColor?: string;
+  notifEmail: boolean;
+  notifInApp: boolean;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   createdAt: number;
@@ -42,6 +44,8 @@ function rowToUser(row: any): User {
     passwordHash: row.password_hash,
     plan: row.plan as Plan,
     avatarColor: row.avatar_color ?? undefined,
+    notifEmail: row.notif_email ?? false,
+    notifInApp: row.notif_inapp ?? true,
     stripeCustomerId: row.stripe_customer_id ?? undefined,
     stripeSubscriptionId: row.stripe_subscription_id ?? undefined,
     createdAt: row.created_at,
@@ -96,6 +100,8 @@ export async function updateUser(id: string, patch: Partial<User>): Promise<User
   const updates: Record<string, unknown> = {};
   if (patch.name !== undefined) updates.name = patch.name;
   if (patch.avatarColor !== undefined) updates.avatar_color = patch.avatarColor;
+  if (patch.notifEmail !== undefined) updates.notif_email = patch.notifEmail;
+  if (patch.notifInApp !== undefined) updates.notif_inapp = patch.notifInApp;
   if (patch.plan !== undefined) updates.plan = patch.plan;
   if (patch.stripeCustomerId !== undefined) updates.stripe_customer_id = patch.stripeCustomerId;
   if ('stripeSubscriptionId' in patch)

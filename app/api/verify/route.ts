@@ -4,8 +4,6 @@ import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import type { VerificationToken } from '@/types/analysis';
 
-const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
 function randomToken(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(18)))
     .map(b => b.toString(16).padStart(2, '0'))
@@ -25,7 +23,7 @@ async function getAuthUserId(): Promise<string | null> {
   return payload?.userId ?? null;
 }
 
-// POST /api/verify — generate a token for a domain (auth required)
+// POST /api/verify — generate/fetch a token for a domain (auth required)
 export async function POST(request: Request) {
   const userId = await getAuthUserId();
   if (!userId) {
@@ -44,32 +42,79 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Domain is required' }, { status: 400 });
   }
 
-  // Check if this user already has a token for this domain
-  const { data: existing } = await supabase
+  // 1. Check if this user already has a token for this domain
+  const { data: ownToken } = await supabase
     .from('verification_tokens')
-    .select('token, created_at, user_id')
+    .select('token, created_at, verified')
     .eq('domain', domain)
     .eq('user_id', userId)
     .maybeSingle();
 
-  let token: string;
+  if (ownToken) {
+    const result: VerificationToken & { alreadyVerified?: boolean } = {
+      token: ownToken.token as string,
+      domain,
+      createdAt: new Date().toISOString(),
+      alreadyVerified: ownToken.verified === true,
+      methods: {
+        dns: `Add TXT record: _vibecoded-verification.${domain} = vibecoded-verification=${ownToken.token}`,
+        metaTag: `<meta name="vibecoded-verification" content="${ownToken.token}" />`,
+        filePath: `https://${domain}/.well-known/vibecoded.txt`,
+        fileContent: ownToken.token as string,
+      },
+    };
+    return Response.json(result);
+  }
 
-  if (existing) {
-    token = existing.token;
+  // 2. Check for an unclaimed legacy token (null user_id) and claim it
+  const { data: legacyToken } = await supabase
+    .from('verification_tokens')
+    .select('token, created_at, verified')
+    .eq('domain', domain)
+    .is('user_id', null)
+    .maybeSingle();
+
+  let token: string;
+  let alreadyVerified = false;
+
+  if (legacyToken) {
+    // Claim the legacy token for this user
+    token = legacyToken.token as string;
+    alreadyVerified = legacyToken.verified === true;
+    await supabase
+      .from('verification_tokens')
+      .update({ user_id: userId })
+      .eq('domain', domain)
+      .is('user_id', null);
   } else {
+    // Create a brand new token
     token = randomToken();
-    await supabase.from('verification_tokens').insert({
+    const { error } = await supabase.from('verification_tokens').insert({
       domain,
       token,
       user_id: userId,
       created_at: Date.now(),
     });
+    if (error) {
+      // Race condition: another insert beat us — fetch theirs
+      const { data: raceToken } = await supabase
+        .from('verification_tokens')
+        .select('token, verified')
+        .eq('domain', domain)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (raceToken) {
+        token = raceToken.token as string;
+        alreadyVerified = raceToken.verified === true;
+      }
+    }
   }
 
-  const result: VerificationToken = {
+  const result: VerificationToken & { alreadyVerified?: boolean } = {
     token,
     domain,
     createdAt: new Date().toISOString(),
+    alreadyVerified,
     methods: {
       dns: `Add TXT record: _vibecoded-verification.${domain} = vibecoded-verification=${token}`,
       metaTag: `<meta name="vibecoded-verification" content="${token}" />`,
@@ -91,7 +136,6 @@ export async function DELETE(request: Request) {
   const { domain } = await request.json();
   if (!domain) return Response.json({ error: 'Domain required' }, { status: 400 });
 
-  // Only delete the token belonging to this user
   await supabase
     .from('verification_tokens')
     .delete()
@@ -101,7 +145,7 @@ export async function DELETE(request: Request) {
   return Response.json({ ok: true });
 }
 
-// GET /api/verify?domain=example.com&token=abc&method=dns|meta|file (auth required)
+// GET /api/verify?domain=...&token=...&method=dns|meta|file (auth required, own token only)
 export async function GET(request: Request) {
   const userId = await getAuthUserId();
   if (!userId) {
@@ -117,7 +161,7 @@ export async function GET(request: Request) {
     return Response.json({ error: 'domain and token are required' }, { status: 400 });
   }
 
-  // Validate token against DB — must belong to this user
+  // Validate token — must belong to this user
   const { data: stored } = await supabase
     .from('verification_tokens')
     .select('token, created_at, user_id')
@@ -169,7 +213,6 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Invalid method' }, { status: 400 });
   }
 
-  // Mark domain as verified in DB — scoped to this user's token
   if (verified) {
     await supabase
       .from('verification_tokens')
