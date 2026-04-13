@@ -42,6 +42,21 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Private/local domains are not allowed' }, { status: 400 });
   }
 
+  // Deep scan limit for free users
+  const { data: userRow } = await supabase.from('users').select('plan').eq('id', payload.userId).maybeSingle();
+  if (!userRow || userRow.plan === 'free') {
+    const { count } = await supabase
+      .from('deep_scans')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', payload.userId);
+    if ((count ?? 0) >= 2) {
+      return Response.json(
+        { error: 'Free plan limit reached. Upgrade to Pro for unlimited deep scans.' },
+        { status: 403 }
+      );
+    }
+  }
+
   // Ownership check
   const { data: verif } = await supabase
     .from('verification_tokens')

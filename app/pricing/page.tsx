@@ -5,9 +5,6 @@ import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { PLANS } from '@/lib/stripe';
 
-const CHECKMARK = '✓';
-const CROSS = '✗';
-
 function PlanCard({
   planId, plan, current, onUpgrade, loading,
 }: {
@@ -30,14 +27,20 @@ function PlanCard({
       <div>
         <p className="text-sm font-semibold text-white/60 mb-1">{plan.name}</p>
         <div className="flex items-end gap-1">
-          <span className="text-4xl font-bold text-white">${plan.price}</span>
-          {plan.price > 0 && <span className="text-white/40 text-sm mb-1.5">/month</span>}
-          {plan.price === 0 && <span className="text-white/40 text-sm mb-1.5">forever</span>}
+          {plan.price === 0 ? (
+            <span className="text-4xl font-bold text-white">Free</span>
+          ) : (
+            <>
+              <span className="text-white/50 text-xl mb-1">£</span>
+              <span className="text-4xl font-bold text-white">{plan.price}</span>
+              <span className="text-white/40 text-sm mb-1.5">/month</span>
+            </>
+          )}
         </div>
         {'scansPerDay' in plan && plan.scansPerDay && (
-          <p className="text-xs text-white/40 mt-1">{plan.scansPerDay} scans / day</p>
+          <p className="text-xs text-white/40 mt-1">{plan.scansPerDay} passive scans / day</p>
         )}
-        {plan.scansPerDay === null && (
+        {'scansPerDay' in plan && plan.scansPerDay === null && (
           <p className="text-xs text-violet-400 mt-1">Unlimited scans</p>
         )}
       </div>
@@ -45,13 +48,13 @@ function PlanCard({
       <ul className="space-y-2.5 flex-1">
         {plan.features.map(f => (
           <li key={f} className="flex items-start gap-2.5 text-sm text-white/70">
-            <span className="text-emerald-400 shrink-0 mt-0.5 text-xs font-bold">{CHECKMARK}</span>
+            <span className="text-emerald-400 shrink-0 mt-0.5 text-xs font-bold">✓</span>
             {f}
           </li>
         ))}
-        {'missing' in plan && plan.missing.map((f: string) => (
+        {'missing' in plan && (plan.missing as readonly string[]).map((f: string) => (
           <li key={f} className="flex items-start gap-2.5 text-sm text-white/25">
-            <span className="shrink-0 mt-0.5 text-xs">{CROSS}</span>
+            <span className="shrink-0 mt-0.5 text-xs">✗</span>
             {f}
           </li>
         ))}
@@ -70,10 +73,7 @@ function PlanCard({
           onClick={() => onUpgrade(planId)}
           disabled={loading}
           className="py-2.5 rounded-xl text-sm font-semibold text-white transition-all disabled:opacity-50"
-          style={isPro
-            ? { background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', boxShadow: '0 0 20px rgba(124,58,237,0.3)' }
-            : { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }
-          }
+          style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', boxShadow: '0 0 20px rgba(124,58,237,0.3)' }}
         >
           {loading ? 'Redirecting…' : `Upgrade to ${plan.name}`}
         </button>
@@ -111,6 +111,7 @@ export default function PricingPage() {
   }
 
   const currentPlan = user?.plan ?? 'free';
+  const planEntries = Object.entries(PLANS).filter(([id]) => id !== 'team') as [string, typeof PLANS[keyof typeof PLANS]][];
 
   return (
     <main className="min-h-screen px-6 py-20" style={{ background: '#0a0a0f' }}>
@@ -118,11 +119,11 @@ export default function PricingPage() {
         className="fixed inset-0 pointer-events-none"
         style={{ background: 'radial-gradient(ellipse 80% 50% at 50% -10%, rgba(139,92,246,0.1) 0%, transparent 70%)' }}
       />
-      <div className="relative max-w-5xl mx-auto">
+      <div className="relative max-w-4xl mx-auto">
 
         {flash === 'success' && (
           <div className="mb-8 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-center">
-            <p className="text-emerald-400 font-semibold">🎉 Upgrade successful! Welcome to Pro.</p>
+            <p className="text-emerald-400 font-semibold">Upgrade successful! Welcome to Pro.</p>
           </div>
         )}
         {flash === 'canceled' && (
@@ -136,8 +137,8 @@ export default function PricingPage() {
           <p className="text-white/40 text-lg">Start free. Upgrade when you need more.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-16">
-          {(Object.entries(PLANS) as [string, typeof PLANS[keyof typeof PLANS]][]).map(([planId, plan]) => (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-w-2xl mx-auto mb-16">
+          {planEntries.map(([planId, plan]) => (
             <PlanCard
               key={planId}
               planId={planId}
@@ -158,32 +159,29 @@ export default function PricingPage() {
             <thead>
               <tr className="border-b border-white/8">
                 <th className="text-left px-6 py-3 text-white/40 font-medium">Feature</th>
-                <th className="text-center px-4 py-3 text-white/40 font-medium">Free</th>
-                <th className="text-center px-4 py-3 text-violet-400 font-semibold">Pro</th>
-                <th className="text-center px-4 py-3 text-white/40 font-medium">Team</th>
+                <th className="text-center px-6 py-3 text-white/40 font-medium">Free</th>
+                <th className="text-center px-6 py-3 text-violet-400 font-semibold">Pro · £4.99/mo</th>
               </tr>
             </thead>
             <tbody>
               {[
-                ['Scans per day', '5', 'Unlimited', 'Unlimited'],
-                ['Vibe-code detection', '✓', '✓', '✓'],
-                ['Security headers audit', '✓', '✓', '✓'],
-                ['Tech stack detection', '✓', '✓', '✓'],
-                ['Shareable scan links', '✓', '✓', '✓'],
-                ['Roast Mode', '✓', '✓', '✓'],
-                ['Public feed', '✓', '✓', '✓'],
-                ['PDF export', '—', '✓', '✓'],
-                ['Verified badge embed', '—', '✓', '✓'],
-                ['Server-side scan history', '—', '✓', '✓'],
-                ['Priority analysis queue', '—', '✓', '✓'],
-                ['Team seats', '—', '—', '5'],
-                ['API access', '—', '—', '✓'],
-              ].map(([feat, free, pro, team]) => (
+                ['Passive scans per day',    '5',          'Unlimited'],
+                ['Deep scans (active OWASP)', '2 lifetime', 'Unlimited'],
+                ['Vibe-code detection',       '✓',          '✓'],
+                ['Security headers audit',    '✓',          '✓'],
+                ['Tech stack detection',      '✓',          '✓'],
+                ['Shareable scan links',      '✓',          '✓'],
+                ['Roast Mode',                '✓',          '✓'],
+                ['Leaderboard & comments',    '✓',          '✓'],
+                ['PDF export',                '—',          '✓'],
+                ['Verified badge embed',      '—',          '✓'],
+                ['Scan history',              '—',          '✓'],
+                ['Priority analysis queue',   '—',          '✓'],
+              ].map(([feat, free, pro]) => (
                 <tr key={feat} className="border-b border-white/4 last:border-0">
                   <td className="px-6 py-3 text-white/60">{feat}</td>
-                  <td className="text-center px-4 py-3 text-white/40">{free}</td>
-                  <td className="text-center px-4 py-3 text-violet-300">{pro}</td>
-                  <td className="text-center px-4 py-3 text-white/40">{team}</td>
+                  <td className="text-center px-6 py-3 text-white/40">{free}</td>
+                  <td className="text-center px-6 py-3 text-violet-300">{pro}</td>
                 </tr>
               ))}
             </tbody>
@@ -191,7 +189,7 @@ export default function PricingPage() {
         </div>
 
         <p className="text-center text-xs text-white/20 mt-8">
-          Prices in USD. Cancel anytime. Stripe powers all payments.
+          Prices in GBP. Cancel anytime. Stripe powers all payments.
         </p>
       </div>
     </main>

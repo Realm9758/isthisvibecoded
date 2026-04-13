@@ -472,18 +472,110 @@ function PassiveFindingRow({ f }: { f: PassiveFinding }) {
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────
-
 interface Props {
   result: AnalysisResult & { scanId?: string; roasts?: string[]; scansRemaining?: number | null };
   onReset: () => void;
   defaultRoastMode?: boolean;
 }
 
+// ── Publish modal ─────────────────────────────────────────────────────────
+
+function PublishModal({ scanId, onClose, onPublished }: { scanId: string; onClose: () => void; onPublished: () => void }) {
+  const [comment, setComment] = useState('');
+  const [publishing, setPublishing] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handlePublish() {
+    setError('');
+    setPublishing(true);
+    try {
+      // Make scan public
+      const res = await fetch(`/api/scans/${scanId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPublic: true }),
+      });
+      if (!res.ok) { setError('Failed to publish'); return; }
+
+      // Post comment if provided
+      if (comment.trim()) {
+        await fetch('/api/comments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scanId, body: comment.trim() }),
+        });
+      }
+
+      onPublished();
+      onClose();
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-white/10 p-6"
+        style={{ background: '#0f0f18' }}
+      >
+        <h2 className="text-base font-bold text-white/85 mb-1">Publish to Leaderboard</h2>
+        <p className="text-xs text-white/40 mb-5">
+          This scan will be visible to everyone on the public leaderboard. Add an optional note before posting.
+        </p>
+
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-white/40 mb-1.5">Caption (optional)</label>
+          <textarea
+            value={comment}
+            onChange={e => setComment(e.target.value)}
+            placeholder="Add context about this site…"
+            rows={3}
+            maxLength={500}
+            className="w-full px-3 py-2.5 rounded-xl text-sm text-white/75 placeholder-white/20 outline-none resize-none transition-all"
+            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}
+            onFocus={e => (e.currentTarget.style.borderColor = 'rgba(139,92,246,0.35)')}
+            onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
+            autoFocus
+          />
+          <p className="text-[10px] text-white/20 mt-1 text-right">{comment.length}/500</p>
+        </div>
+
+        {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
+
+        <div className="flex gap-3">
+          <button
+            onClick={handlePublish}
+            disabled={publishing}
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-50 transition-all"
+            style={{ background: 'rgba(139,92,246,0.85)', border: '1px solid rgba(139,92,246,0.5)' }}
+          >
+            {publishing ? 'Publishing…' : 'Publish'}
+          </button>
+          <button
+            onClick={onClose}
+            className="px-5 py-2.5 rounded-xl text-sm border border-white/10 text-white/40 hover:bg-white/5 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────
+
 export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: Props) {
   const { user } = useAuth();
   const [roastMode, setRoastMode] = useState(defaultRoastMode);
   const [shareOpen, setShareOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [published, setPublished] = useState(false);
   const [vulnOpen, setVulnOpen] = useState(false);
 
   const vibeColor  = getVibeColor(result.vibe.score);
@@ -503,6 +595,13 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
     <div className="w-full max-w-5xl mx-auto">
       {shareOpen && result.scanId && (
         <ShareModal result={result} onClose={() => setShareOpen(false)} />
+      )}
+      {publishOpen && result.scanId && (
+        <PublishModal
+          scanId={result.scanId}
+          onClose={() => setPublishOpen(false)}
+          onPublished={() => setPublished(true)}
+        />
       )}
 
       {/* ── Scan limit warning ── */}
@@ -558,7 +657,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
               <p className="text-sm text-white/40 italic">No vibe-coding signals detected.</p>
             )}
           </div>
-          <div className="flex flex-col gap-2 shrink-0 sm:self-start">
+          <div className="flex flex-col gap-2 shrink-0 sm:self-start" data-print-hide>
             <button
               onClick={() => setRoastMode(r => !r)}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${roastMode ? 'bg-orange-500/15 border-orange-500/30 text-orange-400' : 'border-white/10 text-white/40 hover:bg-white/5'}`}
@@ -571,6 +670,39 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
                 className="px-3 py-1.5 text-xs font-medium rounded-lg border border-violet-500/30 bg-violet-500/10 text-violet-400 hover:bg-violet-500/15 transition-colors"
               >
                 Share
+              </button>
+            )}
+            {result.scanId && user && (
+              <button
+                onClick={() => setPublishOpen(true)}
+                disabled={published}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors disabled:opacity-60"
+                style={published
+                  ? { borderColor: 'rgba(34,197,94,0.3)', background: 'rgba(34,197,94,0.08)', color: '#4ade80' }
+                  : { borderColor: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.45)' }
+                }
+                title={published ? 'Published to Leaderboard' : 'Publish to Leaderboard'}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  {published
+                    ? <path d="M20 6 9 17l-5-5"/>
+                    : <><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></>
+                  }
+                </svg>
+                {published ? 'Published' : 'Publish'}
+              </button>
+            )}
+            {(user?.plan === 'pro' || user?.plan === 'team') && (
+              <button
+                onClick={() => window.print()}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-white/10 text-white/40 hover:bg-white/5 transition-colors"
+                title="Export as PDF"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/>
+                </svg>
+                PDF
               </button>
             )}
             <button
