@@ -6,10 +6,48 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 const PLAN_BADGE: Record<string, string> = {
-  pro: 'bg-violet-500/20 text-violet-300 border-violet-500/30',
-  team: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
-  free: 'bg-white/5 text-white/30 border-white/10',
+  pro:  'bg-violet-500/15 text-violet-300 border-violet-500/25',
+  team: 'bg-sky-500/15 text-sky-300 border-sky-500/25',
+  free: 'bg-white/5 text-white/35 border-white/10',
 };
+
+// Minimal SVG icons — no emoji
+function IconScan() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+    </svg>
+  );
+}
+function IconShield() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    </svg>
+  );
+}
+function IconFeed() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+      <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+    </svg>
+  );
+}
+function IconUser() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+    </svg>
+  );
+}
+function IconChevron() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m6 9 6 6 6-6"/>
+    </svg>
+  );
+}
 
 export function Navbar() {
   const { user, loading, logout } = useAuth();
@@ -22,121 +60,136 @@ export function Navbar() {
   }
 
   return (
-    <nav className="border-b border-white/5 px-6 py-4 sticky top-0 z-40 backdrop-blur-md bg-[#0a0a0f]/80">
-      <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
+    <nav className="border-b border-white/6 px-6 py-0 sticky top-0 z-40 backdrop-blur-xl" style={{ background: 'rgba(8,8,14,0.85)' }}>
+      <div className="max-w-5xl mx-auto flex items-center justify-between h-14 gap-6">
+
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2.5 group">
-          <div className="w-7 h-7 rounded-lg bg-violet-600 flex items-center justify-center text-sm font-bold select-none group-hover:bg-violet-500 transition-colors">
-            V
+        <Link href="/" className="flex items-center gap-2.5 group shrink-0">
+          <div
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold select-none transition-opacity group-hover:opacity-80"
+            style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.3)', color: '#a78bfa' }}
+          >
+            VS
           </div>
-          <span className="font-semibold text-white/90 text-sm hidden sm:block">Is This Vibe-Coded?</span>
+          <span className="font-semibold text-white/75 text-sm hidden sm:block tracking-tight">VibeScan</span>
         </Link>
 
         {/* Nav links */}
-        <div className="flex items-center gap-1">
-          <Link href="/feed" className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5">
-            Feed
+        <div className="flex items-center gap-0.5 flex-1">
+          <Link href="/" className="flex items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4">
+            <IconScan />
+            <span>Scanner</span>
           </Link>
-          <Link href="/vulnerability" className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5 hidden sm:flex items-center gap-1">
-            <span className="text-red-400/70">⚡</span>
-            Deep Scan
+          <Link href="/security" className="flex items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden sm:flex">
+            <IconShield />
+            <span>Deep Scan</span>
           </Link>
-          <Link href="/pricing" className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors rounded-lg hover:bg-white/5">
+          <Link href="/feed" className="flex items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden md:flex">
+            <IconFeed />
+            <span>Recent Scans</span>
+          </Link>
+          <Link href="/pricing" className="px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4">
             Pricing
-          </Link>
-          <Link href="/privacy" className="px-3 py-1.5 text-xs text-white/30 hover:text-white/60 transition-colors rounded-lg hover:bg-white/5 hidden lg:block">
-            Privacy
           </Link>
         </div>
 
         {/* Auth */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {loading ? (
-            <div className="w-20 h-7 rounded-lg bg-white/5 animate-pulse" />
+            <div className="w-24 h-7 rounded-lg bg-white/5 animate-pulse" />
           ) : user ? (
             <div className="relative">
               <button
                 onClick={() => setMenuOpen(v => !v)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/10 bg-white/3 hover:bg-white/5 transition-colors text-sm"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/8 hover:bg-white/4 transition-colors text-sm"
+                style={{ background: 'rgba(255,255,255,0.03)' }}
               >
-                <div className="w-6 h-6 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold">
+                <div
+                  className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+                  style={{ background: 'rgba(139,92,246,0.2)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.25)' }}
+                >
                   {user.name[0]?.toUpperCase()}
                 </div>
-                <span className="text-white/80 text-xs max-w-20 truncate hidden sm:block">{user.name}</span>
-                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${PLAN_BADGE[user.plan]} hidden sm:block`}>
+                <span className="text-white/65 text-xs max-w-[80px] truncate hidden sm:block">{user.name}</span>
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border hidden sm:block ${PLAN_BADGE[user.plan]}`}>
                   {user.plan.toUpperCase()}
                 </span>
+                <span className="text-white/25"><IconChevron /></span>
               </button>
 
               {menuOpen && (
-                <div className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-white/10 bg-[#111118] shadow-xl py-1 z-50">
-                  <div className="px-3 py-2 border-b border-white/5">
-                    <p className="text-xs font-medium text-white/80 truncate">{user.email}</p>
+                <div
+                  className="absolute right-0 top-full mt-1.5 w-52 rounded-xl border border-white/8 py-1 z-50 shadow-2xl"
+                  style={{ background: '#0f0f18' }}
+                >
+                  <div className="px-3 py-2.5 border-b border-white/6">
+                    <p className="text-xs font-medium text-white/70 truncate">{user.email}</p>
                     {user.plan === 'free' && (
                       <p className="text-xs text-white/30 mt-0.5">
-                        {user.scansRemaining ?? 0} scan{user.scansRemaining !== 1 ? 's' : ''} left today
+                        {user.scansRemaining ?? 0} scan{user.scansRemaining !== 1 ? 's' : ''} remaining today
                       </p>
                     )}
                   </div>
-                  <Link
-                    href="/dashboard"
-                    onClick={() => setMenuOpen(false)}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs text-white/60 hover:bg-white/5 transition-colors"
-                  >
-                    <span className="text-red-400/70">⚡</span>
-                    My Scans &amp; Deep Scan
-                  </Link>
-                  {user.plan === 'free' && (
-                    <Link
-                      href="/pricing"
-                      onClick={() => setMenuOpen(false)}
-                      className="block px-3 py-2 text-xs text-violet-400 hover:bg-violet-500/10 transition-colors"
-                    >
-                      Upgrade to Pro →
+
+                  <div className="py-1">
+                    <Link href="/dashboard" onClick={() => setMenuOpen(false)}
+                      className="flex items-center gap-2.5 px-3 py-2 text-xs text-white/55 hover:bg-white/4 hover:text-white/80 transition-colors">
+                      <IconShield />
+                      Security Dashboard
                     </Link>
-                  )}
-                  {user.plan !== 'free' && (
-                    <button
-                      onClick={async () => {
-                        setMenuOpen(false);
-                        const res = await fetch('/api/stripe/portal', { method: 'POST' });
-                        const data = await res.json();
-                        if (data.url) window.location.href = data.url;
-                      }}
-                      className="block w-full text-left px-3 py-2 text-xs text-white/50 hover:bg-white/5 transition-colors"
-                    >
-                      Manage Billing
+                    <Link href="/profile" onClick={() => setMenuOpen(false)}
+                      className="flex items-center gap-2.5 px-3 py-2 text-xs text-white/55 hover:bg-white/4 hover:text-white/80 transition-colors">
+                      <IconUser />
+                      Profile &amp; Settings
+                    </Link>
+                    {user.plan === 'free' && (
+                      <Link href="/pricing" onClick={() => setMenuOpen(false)}
+                        className="flex items-center gap-2 px-3 py-2 text-xs text-violet-400 hover:bg-violet-500/8 transition-colors">
+                        <span className="text-[10px]">↑</span>
+                        Upgrade plan
+                      </Link>
+                    )}
+                    {user.plan !== 'free' && (
+                      <button
+                        onClick={async () => {
+                          setMenuOpen(false);
+                          const res = await fetch('/api/stripe/portal', { method: 'POST' });
+                          const data = await res.json();
+                          if (data.url) window.location.href = data.url;
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-white/45 hover:bg-white/4 transition-colors text-left"
+                      >
+                        Billing &amp; Subscription
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="border-t border-white/6 py-1">
+                    <button onClick={handleLogout}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-xs text-white/40 hover:bg-white/4 hover:text-white/70 transition-colors text-left">
+                      Sign out
                     </button>
-                  )}
-                  <button
-                    onClick={handleLogout}
-                    className="block w-full text-left px-3 py-2 text-xs text-white/50 hover:bg-white/5 transition-colors"
-                  >
-                    Sign out
-                  </button>
+                  </div>
                 </div>
               )}
             </div>
           ) : (
             <>
-              <Link
-                href="/login"
-                className="px-3 py-1.5 text-xs text-white/50 hover:text-white/80 transition-colors"
-              >
-                Log in
+              <Link href="/login" className="px-3 py-1.5 text-xs text-white/45 hover:text-white/75 transition-colors">
+                Sign in
               </Link>
               <Link
                 href="/signup"
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors"
+                className="px-4 py-1.5 text-xs font-semibold rounded-lg text-white transition-colors"
+                style={{ background: 'rgba(139,92,246,0.85)', border: '1px solid rgba(139,92,246,0.5)' }}
               >
-                Sign up free
+                Get started
               </Link>
             </>
           )}
         </div>
       </div>
 
-      {/* Click outside to close menu */}
       {menuOpen && <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />}
     </nav>
   );

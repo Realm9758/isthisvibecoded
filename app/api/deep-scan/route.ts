@@ -71,7 +71,17 @@ export async function POST(request: Request) {
           emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings });
         });
 
-        emit('result', result);
+        // Persist to DB
+        const scanId = crypto.randomUUID();
+        await supabase.from('deep_scans').insert({
+          id: scanId,
+          domain,
+          user_id: payload.userId,
+          result,
+          created_at: Date.now(),
+        });
+
+        emit('result', { ...result, scanId });
       } catch (err) {
         emit('error', { error: err instanceof Error ? err.message : 'Scan failed' });
       } finally {
