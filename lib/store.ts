@@ -159,14 +159,29 @@ export async function updateScan(id: string, patch: Partial<Pick<StoredScan, 'is
   await supabase.from('scans').update(updates).eq('id', id);
 }
 
+function dedupeByDomain(scans: StoredScan[]): StoredScan[] {
+  const seen = new Map<string, StoredScan>();
+  for (const scan of scans) {
+    try {
+      const domain = new URL(scan.result.url).hostname;
+      if (!seen.has(domain)) seen.set(domain, scan);
+    } catch {
+      // keep scans with unparseable URLs as-is using id as key
+      if (!seen.has(scan.id)) seen.set(scan.id, scan);
+    }
+  }
+  return [...seen.values()];
+}
+
 export async function getPublicScans(limit = 30): Promise<StoredScan[]> {
   const { data } = await supabase
     .from('scans')
     .select('*')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
-    .limit(limit);
-  return (data ?? []).map(rowToScan);
+    .limit(limit * 5); // fetch extra so dedup still returns enough
+  const deduped = dedupeByDomain((data ?? []).map(rowToScan));
+  return deduped.slice(0, limit);
 }
 
 export async function getTopVibeScans(limit = 10): Promise<StoredScan[]> {
@@ -175,9 +190,19 @@ export async function getTopVibeScans(limit = 10): Promise<StoredScan[]> {
     .select('*')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
-    .limit(200);
-  return (data ?? [])
-    .map(rowToScan)
+    .limit(500);
+  // Per domain: keep the scan with the highest vibe score
+  const best = new Map<string, StoredScan>();
+  for (const scan of (data ?? []).map(rowToScan)) {
+    try {
+      const domain = new URL(scan.result.url).hostname;
+      const existing = best.get(domain);
+      if (!existing || scan.result.vibe.score > existing.result.vibe.score) {
+        best.set(domain, scan);
+      }
+    } catch { /* skip */ }
+  }
+  return [...best.values()]
     .sort((a, b) => b.result.vibe.score - a.result.vibe.score)
     .slice(0, limit);
 }
