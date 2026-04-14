@@ -6,7 +6,8 @@ import type { Plan } from './store';
 const scryptAsync = promisify(scrypt);
 
 function getSecret() {
-  const raw = process.env.JWT_SECRET ?? 'vibe-coded-dev-secret-change-in-production-32ch';
+  const raw = process.env.JWT_SECRET;
+  if (!raw) throw new Error('JWT_SECRET environment variable is not set');
   return new TextEncoder().encode(raw);
 }
 

@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
   }
   if (await getUserByEmail(email)) {
-    return Response.json({ error: 'An account with this email already exists' }, { status: 409 });
+    return Response.json({ error: 'Invalid email or password' }, { status: 409 });
   }
 
   const passwordHash = await hashPassword(password);

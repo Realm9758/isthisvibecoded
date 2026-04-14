@@ -57,11 +57,12 @@ export async function POST(request: Request) {
     }
   }
 
-  // Ownership check
+  // Ownership check — must be verified by THIS user
   const { data: verif } = await supabase
     .from('verification_tokens')
     .select('token, verified')
     .eq('domain', domain)
+    .eq('user_id', payload.userId)
     .maybeSingle();
 
   if (!verif || !verif.verified) {

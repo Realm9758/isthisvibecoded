@@ -78,9 +78,14 @@ export async function POST(request: Request) {
   let alreadyVerified = false;
 
   if (legacyToken) {
-    // Claim the legacy token for this user
+    // Only claim unverified legacy tokens — a verified one means someone already owns this domain
+    if (legacyToken.verified === true) {
+      return Response.json(
+        { error: 'This domain is already verified by another account.' },
+        { status: 409 }
+      );
+    }
     token = legacyToken.token as string;
-    alreadyVerified = legacyToken.verified === true;
     await supabase
       .from('verification_tokens')
       .update({ user_id: userId })
