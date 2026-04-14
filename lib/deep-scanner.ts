@@ -136,6 +136,48 @@ const SENSITIVE_FILES: {
     description: 'A crossdomain.xml policy file is present. Overly permissive policies enable unauthorized cross-domain access.',
     remediation: 'Review and tighten the crossdomain.xml policy. Restrict to specific trusted domains.',
   },
+  {
+    path: '/.npmrc',
+    title: 'npm Config File Exposed',
+    severity: 'critical',
+    description: '.npmrc is accessible and may contain npm authentication tokens used to publish packages or access private registries.',
+    remediation: 'Block access to .npmrc in your server config. Rotate any exposed npm tokens immediately.',
+  },
+  {
+    path: '/docker-compose.yml',
+    title: 'Docker Compose File Exposed',
+    severity: 'high',
+    description: 'docker-compose.yml is publicly accessible and may reveal internal service names, ports, credentials, and infrastructure layout.',
+    remediation: 'Block access to docker-compose.yml and all infrastructure config files.',
+  },
+  {
+    path: '/Dockerfile',
+    title: 'Dockerfile Exposed',
+    severity: 'medium',
+    description: 'The Dockerfile is publicly accessible. This reveals base image, build steps, installed packages, and potentially hardcoded values.',
+    remediation: 'Block access to Dockerfile and infrastructure files. Never bake secrets into image layers.',
+  },
+  {
+    path: '/.travis.yml',
+    title: 'CI Config Exposed',
+    severity: 'medium',
+    description: '.travis.yml is accessible and may expose deployment scripts, environment variable names, or CI/CD pipeline structure.',
+    remediation: 'Block access to CI configuration files. Store secrets in encrypted environment variables, not in config files.',
+  },
+  {
+    path: '/config/database.yml',
+    title: 'Rails Database Config Exposed',
+    severity: 'critical',
+    description: 'Rails database.yml is publicly accessible and may contain database connection strings, credentials, and hostnames.',
+    remediation: 'Block access to the config directory. Use environment variables for credentials rather than hardcoding in database.yml.',
+  },
+  {
+    path: '/storage.json',
+    title: 'Storage Config Exposed',
+    severity: 'high',
+    description: 'A storage configuration file is accessible and may contain project credentials or service account keys.',
+    remediation: 'Block access to all JSON config files not intended for public consumption.',
+  },
 ];
 
 async function checkSensitiveFiles(baseUrl: string): Promise<DeepFinding[]> {
@@ -947,6 +989,516 @@ async function checkSRI(baseUrl: string, mainRes: Response | null): Promise<Deep
   }];
 }
 
+// ── Forced browsing / unauthenticated API access (A01) ───────────────────
+
+async function checkForcedBrowsing(baseUrl: string): Promise<DeepFinding[]> {
+  const PROTECTED_PATHS = [
+    '/api/admin', '/api/users', '/api/user/list', '/api/orders',
+    '/api/config', '/api/settings', '/api/keys', '/api/secrets',
+    '/api/dashboard', '/api/internal', '/api/billing', '/api/payments',
+    '/admin/api', '/api/v1/users', '/api/v2/users',
+  ];
+
+  const results = await Promise.allSettled(
+    PROTECTED_PATHS.map(async (path) => {
+      const res = await safeFetch(`${baseUrl}${path}`, { headers: { Accept: 'application/json' } });
+      return { path, res };
+    })
+  );
+
+  const exposed: string[] = [];
+  for (const r of results) {
+    if (r.status !== 'fulfilled') continue;
+    const { path, res } = r.value;
+    if (!res || res.status !== 200) continue;
+    const text = await res.text().catch(() => '');
+    const looksLikeData =
+      (text.trimStart().startsWith('{') || text.trimStart().startsWith('[')) &&
+      (text.includes('"email"') || text.includes('"userId"') || text.includes('"role"') || text.includes('"users"') || text.includes('"data"'));
+    if (looksLikeData) exposed.push(path);
+  }
+
+  if (!exposed.length) return [];
+
+  return [{
+    id: 'auth-unprotected-api',
+    category: 'authentication',
+    severity: 'high',
+    title: `Unauthenticated API Endpoint${exposed.length > 1 ? 's' : ''}: ${exposed.slice(0, 3).join(', ')}${exposed.length > 3 ? '…' : ''}`,
+    description: `${exposed.length} API endpoint${exposed.length > 1 ? 's' : ''} returned JSON data without requiring authentication. This may expose user data, admin functions, or internal configuration to any unauthenticated caller.`,
+    evidence: exposed.map(p => `GET ${baseUrl}${p} → 200 JSON`).join('\n'),
+    remediation: 'Add authentication middleware to all API routes. Return 401 for unauthenticated requests. Never rely on obscurity — assume all endpoint paths are known to attackers.',
+  }];
+}
+
+// ── IDOR — insecure direct object reference (A01) ─────────────────────────
+
+async function checkIDOR(baseUrl: string): Promise<DeepFinding[]> {
+  const ID_PATHS = [
+    '/api/users/', '/api/user/', '/api/orders/', '/api/order/',
+    '/api/posts/', '/api/items/', '/api/records/',
+  ];
+
+  for (const path of ID_PATHS) {
+    const [res1, res2] = await Promise.all([
+      safeFetch(`${baseUrl}${path}1`, { headers: { Accept: 'application/json' } }),
+      safeFetch(`${baseUrl}${path}2`, { headers: { Accept: 'application/json' } }),
+    ]);
+    if (!res1 || !res2 || res1.status !== 200 || res2.status !== 200) continue;
+    const [t1, t2] = await Promise.all([res1.text().catch(() => ''), res2.text().catch(() => '')]);
+    const hasData = (t: string) =>
+      (t.includes('"id"') || t.includes('"email"') || t.includes('"name"')) &&
+      (t.trimStart().startsWith('{') || t.trimStart().startsWith('['));
+    if (!hasData(t1) || !hasData(t2)) continue;
+
+    return [{
+      id: 'idor-sequential-ids',
+      category: 'authentication',
+      severity: 'high',
+      title: `Possible IDOR: ${path}{id} Returns Records Without Auth`,
+      description: `${path}1 and ${path}2 both return what appears to be object data without authentication. If records belong to specific users, any caller can enumerate all of them by incrementing the ID.`,
+      evidence: `GET ${baseUrl}${path}1 → 200 JSON\nGET ${baseUrl}${path}2 → 200 JSON\nBoth return objects with id/email/name fields`,
+      remediation: 'Check ownership on every resource request — verify the authenticated user owns the record before returning it. Return 403 for resources belonging to other users. Use non-sequential UUIDs as identifiers.',
+      url: `${baseUrl}${path}1`,
+    }];
+  }
+
+  return [];
+}
+
+// ── SSRF — server-side request forgery (A10) ──────────────────────────────
+
+async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
+  const SSRF_PARAMS = ['?url=', '?webhook=', '?callback=', '?proxy=', '?fetch=', '?link=', '?image=', '?src='];
+  const METADATA_TARGET = 'http://169.254.169.254/latest/meta-data/';
+  const LOCALHOST_TARGET = 'http://127.0.0.1/';
+
+  for (const param of SSRF_PARAMS) {
+    // Cloud metadata probe
+    const metaUrl = `${baseUrl}${param}${encodeURIComponent(METADATA_TARGET)}`;
+    const metaRes = await safeFetch(metaUrl);
+    if (metaRes?.status === 200) {
+      const text = await metaRes.text().catch(() => '');
+      if (/ami-id|instance-id|security-credentials|iam\//.test(text)) {
+        return [{
+          id: 'ssrf-metadata',
+          category: 'authentication',
+          severity: 'critical',
+          title: 'SSRF — Cloud Metadata Endpoint Accessible',
+          description: `The ${param.replace('?', '').replace('=', '')} parameter fetched the AWS instance metadata endpoint and returned cloud data. Attackers can steal IAM credentials to gain full cloud account access.`,
+          evidence: `GET ${metaUrl}\n→ Response contains cloud metadata (ami-id / iam credentials)`,
+          remediation: 'Validate and allowlist URLs before fetching. Block requests to 169.254.169.254 and private IP ranges. Use IMDSv2 which requires PUT to acquire tokens.',
+          url: metaUrl,
+        }];
+      }
+    }
+
+    // Localhost probe
+    const localUrl = `${baseUrl}${param}${encodeURIComponent(LOCALHOST_TARGET)}`;
+    const localRes = await safeFetch(localUrl);
+    if (localRes?.status === 200) {
+      const text = await localRes.text().catch(() => '');
+      if (text.length > 50 && (text.includes('<html') || text.trimStart().startsWith('{'))) {
+        return [{
+          id: 'ssrf-localhost',
+          category: 'authentication',
+          severity: 'high',
+          title: 'Possible SSRF — Localhost Request Returned Content',
+          description: `The ${param.replace('?', '').replace('=', '')} parameter fetched 127.0.0.1 and received a non-empty response. This indicates the server makes outbound requests to user-supplied URLs, potentially exposing internal services.`,
+          evidence: `GET ${localUrl}\n→ HTTP 200 with ${text.length} bytes`,
+          remediation: 'Validate target URLs against an allowlist. Block private IP ranges (127.x, 10.x, 172.16–31.x, 192.168.x) before making any outbound fetch.',
+          url: localUrl,
+        }];
+      }
+    }
+  }
+
+  return [];
+}
+
+// ── Path traversal (A01 / A05) ────────────────────────────────────────────
+
+async function checkPathTraversal(baseUrl: string): Promise<DeepFinding[]> {
+  const FILE_PARAMS = ['?file=', '?path=', '?page=', '?template=', '?include=', '?doc=', '?read=', '?view='];
+  const PAYLOADS = ['../../../etc/passwd', '..%2F..%2F..%2Fetc%2Fpasswd', '....//....//....//etc/passwd'];
+  const UNIX_PASSWD = /root:[x*]:0:0/;
+
+  for (const param of FILE_PARAMS) {
+    for (const payload of PAYLOADS) {
+      const url = `${baseUrl}${param}${encodeURIComponent(payload)}`;
+      const res = await safeFetch(url);
+      if (!res || res.status !== 200) continue;
+      const text = await res.text().catch(() => '');
+      if (UNIX_PASSWD.test(text)) {
+        return [{
+          id: 'path-traversal',
+          category: 'exposed-files',
+          severity: 'critical',
+          title: 'Path Traversal — /etc/passwd Read Successfully',
+          description: `The ${param.replace('?', '').replace('=', '')} parameter is vulnerable to directory traversal. The payload "../../../etc/passwd" returned the Unix password file, confirming full filesystem read access.`,
+          evidence: `GET ${url}\n→ Response contains /etc/passwd (root:x:0:0 matched)`,
+          remediation: 'Never construct file paths from user input. Validate against an allowlist of permitted files. Use realpath() and confirm the result is within the expected directory.',
+          url,
+        }];
+      }
+    }
+  }
+
+  return [];
+}
+
+// ── Outdated / vulnerable libraries (A06) ────────────────────────────────
+
+async function checkOutdatedLibraries(mainRes: Response | null): Promise<DeepFinding[]> {
+  if (!mainRes) return [];
+  const html = await mainRes.clone().text().catch(() => '');
+  const findings: DeepFinding[] = [];
+
+  const CHECKS: Array<{
+    re: RegExp;
+    name: string;
+    versionLabel: string;
+    severity: DeepFinding['severity'];
+    cve?: string;
+    remediation: string;
+  }> = [
+    {
+      re: /jquery[/\-v]([12]\.\d+\.\d+)/i,
+      name: 'jQuery',
+      versionLabel: '< 3.0 (EOL)',
+      severity: 'medium',
+      cve: 'CVE-2019-11358, CVE-2020-11022',
+      remediation: 'Upgrade to jQuery 3.7+. Versions 1.x and 2.x have prototype pollution and XSS vulnerabilities.',
+    },
+    {
+      re: /jquery[/\-v](3\.[0-4]\.\d+)/i,
+      name: 'jQuery',
+      versionLabel: '3.x < 3.5',
+      severity: 'low',
+      cve: 'CVE-2020-11022',
+      remediation: 'Upgrade to jQuery 3.7+. Versions before 3.5 are vulnerable to XSS via HTML parsing.',
+    },
+    {
+      re: /bootstrap[/\-v]([23]\.\d+\.\d+)/i,
+      name: 'Bootstrap',
+      versionLabel: '< 4.0',
+      severity: 'low',
+      remediation: 'Upgrade to Bootstrap 5+. Older versions have known XSS vulnerabilities in data attributes.',
+    },
+    {
+      re: /angular(?:js)?[/\-v](1\.[0-6]\.\d+)/i,
+      name: 'AngularJS',
+      versionLabel: '1.x (EOL Dec 2021)',
+      severity: 'high',
+      remediation: 'AngularJS reached end-of-life in December 2021 and no longer receives security patches. Migrate to Angular 17+ or another supported framework.',
+    },
+    {
+      re: /lodash[/\-v]((?:[0-3]\.\d+\.\d+|4\.[0-9]\.\d+|4\.1[0-6]\.\d+))/i,
+      name: 'Lodash',
+      versionLabel: '< 4.17.21',
+      severity: 'medium',
+      cve: 'CVE-2021-23337, CVE-2020-8203',
+      remediation: 'Upgrade to Lodash 4.17.21+. Earlier versions are vulnerable to prototype pollution and command injection.',
+    },
+    {
+      re: /moment[/\-v](2\.[0-9]\.\d+|2\.1\d\.\d+|2\.2[0-8]\.\d+)/i,
+      name: 'Moment.js',
+      versionLabel: '< 2.29.4',
+      severity: 'low',
+      cve: 'CVE-2022-24785',
+      remediation: 'Update to Moment.js 2.29.4+ or migrate to date-fns/dayjs which are smaller and actively maintained.',
+    },
+  ];
+
+  for (const lib of CHECKS) {
+    const match = html.match(lib.re);
+    if (!match) continue;
+    findings.push({
+      id: `outdated-${lib.name.toLowerCase().replace(/\W/g, '')}`,
+      category: 'headers',
+      severity: lib.severity,
+      title: `Outdated Library: ${lib.name} ${match[1]} (${lib.versionLabel})`,
+      description: `${lib.name} version ${match[1]} was detected in the page source.${lib.cve ? ` Known CVEs: ${lib.cve}.` : ''} Outdated client-side libraries are a common and easily exploitable attack vector.`,
+      evidence: `Detected "${match[0]}" in page HTML`,
+      remediation: lib.remediation,
+    });
+  }
+
+  return findings;
+}
+
+// ── Source map exposure ────────────────────────────────────────────────────
+
+async function checkSourceMaps(baseUrl: string, mainRes: Response | null): Promise<DeepFinding[]> {
+  if (!mainRes) return [];
+  const html = await mainRes.clone().text().catch(() => '');
+
+  const scriptMatches = [...html.matchAll(/<script[^>]+src=["']([^"']+\.js)["'][^>]*>/gi)];
+  const scriptUrls = scriptMatches
+    .map(m => {
+      const src = m[1];
+      if (src.startsWith('http')) return src;
+      if (src.startsWith('/')) return `${baseUrl}${src}`;
+      return null;
+    })
+    .filter(Boolean)
+    .slice(0, 8) as string[];
+
+  if (!scriptUrls.length) return [];
+
+  const results = await Promise.allSettled(
+    scriptUrls.map(async (url) => {
+      const mapUrl = `${url}.map`;
+      const res = await safeFetch(mapUrl);
+      return { url: mapUrl, exposed: res?.status === 200 };
+    })
+  );
+
+  const exposed = results
+    .filter(r => r.status === 'fulfilled' && r.value.exposed)
+    .map(r => (r as PromiseFulfilledResult<{ url: string; exposed: boolean }>).value.url);
+
+  if (!exposed.length) return [];
+
+  return [{
+    id: 'source-maps-exposed',
+    category: 'info-disclosure',
+    severity: 'medium',
+    title: `Source Maps Publicly Accessible (${exposed.length} file${exposed.length > 1 ? 's' : ''})`,
+    description: 'JavaScript source map files (.js.map) are publicly accessible. These contain your original, unminified source code — including comments, variable names, internal logic, and sometimes hardcoded values — making reverse engineering trivial.',
+    evidence: exposed.slice(0, 3).map(u => `GET ${u} → 200`).join('\n'),
+    remediation: 'Disable source map generation for production builds. In Next.js: set productionBrowserSourceMaps: false in next.config.js (this is the default). In Webpack: set devtool: false for production.',
+  }];
+}
+
+// ── GraphQL introspection ─────────────────────────────────────────────────
+
+async function checkGraphQL(baseUrl: string): Promise<DeepFinding[]> {
+  const endpoints = ['/graphql', '/api/graphql', '/gql', '/query'];
+
+  for (const path of endpoints) {
+    const res = await safeFetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: '{__schema{queryType{name}}}' }),
+    });
+    if (!res || res.status !== 200) continue;
+    const text = await res.text().catch(() => '');
+    if (text.includes('__schema') || text.includes('queryType')) {
+      return [{
+        id: 'graphql-introspection',
+        category: 'info-disclosure',
+        severity: 'medium',
+        title: 'GraphQL Introspection Enabled in Production',
+        description: `GraphQL introspection is enabled at ${path}. This lets anyone enumerate your entire API schema — all types, queries, mutations, fields, and arguments — giving attackers a complete map of your backend.`,
+        evidence: `POST ${baseUrl}${path} with {__schema query}\n→ Introspection data returned`,
+        remediation: 'Disable introspection in production. In Apollo Server: introspection: false. In graphql-yoga: disable introspection via plugins. Keep it enabled only in development environments.',
+        url: `${baseUrl}${path}`,
+      }];
+    }
+  }
+  return [];
+}
+
+// ── Exposed API documentation ─────────────────────────────────────────────
+
+const API_DOC_PATHS = [
+  { path: '/swagger', title: 'Swagger UI' },
+  { path: '/swagger-ui', title: 'Swagger UI' },
+  { path: '/swagger.json', title: 'OpenAPI JSON' },
+  { path: '/swagger.yaml', title: 'OpenAPI YAML' },
+  { path: '/openapi.json', title: 'OpenAPI JSON' },
+  { path: '/openapi.yaml', title: 'OpenAPI YAML' },
+  { path: '/api-docs', title: 'API Docs' },
+  { path: '/api/docs', title: 'API Docs' },
+  { path: '/redoc', title: 'ReDoc UI' },
+  { path: '/docs', title: 'Docs' },
+];
+
+async function checkAPIDocumentation(baseUrl: string): Promise<DeepFinding[]> {
+  const results = await Promise.allSettled(
+    API_DOC_PATHS.map(async ({ path, title }) => {
+      const res = await safeFetch(`${baseUrl}${path}`, { redirect: 'follow' });
+      return { path, title, status: res?.status ?? 0 };
+    })
+  );
+
+  const exposed = results
+    .filter(r => r.status === 'fulfilled' && r.value.status === 200)
+    .map(r => (r as PromiseFulfilledResult<{ path: string; title: string; status: number }>).value);
+
+  if (!exposed.length) return [];
+
+  return [{
+    id: 'api-docs-exposed',
+    category: 'info-disclosure',
+    severity: 'medium',
+    title: `API Documentation Publicly Accessible: ${exposed[0].title}`,
+    description: `API documentation (${exposed.map(e => e.path).join(', ')}) is publicly accessible. This gives attackers a complete map of your endpoints, request formats, authentication requirements, and data models.`,
+    evidence: exposed.map(e => `GET ${baseUrl}${e.path} → 200`).join('\n'),
+    remediation: 'Restrict API documentation to authenticated users or internal network. Consider password-protecting the docs endpoint or serving it only on staging.',
+    url: `${baseUrl}${exposed[0].path}`,
+  }];
+}
+
+// ── Rate limiting detection ───────────────────────────────────────────────
+
+async function checkRateLimiting(baseUrl: string): Promise<DeepFinding[]> {
+  const loginPaths = ['/api/auth', '/api/login', '/login', '/api/signin', '/auth/login'];
+
+  for (const path of loginPaths) {
+    const requests = Array.from({ length: 6 }, () =>
+      safeFetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'ratelimit-probe@vibescan.io', password: 'wrongpassword123' }),
+      })
+    );
+
+    const responses = await Promise.allSettled(requests);
+    const statuses = responses
+      .filter(r => r.status === 'fulfilled' && r.value !== null)
+      .map(r => (r as PromiseFulfilledResult<Response>).value.status);
+
+    if (!statuses.length) continue;
+
+    // Only flag if the endpoint responded meaningfully (not 404/405)
+    const hasValidEndpoint = statuses.some(s => s === 200 || s === 401 || s === 403 || s === 422 || s === 400);
+    if (!hasValidEndpoint) continue;
+
+    const hasRateLimit = statuses.some(s => s === 429);
+    if (!hasRateLimit) {
+      return [{
+        id: 'rate-limit-missing',
+        category: 'authentication',
+        severity: 'medium',
+        title: 'No Rate Limiting on Authentication Endpoint',
+        description: `${path} accepted 6 rapid login attempts without returning HTTP 429 Too Many Requests. Without rate limiting, attackers can brute-force passwords, enumerate valid accounts, or run credential stuffing attacks at scale.`,
+        evidence: `POST ${baseUrl}${path} × 6 rapid requests\n→ Statuses: ${statuses.join(', ')} — no 429 Too Many Requests`,
+        remediation: 'Implement rate limiting on all authentication endpoints. Limit to 5-10 attempts per IP per minute with exponential backoff. Consider account lockout and CAPTCHA after repeated failures.',
+        url: `${baseUrl}${path}`,
+      }];
+    }
+    break;
+  }
+
+  return [];
+}
+
+// ── NoSQL injection ───────────────────────────────────────────────────────
+
+const NOSQL_PAYLOADS = ['[$gt]=', '[$ne]=invalid', '[$regex]=.*'];
+
+const NOSQL_ERROR_PATTERNS = [
+  /MongoError/i,
+  /mongodb/i,
+  /CastError/i,
+  /BSON/i,
+  /mongoose/i,
+  /\$gt.*is not/i,
+];
+
+async function checkNoSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
+  const testPaths = ['/api/user', '/api/login', '/api/data', '/api/search', '/api/users'];
+
+  for (const path of testPaths) {
+    for (const payload of NOSQL_PAYLOADS) {
+      const url = `${baseUrl}${path}?id${payload}`;
+      const res = await safeFetch(url);
+      if (!res) continue;
+      const text = await res.text().catch(() => '');
+      const match = NOSQL_ERROR_PATTERNS.find(re => re.test(text));
+      if (match) {
+        return [{
+          id: 'nosql-injection',
+          category: 'injection',
+          severity: 'critical',
+          title: 'NoSQL Injection — MongoDB Error Detected',
+          description: 'A MongoDB operator injection payload triggered a database error in the response. Attackers can use this to bypass authentication, enumerate records, or extract data without credentials.',
+          evidence: `GET ${url}\n→ MongoDB/Mongoose error: ${text.match(match)?.[0] ?? 'pattern matched'}`,
+          remediation: 'Sanitise all user input before using it in database queries. Reject keys starting with $. Use Mongoose with strict schemas and validate input shapes before querying.',
+          url,
+        }];
+      }
+    }
+  }
+  return [];
+}
+
+// ── Host header injection ─────────────────────────────────────────────────
+
+async function checkHostHeaderInjection(baseUrl: string): Promise<DeepFinding[]> {
+  const INJECTED_HOST = 'evil-attacker-test.com';
+
+  const res = await safeFetch(baseUrl, {
+    headers: { Host: INJECTED_HOST },
+    redirect: 'manual',
+  });
+  if (!res) return [];
+
+  const text = await res.text().catch(() => '');
+  const location = res.headers.get('location') ?? '';
+
+  if (text.includes(INJECTED_HOST) || location.includes(INJECTED_HOST)) {
+    const source = location.includes(INJECTED_HOST)
+      ? `Location: ${location}`
+      : 'Response body contains injected Host value';
+    return [{
+      id: 'host-header-injection',
+      category: 'injection',
+      severity: 'high',
+      title: 'Host Header Injection',
+      description: "The application reflects the attacker-controlled Host header in its response. This enables password reset poisoning (reset emails linking to attacker's domain), cache poisoning, and open redirect attacks.",
+      evidence: `GET ${baseUrl} with Host: ${INJECTED_HOST}\n→ ${source}`,
+      remediation: 'Validate the Host header against a strict allowlist of your own domains. Never use the Host header to construct URLs in emails, redirects, or links — use a hardcoded base URL from environment config.',
+    }];
+  }
+
+  return [];
+}
+
+// ── CRLF injection ────────────────────────────────────────────────────────
+
+async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
+  const CRLF_PAYLOAD = 'test%0d%0aX-Injected%3A%20malicious';
+  const testPaths = ['/?q=', '/?name=', '/?search=', '/?redirect='];
+
+  for (const path of testPaths) {
+    const url = `${baseUrl}${path}${CRLF_PAYLOAD}`;
+    const res = await safeFetch(url, { redirect: 'manual' });
+    if (!res) continue;
+
+    if (res.headers.get('x-injected')) {
+      return [{
+        id: 'crlf-injection',
+        category: 'injection',
+        severity: 'high',
+        title: 'CRLF Injection — Header Injection Confirmed',
+        description: `A CRLF sequence in the ${path} parameter was reflected into HTTP response headers. Attackers can inject arbitrary headers, set cookies, or split the HTTP response to perform session fixation, cache poisoning, or XSS.`,
+        evidence: `GET ${url}\n→ X-Injected header appeared in response headers`,
+        remediation: 'Strip or reject \\r and \\n characters from any user input reflected into HTTP headers or Location values. Modern frameworks handle this automatically — ensure you are not constructing raw header strings from user input.',
+        url,
+      }];
+    }
+
+    // Also check if CRLF payload was reflected unencoded in body
+    const text = await res.text().catch(() => '');
+    if (text.includes('X-Injected: malicious')) {
+      return [{
+        id: 'crlf-injection',
+        category: 'injection',
+        severity: 'medium',
+        title: 'Potential CRLF Injection — Newline Reflected in Response',
+        description: `A CRLF payload was reflected unencoded in the response body at ${path}. Depending on context, this may allow header injection or HTTP response splitting.`,
+        evidence: `GET ${url}\n→ CRLF payload reflected unencoded in response body`,
+        remediation: 'Strip or encode \\r and \\n from user input used in headers or redirects.',
+        url,
+      }];
+    }
+  }
+  return [];
+}
+
 // ── Score calculation ─────────────────────────────────────────────────────
 
 function calculateScore(findings: DeepFinding[]): number {
@@ -1009,7 +1561,19 @@ function buildChecked(findings: DeepFinding[], mainRes: Response | null): import
     item('errors',     'Error Verbosity',              'Stack traces, file paths, framework versions in error pages',            findingsFor('error-'), 'Error responses use generic messages — no internals disclosed'),
     item('info',       'Technology Disclosure',        'Server version, X-Powered-By, X-AspNet-Version in headers',             findingsFor('info-'), 'No detailed server/framework version info disclosed in response headers'),
     item('sri',        'Subresource Integrity',        'External CDN scripts and stylesheets have integrity= hashes',           findingsFor('sri-'), 'External resources either have integrity hashes or are same-origin'),
-    item('robots',     'robots.txt Path Disclosure',   'Sensitive admin/backup/config paths in Disallow entries',               findingsFor('robots-'), 'robots.txt does not reveal sensitive internal paths'),
+    item('robots',      'robots.txt Path Disclosure',    'Sensitive admin/backup/config paths in Disallow entries',              findingsFor('robots-'),    'robots.txt does not reveal sensitive internal paths'),
+    item('forced',      'Forced Browsing',               'Unauthenticated access to /api/admin, /api/users, /api/config, 12 more', findingsFor('auth-unprotected'), 'No unauthenticated API endpoints found — all tested paths require authentication'),
+    item('idor',        'Insecure Direct Object Ref',    'Sequential ID enumeration on /api/users/, /api/orders/, /api/posts/',   findingsFor('idor-'),           'No IDOR detected — API endpoints are absent or inaccessible without auth'),
+    item('ssrf',        'Server-Side Request Forgery',   '?url=, ?webhook=, ?proxy= probed with metadata + localhost targets',    findingsFor('ssrf-'),           'No SSRF indicators found — URL parameters absent or not making unvalidated fetches'),
+    item('traversal',   'Path Traversal',                '../../../etc/passwd in ?file=, ?path=, ?page=, ?template=',             findingsFor('path-traversal'),  'No path traversal — file parameters absent or correctly validated'),
+    item('components',  'Vulnerable Libraries (A06)',    'jQuery, AngularJS, Lodash, Moment.js — CVE version matching in HTML',   findingsFor('outdated-'),       'No outdated or vulnerable client-side library versions detected'),
+    item('sourcemaps',  'Source Map Exposure',           '.js.map files exposing unminified source, comments, and variable names',  findingsFor('source-maps-'),    'No publicly accessible source map files found — source code is not exposed'),
+    item('graphql',     'GraphQL Introspection',         '{__schema} query on /graphql, /api/graphql, /gql, /query',               findingsFor('graphql-'),        'GraphQL introspection disabled or no GraphQL endpoint found'),
+    item('apidocs',     'API Documentation Exposure',    '/swagger, /openapi.json, /api-docs, /redoc — public schema exposure',    findingsFor('api-docs-'),       'No public API documentation found at tested paths'),
+    item('ratelimit',   'Rate Limiting (Auth)',          '6 rapid POSTs to auth endpoints — brute-force protection check',         findingsFor('rate-limit-'),     'Rate limiting is in place — auth endpoints returned 429 or are unreachable'),
+    item('nosql',       'NoSQL Injection',               '[$gt], [$ne], [$regex] operator injection — MongoDB error detection',    findingsFor('nosql-'),          'No NoSQL injection — MongoDB operator payloads did not trigger errors'),
+    item('hostheader',  'Host Header Injection',         'Forged Host header reflected in body or Location — reset poisoning',     findingsFor('host-header-'),    'Host header is not reflected — no password reset poisoning vector found'),
+    item('crlf',        'CRLF Injection',                '%0d%0a in query params reflected into response headers',                 findingsFor('crlf-'),           'No CRLF injection — newline sequences are stripped or encoded correctly'),
   ];
 }
 
@@ -1026,7 +1590,7 @@ const MIN_PHASE_MS = 900;
 export const SCAN_PHASES: ScanPhase[] = [
   { id: 'init',      label: 'Connecting',             detail: 'Establishing HTTPS connection, reading response headers and framework fingerprint…' },
   { id: 'vibe',      label: 'Secrets in HTML',        detail: 'Scanning page source for Supabase keys, Firebase config, Stripe secrets, exposed API keys…' },
-  { id: 'files',     label: 'Sensitive Files',         detail: 'Probing 17 paths: .env, .env.local, .git/HEAD, .git/config, wp-config.php, phpinfo.php, backup.sql…' },
+  { id: 'files',     label: 'Sensitive Files',         detail: 'Probing 25 paths: .env, .env.local, .git/HEAD, wp-config.php, .npmrc, docker-compose.yml, Dockerfile, backup.sql…' },
   { id: 'xss',       label: 'Cross-Site Scripting',   detail: "Injecting <script>alert(1)</script> into ?q=, ?s=, ?name= — checking if input is reflected unencoded…" },
   { id: 'sqli',      label: 'SQL Injection',           detail: "Sending ' OR 1=1, \\\" OR \\\"1\\\"=\\\"1, SQLSTATE payloads — watching for database error messages…" },
   { id: 'cors',      label: 'CORS Policy',             detail: 'Null origin + evil-attacker.com on /api routes — testing for wildcard+credentials or arbitrary origin reflection…' },
@@ -1039,9 +1603,21 @@ export const SCAN_PHASES: ScanPhase[] = [
   { id: 'redirect',  label: 'Open Redirect',           detail: 'Testing ?redirect=, ?url=, ?next=, ?return=, ?goto= with external target URL…' },
   { id: 'dirlist',   label: 'Directory Listing',       detail: 'Requesting /uploads/, /static/, /assets/, /files/, /backup/ — checking for open indexes…' },
   { id: 'robots',    label: 'robots.txt',              detail: 'Fetching /robots.txt — parsing Disallow entries for accidentally exposed sensitive paths…' },
-  { id: 'sri',       label: 'Subresource Integrity',   detail: 'Parsing HTML for external <script> and <link> tags missing integrity= hashes…' },
-  { id: 'info',      label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, X-AspNet-Version — checking for version numbers in headers…' },
-  { id: 'done',      label: 'Compiling Report',        detail: 'Scoring all findings, computing security grade, building detailed report…' },
+  { id: 'sri',        label: 'Subresource Integrity',   detail: 'Parsing HTML for external <script> and <link> tags missing integrity= hashes…' },
+  { id: 'info',       label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, X-AspNet-Version — checking for version numbers in headers…' },
+  { id: 'forced',     label: 'Forced Browsing',         detail: 'Probing 15 admin/internal API paths without auth — checking for unauthenticated data exposure…' },
+  { id: 'idor',       label: 'IDOR',                    detail: 'Testing /api/users/1, /api/orders/1 — checking if object records are accessible without ownership verification…' },
+  { id: 'ssrf',       label: 'SSRF',                    detail: 'Injecting AWS metadata URL + localhost into ?url=, ?webhook=, ?proxy= — testing server-side request forgery…' },
+  { id: 'traversal',  label: 'Path Traversal',          detail: 'Sending ../../../etc/passwd into ?file=, ?path=, ?page= — testing directory traversal…' },
+  { id: 'components',  label: 'Vulnerable Libraries',    detail: 'Scanning HTML for jQuery, AngularJS, Lodash, Moment.js versions with known CVEs…' },
+  { id: 'sourcemaps', label: 'Source Map Exposure',     detail: 'Finding <script src> tags in HTML, probing .js.map files — checking if unminified source code is accessible…' },
+  { id: 'graphql',    label: 'GraphQL Introspection',   detail: 'POST {__schema query} to /graphql, /api/graphql, /gql — checking if full schema is enumerable without auth…' },
+  { id: 'apidocs',    label: 'API Documentation',       detail: 'Probing /swagger, /openapi.json, /api-docs, /redoc — checking if full API schema is publicly exposed…' },
+  { id: 'ratelimit',  label: 'Rate Limiting',           detail: 'Firing 6 rapid POST requests at auth endpoints — checking if login is protected against brute-force…' },
+  { id: 'nosql',      label: 'NoSQL Injection',         detail: 'Sending MongoDB operator payloads [$gt], [$ne], [$regex] — watching for BSON/Mongoose errors…' },
+  { id: 'hostheader', label: 'Host Header Injection',   detail: 'Sending forged Host: evil-attacker-test.com — checking if reflected in response body or Location header…' },
+  { id: 'crlf',       label: 'CRLF Injection',          detail: 'Injecting %0d%0a newlines into query params — checking if sequence breaks into response headers…' },
+  { id: 'done',       label: 'Compiling Report',        detail: 'Scoring all findings, computing security grade, building detailed report…' },
 ];
 
 // ── Main export (with progress callback) ─────────────────────────────────
@@ -1084,8 +1660,20 @@ export async function deepScanDomain(
   await run('redirect', () => checkOpenRedirect(baseUrl));
   await run('dirlist',  () => checkDirectoryListing(baseUrl));
   await run('robots',   () => checkRobotsTxt(baseUrl));
-  await run('sri',      () => checkSRI(baseUrl, mainRes));
-  await run('info',     () => checkInfoDisclosure(mainRes));
+  await run('sri',        () => checkSRI(baseUrl, mainRes));
+  await run('info',       () => checkInfoDisclosure(mainRes));
+  await run('forced',     () => checkForcedBrowsing(baseUrl));
+  await run('idor',       () => checkIDOR(baseUrl));
+  await run('ssrf',       () => checkSSRF(baseUrl));
+  await run('traversal',  () => checkPathTraversal(baseUrl));
+  await run('components',  () => checkOutdatedLibraries(mainRes));
+  await run('sourcemaps', () => checkSourceMaps(baseUrl, mainRes));
+  await run('graphql',    () => checkGraphQL(baseUrl));
+  await run('apidocs',    () => checkAPIDocumentation(baseUrl));
+  await run('ratelimit',  () => checkRateLimiting(baseUrl));
+  await run('nosql',      () => checkNoSQLInjection(baseUrl));
+  await run('hostheader', () => checkHostHeaderInjection(baseUrl));
+  await run('crlf',       () => checkCRLFInjection(baseUrl));
 
   onPhase?.(SCAN_PHASES[SCAN_PHASES.length - 1], allFindings);
 
