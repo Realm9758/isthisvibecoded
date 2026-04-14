@@ -29,7 +29,22 @@ export async function GET(request: Request) {
   const limit = Math.min(50, Number(searchParams.get('limit') ?? 20));
 
   if (type === 'popular') {
-    return Response.json(await getMostScannedDomains(limit));
+    const domains = await getMostScannedDomains(limit);
+    const names = await getUserNames(domains.map(d => d.latestScan.userId));
+    return Response.json(domains.map(d => ({
+      domain: d.domain,
+      count: d.count,
+      latestScan: {
+        id: d.latestScan.id,
+        createdAt: d.latestScan.createdAt,
+        scannedBy: d.latestScan.userId ? (names.get(d.latestScan.userId) ?? 'Anonymous') : 'Anonymous',
+        result: {
+          vibe: { score: d.latestScan.result.vibe.score, label: d.latestScan.result.vibe.label },
+          security: { score: d.latestScan.result.security.score, riskLevel: d.latestScan.result.security.riskLevel },
+          techStack: d.latestScan.result.techStack.slice(0, 5),
+        },
+      },
+    })));
   }
 
   let scans;

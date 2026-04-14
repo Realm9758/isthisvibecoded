@@ -14,15 +14,26 @@ interface LeaderboardItem {
   securityScore: number;
   riskLevel: string;
   techStack: string[];
-  hosting: string | null;
+  hosting?: string | null;
   createdAt: number;
-  scannedBy: string;
+  scannedBy?: string;
+  likeCount?: number;
+  likedByMe?: boolean;
 }
 
 interface PopularItem {
   domain: string;
   count: number;
-  latestScan: { id: string };
+  latestScan: {
+    id: string;
+    createdAt: number;
+    scannedBy?: string;
+    result?: {
+      vibe?: { score: number; label: string };
+      security?: { score: number; riskLevel: string };
+      techStack?: { name: string }[];
+    };
+  };
 }
 
 interface Comment {
@@ -53,7 +64,7 @@ interface FullScan {
   };
 }
 
-type Tab = 'recent' | 'vibe' | 'secure' | 'popular';
+type Tab = 'recent' | 'vibe' | 'popular';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -878,10 +889,10 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
                   className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
                   style={{ background: 'rgba(139,92,246,0.12)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.2)' }}
                 >
-                  {item.scannedBy[0]?.toUpperCase()}
+                  {(item.scannedBy ?? 'A')[0]?.toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-white/70">@{item.scannedBy}</p>
+                  <p className="text-sm font-semibold text-white/70">@{item.scannedBy ?? 'Anonymous'}</p>
                   <p className="text-xs text-white/35 mt-0.5 flex items-center gap-1.5">
                     <IconClock />
                     {fullDate(item.createdAt)}
@@ -996,12 +1007,13 @@ export default function LeaderboardPage() {
   const fetchTab = useCallback((t: Tab) => {
     setLoading(true);
     if (t === 'popular') {
-      fetch('/api/scans?type=popular&limit=20')
+      fetch('/api/scans?type=popular&limit=30')
         .then(r => r.json())
         .then(d => { setPopular(d); setLoading(false); })
         .catch(() => setLoading(false));
     } else {
-      fetch(`/api/scans?type=${t}&limit=30`)
+      const limit = t === 'recent' ? 50 : 30;
+      fetch(`/api/scans?type=${t}&limit=${limit}`)
         .then(r => r.json())
         .then(d => { setItems(d); setLoading(false); })
         .catch(() => setLoading(false));
@@ -1013,15 +1025,14 @@ export default function LeaderboardPage() {
   useEffect(() => {
     if (tab !== 'recent') return;
     const interval = setInterval(() => {
-      fetch('/api/scans?type=recent&limit=30').then(r => r.json()).then(setItems);
+      fetch('/api/scans?type=recent&limit=50').then(r => r.json()).then(setItems);
     }, 15_000);
     return () => clearInterval(interval);
   }, [tab]);
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: 'recent',  label: 'Most Recent' },
     { id: 'vibe',    label: 'Most Vibe-Coded' },
-    { id: 'secure',  label: 'Most Secure' },
-    { id: 'recent',  label: 'Recent' },
     { id: 'popular', label: 'Most Scanned' },
   ];
 
@@ -1053,7 +1064,7 @@ export default function LeaderboardPage() {
           ))}
         </div>
 
-        {tab !== 'popular' && !loading && items.length > 0 && (
+        {tab === 'vibe' && !loading && items.length > 0 && (
           <div className="flex items-center gap-3 sm:gap-4 px-4 pb-2 text-[10px] text-white/25 uppercase tracking-wider">
             <span className="w-6 text-right shrink-0">#</span>
             <span className="flex-1">Site</span>
@@ -1078,15 +1089,54 @@ export default function LeaderboardPage() {
                 <Link href="/" className="text-violet-400 hover:text-violet-300 transition-colors">Be the first →</Link>
               </div>
             ) : (
-              popular.map((item, i) => (
-                <Link key={item.domain} href={`/result/${item.latestScan.id}`}
-                  className="flex items-center gap-4 px-5 py-4 border-b border-white/4 last:border-0 hover:bg-white/2 transition-colors">
-                  <span className="text-sm font-bold w-6 text-right shrink-0" style={{ color: i < 3 ? '#a78bfa' : 'rgba(255,255,255,0.2)' }}>{i + 1}</span>
-                  <p className="flex-1 text-sm font-medium text-white/80 truncate">{item.domain}</p>
-                  <span className="text-xs text-white/30">{item.count} scan{item.count !== 1 ? 's' : ''}</span>
-                  <IconChevronRight />
-                </Link>
-              ))
+              popular.map((item, i) => {
+                const vc = getVibeColor(item.latestScan.result?.vibe?.score ?? 0);
+                const sc = getSecColor(item.latestScan.result?.security?.score ?? 0);
+                return (
+                  <div key={item.domain} className="flex items-center gap-3 sm:gap-4 px-4 py-3.5 border-b border-white/4 last:border-0 hover:bg-white/2 transition-colors group">
+                    <span className="text-sm font-bold w-6 text-right shrink-0" style={{ color: i < 3 ? '#a78bfa' : 'rgba(255,255,255,0.2)' }}>{i + 1}</span>
+                    <img src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=32`} alt="" className="w-5 h-5 rounded shrink-0 opacity-70" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white/80 truncate">{item.domain}</p>
+                      <p className="text-[10px] text-white/30 mt-0.5">
+                        scanned <span className="font-semibold text-white/45">{item.count}</span> time{item.count !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="text-center hidden sm:block">
+                        <p className="text-sm font-bold tabular-nums leading-none" style={{ color: vc }}>{item.latestScan.result?.vibe?.score ?? '—'}</p>
+                        <p className="text-[10px] text-white/25 mt-0.5">vibe</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm font-bold tabular-nums leading-none" style={{ color: sc }}>{item.latestScan.result?.security?.score ?? '—'}</p>
+                        <p className="text-[10px] text-white/25 mt-0.5">sec</p>
+                      </div>
+                      <button
+                        onClick={() => setSelected({
+                          id: item.latestScan.id,
+                          url: `https://${item.domain}`,
+                          vibeScore: item.latestScan.result?.vibe?.score ?? 0,
+                          vibeLabel: item.latestScan.result?.vibe?.label ?? '',
+                          securityScore: item.latestScan.result?.security?.score ?? 0,
+                          riskLevel: item.latestScan.result?.security?.riskLevel ?? '',
+                          techStack: (item.latestScan.result?.techStack ?? []).map((t: { name: string }) => t.name),
+                          scannedBy: item.latestScan.scannedBy,
+                          createdAt: item.latestScan.createdAt,
+                          likeCount: 0,
+                          likedByMe: false,
+                        })}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all hover:border-violet-500/40 hover:text-violet-300"
+                        style={{ background: 'rgba(139,92,246,0.06)', borderColor: 'rgba(139,92,246,0.2)', color: 'rgba(167,139,250,0.7)' }}
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                        </svg>
+                        <span className="hidden sm:inline">More Info</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )
           ) : items.length === 0 ? (
             <div className="py-16 text-center text-white/30 text-sm">
@@ -1098,7 +1148,7 @@ export default function LeaderboardPage() {
               <LeaderboardRow
                 key={item.id}
                 item={item}
-                rank={tab !== 'recent' ? i + 1 : undefined}
+                rank={tab === 'vibe' ? i + 1 : undefined}
                 onMoreInfo={() => setSelected(item)}
               />
             ))
