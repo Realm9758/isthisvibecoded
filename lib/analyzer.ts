@@ -33,7 +33,7 @@ export async function analyzeUrl(rawUrl: string): Promise<AnalysisResult> {
   // Run all detectors concurrently
   const [vibeRaw, securityResult, techStack, hosting, publicKeys, publicFiles] =
     await Promise.all([
-      Promise.resolve(detectVibe(html)),
+      Promise.resolve(detectVibe(html, headers)),
       Promise.resolve(analyzeSecurityHeaders(headers, httpsEnabled)),
       Promise.resolve(detectTechStack(html, headers)),
       Promise.resolve(detectHosting(html, headers)),
