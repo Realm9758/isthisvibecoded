@@ -892,7 +892,17 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
                   {(item.scannedBy ?? 'A')[0]?.toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-white/70">@{item.scannedBy ?? 'Anonymous'}</p>
+                  {item.scannedBy && item.scannedBy !== 'Anonymous' ? (
+                    <Link
+                      href={`/u/${encodeURIComponent(item.scannedBy)}`}
+                      className="text-sm font-semibold text-white/70 hover:text-violet-300 transition-colors"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      @{item.scannedBy}
+                    </Link>
+                  ) : (
+                    <p className="text-sm font-semibold text-white/70">@Anonymous</p>
+                  )}
                   <p className="text-xs text-white/35 mt-0.5 flex items-center gap-1.5">
                     <IconClock />
                     {fullDate(item.createdAt)}
@@ -967,7 +977,20 @@ function LeaderboardRow({
           {item.techStack.slice(0, 2).map(t => (
             <span key={t} className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">{t}</span>
           ))}
-          <span className="text-[10px] text-white/20">{timeAgo(item.createdAt)}</span>
+          {item.scannedBy && item.scannedBy !== 'Anonymous' ? (
+            <Link
+              href={`/u/${encodeURIComponent(item.scannedBy)}`}
+              className="text-[10px] text-white/30 hover:text-violet-300 transition-colors"
+              onClick={e => e.stopPropagation()}
+            >
+              @{item.scannedBy}
+            </Link>
+          ) : (
+            <span className="text-[10px] text-white/20">{timeAgo(item.createdAt)}</span>
+          )}
+          {item.scannedBy && item.scannedBy !== 'Anonymous' && (
+            <span className="text-[10px] text-white/20">{timeAgo(item.createdAt)}</span>
+          )}
         </div>
       </div>
 

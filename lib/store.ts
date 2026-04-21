@@ -93,6 +93,15 @@ export async function getUserById(id: string): Promise<User | undefined> {
   return data ? rowToUser(data) : undefined;
 }
 
+export async function getUserByName(name: string): Promise<User | undefined> {
+  const { data } = await supabase
+    .from('users')
+    .select('*')
+    .ilike('name', name)
+    .maybeSingle();
+  return data ? rowToUser(data) : undefined;
+}
+
 export async function getUserByEmail(email: string): Promise<User | undefined> {
   const { data } = await supabase
     .from('users')
@@ -249,6 +258,17 @@ export async function getMostScannedDomains(
     .map(([domain, d]) => ({ domain, ...d }))
     .sort((a, b) => b.count - a.count)
     .slice(0, limit);
+}
+
+export async function getPublicScansByUser(userId: string, limit = 20): Promise<StoredScan[]> {
+  const { data } = await supabase
+    .from('scans')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_public', true)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  return (data ?? []).map(rowToScan);
 }
 
 // ── Usage / Rate limits ───────────────────────────────────────────────────

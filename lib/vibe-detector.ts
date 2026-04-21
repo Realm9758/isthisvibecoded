@@ -152,6 +152,11 @@ export function detectVibe(
     signals.push({ reason: 'Firebase detected (common AI codegen BaaS)', weight: 16, tag: 'firebase' });
   }
 
+  // Clerk authentication — default auth in Cursor/Lovable/v0
+  if (html.includes('clerk.com') || html.includes('clerk.dev') || html.includes('__clerk_') || html.includes('clerk-js')) {
+    signals.push({ reason: 'Clerk authentication (default auth choice in most AI coding tools)', weight: 18, tag: 'clerk' });
+  }
+
   // Next.js
   const hasNextJs = html.includes('__NEXT_DATA__') || html.includes('/_next/static');
   if (hasNextJs) {
@@ -162,6 +167,56 @@ export function detectVibe(
   const nextChunks = (html.match(/\/_next\/static\/chunks\//g) ?? []).length;
   if (nextChunks > 8) {
     signals.push({ reason: `${nextChunks} Next.js JS chunks loaded (typical of scaffold-generated apps)`, weight: 10, tag: 'nextjs_chunks' });
+  }
+
+  // Vite + React (SPA) — AI default for non-Next apps
+  const hasVite = html.includes('/@vite/client') || html.includes('/node_modules/.vite/') || html.includes('type="module"') && html.includes('/src/main.');
+  const hasReactSPA = html.includes('data-reactroot') || (html.includes('react-dom') && !hasNextJs);
+  if (hasVite) {
+    signals.push({ reason: 'Vite build tool detected (AI default for React/Vue SPAs)', weight: 7, tag: 'vite' });
+  }
+  if (hasReactSPA) {
+    signals.push({ reason: 'React SPA detected (common AI-generated frontend architecture)', weight: 6, tag: 'react' });
+  }
+
+  // Vue.js — common in Bolt/Cursor generated apps
+  if (html.includes('__vue_app__') || html.includes('data-v-app') || html.includes('vue.runtime') || html.includes('createApp(')) {
+    signals.push({ reason: 'Vue.js detected (increasingly common in AI-scaffolded apps)', weight: 8, tag: 'vue' });
+  }
+
+  // Stripe.js — AI default payment integration
+  if (html.includes('js.stripe.com') || html.includes('stripe.com/v3')) {
+    signals.push({ reason: 'Stripe.js payment integration (AI default monetization pattern)', weight: 10, tag: 'stripe' });
+  }
+
+  // PostHog — AI default analytics
+  if (html.includes('posthog.com') || html.includes('posthog-js') || html.includes('posthog.init')) {
+    signals.push({ reason: 'PostHog analytics (AI default product analytics integration)', weight: 8, tag: 'posthog' });
+  }
+
+  // Resend / React Email
+  if (html.includes('resend.com') || html.includes('react-email')) {
+    signals.push({ reason: 'Resend email service (AI default transactional email integration)', weight: 7, tag: 'resend' });
+  }
+
+  // TanStack Query / React Query
+  if (html.includes('tanstack') || html.includes('react-query') || html.includes('QueryClient')) {
+    signals.push({ reason: 'TanStack Query (AI default data-fetching library for React)', weight: 7, tag: 'tanstack' });
+  }
+
+  // Zustand
+  if (html.includes('zustand') || html.includes('createStore') && html.includes('useStore')) {
+    signals.push({ reason: 'Zustand state management (AI default for React global state)', weight: 7, tag: 'zustand' });
+  }
+
+  // Zod validation
+  if (html.includes('zod') || html.includes('zodResolver') || html.includes('z.object(')) {
+    signals.push({ reason: 'Zod schema validation (ubiquitous in AI-generated form handling)', weight: 6, tag: 'zod' });
+  }
+
+  // React Hook Form
+  if (html.includes('react-hook-form') || html.includes('hookform/resolvers')) {
+    signals.push({ reason: 'React Hook Form (AI default form library)', weight: 6, tag: 'rhf' });
   }
 
   // ── 4. shadcn / Radix UI — the AI component kit ──────────────────────────
@@ -217,6 +272,21 @@ export function detectVibe(
   const isNetlify = !!headers['x-nf-request-id'] || html.includes('netlify.app');
   if (isNetlify) {
     signals.push({ reason: 'Hosted on Netlify (common AI-generated site deployment)', weight: 5, tag: 'netlify' });
+  }
+
+  // Railway — common for AI-generated backends
+  if (html.includes('railway.app') || headers['x-railway-edge'] || headers['x-railway-request-id']) {
+    signals.push({ reason: 'Hosted on Railway (common AI-generated app deployment)', weight: 6, tag: 'railway' });
+  }
+
+  // Render
+  if (html.includes('onrender.com') || headers['rndr-id'] || headers['x-render-origin-server']) {
+    signals.push({ reason: 'Hosted on Render (common AI-generated app deployment)', weight: 5, tag: 'render' });
+  }
+
+  // Fly.io
+  if (html.includes('fly.dev') || headers['fly-request-id']) {
+    signals.push({ reason: 'Hosted on Fly.io (common AI-generated app deployment)', weight: 5, tag: 'fly' });
   }
 
   // ── 6. Placeholder / unfinished content ───────────────────────────────────
@@ -301,10 +371,28 @@ export function detectVibe(
     signals.push({ reason: 'One-liner generic meta description (AI placeholder)', weight: 8, tag: 'meta' });
   }
 
-  // ── 11. Hand-coded negative signals (reduce score) ───────────────────────
+  // ── 10b. CSS custom properties — AI design system fingerprint ──────────────
 
-  const hasCustomDomain = !html.includes('vercel.app') && !html.includes('netlify.app') &&
-    !html.includes('repl.co') && !html.includes('glitch.me');
+  const cssVarMatches = (html.match(/--(?:primary|secondary|background|foreground|muted|accent|destructive|border|input|ring|card|popover|radius)[\s:;]/g) ?? []).length;
+  if (cssVarMatches >= 6) {
+    signals.push({ reason: `shadcn/Tailwind CSS variable design system (${cssVarMatches} tokens — exact AI scaffold pattern)`, weight: 14, tag: 'css_vars' });
+  } else if (cssVarMatches >= 3) {
+    signals.push({ reason: `CSS custom property naming matches AI-generated design system (${cssVarMatches} tokens)`, weight: 7, tag: 'css_vars' });
+  }
+
+  // data-testid — AI tools scaffold these by default
+  const testIds = (html.match(/data-testid=/g) ?? []).length;
+  if (testIds >= 4) {
+    signals.push({ reason: `${testIds} data-testid attributes (AI tools auto-generate test scaffolding)`, weight: 7, tag: 'testid' });
+  }
+
+  // Generic loading / empty state copy
+  const loadingMatches = (html.match(/loading\.\.\.|fetching data|please wait\.\.\.|no data found|no results found/gi) ?? []).length;
+  if (loadingMatches >= 2) {
+    signals.push({ reason: 'Generic loading/empty state text (AI default UX copy patterns)', weight: 5, tag: 'loading_text' });
+  }
+
+  // ── 11. Hand-coded negative signals (reduce score) ───────────────────────
 
   // jQuery = old hand-coded or WordPress, not AI generated React
   if (html.includes('jquery.min.js') || html.includes('jquery-') || html.includes('jQuery')) {
@@ -316,30 +404,31 @@ export function detectVibe(
     signals.push({ reason: 'Bootstrap CSS detected (legacy hand-coded pattern, not AI tooling)', weight: -18, tag: 'handcoded' });
   }
 
-  // Pure CSS / no JS framework = hand-coded
-  const hasNoJsFramework = !hasNextJs &&
-    !html.includes('data-reactroot') && !html.includes('react-dom') &&
-    !html.includes('__vue_app__') && !html.includes('___gatsby') &&
-    !html.includes('__remixContext') && !html.includes('/_app/immutable');
-  if (hasNoJsFramework && !html.includes('angular')) {
-    signals.push({ reason: 'No JS framework bundle detected (plain HTML/CSS)', weight: -15, tag: 'handcoded' });
-  }
-
   // WordPress = hand-coded (or at least not AI-generated)
   if (html.includes('/wp-content/') || html.includes('/wp-includes/')) {
     signals.push({ reason: 'WordPress CMS detected (not AI-generated code)', weight: -25, tag: 'handcoded' });
   }
 
+  // Pure CSS / no JS framework — only penalise if there are also no other AI signals
+  const hasNoJsFramework = !hasNextJs && !hasReactSPA && !hasVite &&
+    !html.includes('__vue_app__') && !html.includes('___gatsby') &&
+    !html.includes('__remixContext') && !html.includes('/_app/immutable') &&
+    !html.includes('angular');
+  const positiveTagsSoFar = new Set(signals.filter(s => s.weight > 0).map(s => s.tag));
+  if (hasNoJsFramework && positiveTagsSoFar.size < 2) {
+    signals.push({ reason: 'No JS framework bundle detected (plain HTML/CSS)', weight: -12, tag: 'handcoded' });
+  }
+
   // Very low Tailwind ratio with lots of custom CSS = hand-coded
-  if (totalTags > 30 && tailwindCount / totalTags < 0.05 && html.includes('<style')) {
-    signals.push({ reason: 'Custom CSS stylesheets with minimal utility classes (hand-crafted styling)', weight: -10, tag: 'handcoded' });
+  if (totalTags > 30 && tailwindCount / totalTags < 0.05 && html.includes('<style') && !positiveTagsSoFar.has('css_vars')) {
+    signals.push({ reason: 'Custom CSS stylesheets with minimal utility classes (hand-crafted styling)', weight: -8, tag: 'handcoded' });
   }
 
   // ── 12. Compound bonuses (AI stack confirmed by multiple orthogonal signals) ─
 
   const tags = new Set(signals.filter(s => s.weight > 0).map(s => s.tag));
 
-  // Core AI vibe-code combo: Next.js + Supabase/Firebase + Tailwind/shadcn + Vercel
+  // Core AI vibe-code combo: Next.js + BaaS + Tailwind/shadcn + Vercel
   const coreAiStack = [
     tags.has('nextjs'),
     tags.has('supabase') || tags.has('firebase'),
@@ -350,6 +439,16 @@ export function detectVibe(
     signals.push({ reason: 'Full AI vibe-code stack confirmed: Next.js + BaaS + shadcn/Tailwind + Vercel', weight: 25, tag: 'compound' });
   } else if (coreAiStack >= 3) {
     signals.push({ reason: 'Strong AI stack combo detected (3/4 core AI tool indicators)', weight: 15, tag: 'compound' });
+  }
+
+  // Clerk + BaaS + framework = definitive AI full-stack combo
+  if (tags.has('clerk') && (tags.has('supabase') || tags.has('firebase')) && (tags.has('nextjs') || tags.has('react') || tags.has('vite'))) {
+    signals.push({ reason: 'Clerk + BaaS + React/Next.js — definitive AI-generated full-stack app pattern', weight: 20, tag: 'compound' });
+  }
+
+  // Vite + React + Tailwind/shadcn + cloud BaaS = non-Next AI SPA
+  if ((tags.has('vite') || tags.has('react')) && (tags.has('shadcn') || tags.has('tailwind')) && (tags.has('supabase') || tags.has('firebase') || tags.has('clerk'))) {
+    signals.push({ reason: 'Vite/React SPA + UI library + BaaS — AI-generated SPA stack', weight: 15, tag: 'compound' });
   }
 
   // Content combo: AI copy + SaaS structure + generic CTAs
@@ -366,6 +465,16 @@ export function detectVibe(
   // UI library combo: shadcn + Lucide + Framer Motion = textbook AI React app
   if (tags.has('shadcn') && tags.has('lucide') && tags.has('framer_motion')) {
     signals.push({ reason: 'shadcn + Lucide + Framer Motion — standard AI assistant React stack', weight: 15, tag: 'compound' });
+  }
+
+  // Modern tooling combo: Zod + React Hook Form + Tailwind = AI scaffolded form pattern
+  if (tags.has('zod') && tags.has('rhf') && (tags.has('shadcn') || tags.has('tailwind'))) {
+    signals.push({ reason: 'Zod + React Hook Form + Tailwind — AI default form validation stack', weight: 10, tag: 'compound' });
+  }
+
+  // CSS vars + shadcn/Tailwind = confirmed design system
+  if (tags.has('css_vars') && (tags.has('shadcn') || tags.has('tailwind'))) {
+    signals.push({ reason: 'CSS design tokens + shadcn/Tailwind — AI-generated design system confirmed', weight: 8, tag: 'compound' });
   }
 
   // ── Calculate final score ─────────────────────────────────────────────────
@@ -388,7 +497,7 @@ export function detectVibe(
 }
 
 export function getVibeLabel(score: number): VibeLabel {
-  if (score >= 60) return 'Likely Vibe-Coded';
-  if (score >= 28) return 'Possibly Vibe-Coded';
+  if (score >= 50) return 'Likely Vibe-Coded';
+  if (score >= 22) return 'Possibly Vibe-Coded';
   return 'Likely Hand-Coded';
 }
