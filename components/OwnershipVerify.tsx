@@ -191,6 +191,8 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
   const [status, setStatus] = useState<'idle' | 'generating' | 'checking' | 'verified' | 'failed'>('idle');
   const [error, setError] = useState<string | null>(null);
 
+  const [claimContest, setClaimContest] = useState(false);
+
   async function generate() {
     setStatus('generating');
     setError(null);
@@ -202,12 +204,12 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to generate token');
-      // If domain already verified, skip straight to success state
       if ((data as { alreadyVerified?: boolean }).alreadyVerified) {
         setStatus('verified');
         onVerified?.();
         return;
       }
+      setClaimContest(!!(data as { claimContest?: boolean }).claimContest);
       setToken(data);
       setStatus('idle');
     } catch (e) {
@@ -289,6 +291,13 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
 
         ) : (
           <div className="space-y-5">
+            {/* Claim contest warning */}
+            {claimContest && (
+              <div className="p-3 rounded-xl border border-yellow-500/30 bg-yellow-500/8 text-xs text-yellow-300/90 leading-relaxed">
+                <p className="font-bold mb-0.5">This domain is claimed by another account.</p>
+                Place the verification token on the live site and click <span className="font-medium">Check Verification</span>. If you can prove control, your claim supersedes the existing one.
+              </div>
+            )}
             {/* Method tabs */}
             <div className="grid grid-cols-3 gap-2">
               {METHODS.map(m => (
