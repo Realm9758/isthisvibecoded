@@ -70,10 +70,60 @@ const HOSTING_RULES: Array<{
       return null;
     },
   },
+  {
+    provider: 'Replit',
+    test: (html, headers) => {
+      // Replit routes traffic through Google Cloud — "server: Google Frontend" + "via: 1.1 google"
+      // is their standard infra fingerprint
+      const server = (headers['server'] ?? '').toLowerCase();
+      const via = (headers['via'] ?? '').toLowerCase();
+      if (server === 'google frontend' && via.includes('google')) return 'Google Frontend server + via google (Replit infra)';
+      if (html.includes('replit.app') || html.includes('replit.com')) return 'Replit domain found in source';
+      if (headers['x-replit-user-id'] || headers['x-replit-user-name']) return 'x-replit-user header present';
+      return null;
+    },
+  },
+  {
+    provider: 'Railway',
+    test: (html, headers) => {
+      if (html.includes('railway.app') || headers['x-railway-edge'] || headers['x-railway-request-id']) return 'Railway deployment detected';
+      return null;
+    },
+  },
 ];
 
-export function detectHosting(html: string, headers: Record<string, string>): HostingResult {
+export function detectHosting(html: string, headers: Record<string, string>, url?: string): HostingResult {
   const indicators: string[] = [];
+
+  // URL-based hostname matching (highest confidence)
+  if (url) {
+    try {
+      const hostname = new URL(url).hostname;
+      if (hostname.endsWith('.replit.app') || hostname.endsWith('.repl.co')) {
+        return { provider: 'Replit', indicators: ['replit.app hostname'] };
+      }
+      if (hostname.endsWith('.vercel.app')) {
+        return { provider: 'Vercel', indicators: ['vercel.app hostname'] };
+      }
+      if (hostname.endsWith('.netlify.app')) {
+        return { provider: 'Netlify', indicators: ['netlify.app hostname'] };
+      }
+      if (hostname.endsWith('.railway.app')) {
+        return { provider: 'Railway', indicators: ['railway.app hostname'] };
+      }
+      if (hostname.endsWith('.onrender.com')) {
+        return { provider: 'Render', indicators: ['onrender.com hostname'] };
+      }
+      if (hostname.endsWith('.fly.dev') || hostname.endsWith('.fly.io')) {
+        return { provider: 'Fly.io', indicators: ['fly.dev hostname'] };
+      }
+      if (hostname.endsWith('.github.io')) {
+        return { provider: 'GitHub Pages', indicators: ['github.io hostname'] };
+      }
+    } catch {
+      // ignore invalid URL
+    }
+  }
 
   for (const rule of HOSTING_RULES) {
     const indicator = rule.test(html, headers);

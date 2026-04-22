@@ -568,6 +568,16 @@ function PublishModal({ scanId, onClose, onPublished }: { scanId: string; onClos
   );
 }
 
+// ── Risk level helper ─────────────────────────────────────────────────────
+
+function getRiskLevel(findings: PassiveFinding[]): { label: string; color: string; bg: string; border: string } {
+  if (findings.some(f => f.severity === 'critical')) return { label: 'Critical Risk', color: '#f87171', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)' };
+  if (findings.some(f => f.severity === 'high'))     return { label: 'High Risk',     color: '#fb923c', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.3)' };
+  if (findings.some(f => f.severity === 'medium'))   return { label: 'Medium Risk',   color: '#fbbf24', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)' };
+  if (findings.some(f => f.severity === 'low'))      return { label: 'Low Risk',      color: '#6ee7b7', bg: 'rgba(110,231,183,0.08)', border: 'rgba(110,231,183,0.2)' };
+  return { label: 'Looks Clean', color: '#4ade80', bg: 'rgba(74,222,128,0.08)', border: 'rgba(74,222,128,0.2)' };
+}
+
 // ── Main component ────────────────────────────────────────────────────────
 
 export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: Props) {
@@ -576,7 +586,9 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
   const [shareOpen, setShareOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [published, setPublished] = useState(false);
-  const [vulnOpen, setVulnOpen] = useState(false);
+  const [techOpen, setTechOpen] = useState(false);
+  const [allRisksOpen, setAllRisksOpen] = useState(false);
+  const [allVibeOpen, setAllVibeOpen] = useState(false);
 
   const vibeColor  = getVibeColor(result.vibe.score);
   const vibeGrad   = getVibeGradient(result.vibe.score);
@@ -591,8 +603,20 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
   const medCount  = passiveFindings.filter(f => f.severity === 'medium').length;
   const totalIssues = critCount + highCount + medCount;
 
+  const riskLevel = getRiskLevel(passiveFindings);
+  const topVibeReasons = result.vibe.reasons.slice(0, 3);
+  const moreVibeReasons = result.vibe.reasons.slice(3);
+
+  // Top issues for the summary bar: critical/high findings first, then mediums
+  const topIssues = passiveFindings.filter(f => f.severity === 'critical' || f.severity === 'high').slice(0, 3);
+  const keyRiskFindings = passiveFindings.filter(f => f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium');
+  const lowerFindings = passiveFindings.filter(f => f.severity === 'low' || f.severity === 'info');
+
+  const likelyTool = detectLikelyTool(result);
+  const likelyToolDef = TOOLS.find(t => t.id === likelyTool)!;
+
   return (
-    <div className="w-full max-w-5xl mx-auto">
+    <div className="w-full max-w-2xl mx-auto space-y-3">
       {shareOpen && result.scanId && (
         <ShareModal result={result} onClose={() => setShareOpen(false)} />
       )}
@@ -606,7 +630,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
 
       {/* ── Scan limit warning ── */}
       {result.scansRemaining !== undefined && result.scansRemaining !== null && result.scansRemaining <= 1 && (
-        <div className="mb-5 p-3 rounded-xl border border-yellow-500/20 bg-yellow-500/5 flex items-center justify-between gap-3">
+        <div className="p-3 rounded-xl border border-yellow-500/20 bg-yellow-500/5 flex items-center justify-between gap-3">
           <p className="text-xs text-yellow-400">
             {result.scansRemaining === 0 ? "You've used all free scans today." : '1 free scan remaining today.'}
           </p>
@@ -614,24 +638,11 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
         </div>
       )}
 
-      {/* ── Roast banner ── */}
-      {roastMode && roasts.length > 0 && (
-        <div className="mb-5 p-4 rounded-xl border border-orange-500/20 bg-orange-500/5 space-y-2">
-          <p className="text-xs font-semibold text-orange-400 uppercase tracking-wider mb-3">🔥 AI Roast</p>
-          {roasts.map((r, i) => (
-            <div key={i} className="flex gap-2 text-sm text-orange-200/80">
-              <span className="text-orange-400 shrink-0">›</span><span>{r}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* ══ SECTION 1: SUMMARY ══════════════════════════════════════════════ */}
+      <div className="rounded-2xl border overflow-hidden" style={{ background: vibeGrad, borderColor: vibeBorder }}>
 
-      {/* ── Vibe result card ── */}
-      <div
-        className="rounded-2xl border p-6 mb-4"
-        style={{ background: vibeGrad, borderColor: vibeBorder }}
-      >
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6">
+        {/* Top bar: score + two key badges */}
+        <div className="flex items-center gap-4 px-5 pt-5 pb-4">
           <ScoreRing
             score={result.vibe.score}
             color={vibeColor}
@@ -639,36 +650,38 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             sublabel={`${result.vibe.confidence} confidence`}
           />
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1 flex-wrap">
-              <span className="text-white/40 text-sm">Verdict for</span>
-              <span className="font-mono text-sm text-white/80 bg-black/20 px-2 py-0.5 rounded border border-white/10">{displayUrl}</span>
+            <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+              <span className="font-mono text-xs text-white/50 bg-black/20 px-2 py-0.5 rounded border border-white/10 truncate max-w-[200px]">{displayUrl}</span>
             </div>
-            <h2 className="text-2xl font-black mb-3" style={{ color: vibeColor }}>{result.vibe.label}</h2>
-            {result.vibe.reasons.length > 0 ? (
-              <ul className="space-y-1.5">
-                {result.vibe.reasons.map((r, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-white/65">
-                    <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ background: vibeColor }} />
-                    {r}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-white/40 italic">No vibe-coding signals detected.</p>
-            )}
+            <h2 className="text-xl font-black leading-tight mb-2.5" style={{ color: vibeColor }}>{result.vibe.label}</h2>
+            {/* Two status badges */}
+            <div className="flex gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border" style={{ color: riskLevel.color, background: riskLevel.bg, borderColor: riskLevel.border }}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: riskLevel.color }} />
+                {riskLevel.label}
+              </span>
+              {totalIssues > 0 && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border border-red-500/25 bg-red-500/8 text-red-400">
+                  {totalIssues} issue{totalIssues > 1 ? 's' : ''} found
+                </span>
+              )}
+              {result.vibe.score >= 50 && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border" style={{ color: likelyToolDef.accent, background: likelyToolDef.bg, borderColor: likelyToolDef.border }}>
+                  Likely {likelyToolDef.name}
+                </span>
+              )}
+            </div>
           </div>
-          <div className="flex flex-col gap-2 shrink-0 sm:self-start" data-print-hide>
+          {/* Action buttons */}
+          <div className="flex flex-col gap-1.5 shrink-0 self-start" data-print-hide>
             <button
               onClick={() => setRoastMode(r => !r)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${roastMode ? 'bg-orange-500/15 border-orange-500/30 text-orange-400' : 'border-white/10 text-white/40 hover:bg-white/5'}`}
+              className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors ${roastMode ? 'bg-orange-500/15 border-orange-500/30 text-orange-400' : 'border-white/10 text-white/40 hover:bg-white/5'}`}
             >
-              {roastMode ? '🔥 Roast On' : '🔥 Roast'}
+              {roastMode ? '🔥 On' : '🔥 Roast'}
             </button>
             {result.scanId && (
-              <button
-                onClick={() => setShareOpen(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-violet-500/30 bg-violet-500/10 text-violet-400 hover:bg-violet-500/15 transition-colors"
-              >
+              <button onClick={() => setShareOpen(true)} className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-violet-500/30 bg-violet-500/10 text-violet-400 hover:bg-violet-500/15 transition-colors">
                 Share
               </button>
             )}
@@ -676,171 +689,208 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
               <button
                 onClick={() => setPublishOpen(true)}
                 disabled={published}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors disabled:opacity-60"
+                className="px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors disabled:opacity-60"
                 style={published
                   ? { borderColor: 'rgba(34,197,94,0.3)', background: 'rgba(34,197,94,0.08)', color: '#4ade80' }
                   : { borderColor: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.45)' }
                 }
-                title={published ? 'Published to Leaderboard' : 'Publish to Leaderboard'}
               >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  {published
-                    ? <path d="M20 6 9 17l-5-5"/>
-                    : <><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></>
-                  }
-                </svg>
-                {published ? 'Published' : 'Publish'}
+                {published ? '✓ Live' : 'Publish'}
               </button>
             )}
-            {(user?.plan === 'pro' || user?.plan === 'team') && (
-              <button
-                onClick={() => window.print()}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-white/10 text-white/40 hover:bg-white/5 transition-colors"
-                title="Export as PDF"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 18 15 15"/>
-                </svg>
-                PDF
-              </button>
-            )}
-            <button
-              onClick={onReset}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-white/10 text-white/40 hover:bg-white/5 transition-colors"
-            >
+            <button onClick={onReset} className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-white/10 text-white/40 hover:bg-white/5 transition-colors">
               New Scan
             </button>
           </div>
         </div>
+
+        {/* Roast banner */}
+        {roastMode && roasts.length > 0 && (
+          <div className="mx-5 mb-4 p-3 rounded-xl border border-orange-500/20 bg-orange-500/5 space-y-1.5">
+            <p className="text-[10px] font-bold text-orange-400 uppercase tracking-wider">🔥 AI Roast</p>
+            {roasts.map((r, i) => (
+              <div key={i} className="flex gap-2 text-xs text-orange-200/75">
+                <span className="text-orange-400 shrink-0">›</span><span>{r}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Top vibe signals (always 3 visible) */}
+        {result.vibe.reasons.length > 0 && (
+          <div className="border-t px-5 py-4 space-y-2" style={{ borderColor: vibeBorder }}>
+            <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wider mb-2">Why we think this</p>
+            {topVibeReasons.map((r, i) => (
+              <div key={i} className="flex items-start gap-2 text-sm text-white/65">
+                <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ background: vibeColor }} />
+                {r}
+              </div>
+            ))}
+            {moreVibeReasons.length > 0 && (
+              <>
+                {allVibeOpen && moreVibeReasons.map((r, i) => (
+                  <div key={i} className="flex items-start gap-2 text-sm text-white/45">
+                    <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-white/20 shrink-0" />
+                    {r}
+                  </div>
+                ))}
+                <button
+                  onClick={() => setAllVibeOpen(o => !o)}
+                  className="text-xs text-white/30 hover:text-white/50 transition-colors mt-1"
+                >
+                  {allVibeOpen ? '↑ Show less' : `+ ${moreVibeReasons.length} more signals`}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {result.vibe.reasons.length === 0 && (
+          <div className="border-t px-5 py-4" style={{ borderColor: vibeBorder }}>
+            <p className="text-sm text-white/40 italic">No vibe-coding signals detected.</p>
+          </div>
+        )}
       </div>
 
-      {/* ── Tech stack ── */}
-      {result.techStack.length > 0 && (
-        <div className="rounded-xl border border-white/6 bg-white/2 p-4 mb-4">
-          <p className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-3">Tech Stack Detected</p>
-          <div className="flex flex-wrap gap-2">
-            {result.techStack.map(t => (
-              <span
-                key={t.name}
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border"
-                style={{ color: CATEGORY_COLORS[t.category], background: `${CATEGORY_COLORS[t.category]}18`, borderColor: `${CATEGORY_COLORS[t.category]}33` }}
-              >
-                <span className="w-1.5 h-1.5 rounded-full" style={{ background: CATEGORY_COLORS[t.category] }} />
-                {t.name}
-                <span className="opacity-40 text-[10px]">{CATEGORY_LABELS[t.category]}</span>
-              </span>
-            ))}
-            {result.hosting.provider && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                {result.hosting.provider}
-                <span className="opacity-40 text-[10px]">Hosting</span>
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── Passive vulnerability scan toggle ── */}
-      <div className="rounded-2xl border overflow-hidden" style={{ borderColor: vulnOpen ? 'rgba(239,68,68,0.22)' : 'rgba(255,255,255,0.07)' }}>
-        <button
-          onClick={() => setVulnOpen(v => !v)}
-          className="w-full flex items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-white/2"
-          style={{ background: vulnOpen ? 'rgba(239,68,68,0.04)' : 'rgba(255,255,255,0.01)' }}
-        >
-          <div className="flex items-center gap-3">
-            <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0"
-              style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.22)' }}
-            >
-              🔍
+      {/* ══ SECTION 2: KEY RISKS ════════════════════════════════════════════ */}
+      <div className="rounded-2xl border border-white/7 overflow-hidden" style={{ background: 'rgba(255,255,255,0.01)' }}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/6">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.22)' }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
             </div>
             <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-sm font-bold text-white/80">Passive Vulnerability Scan</p>
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-white/5 border border-white/10 text-white/35">
-                  Read-only · No exploitation
-                </span>
-              </div>
-              <p className="text-xs text-white/35 mt-0.5">
-                {vulnOpen
-                  ? `${passiveFindings.length} findings from publicly visible data`
-                  : 'Check for likely hackable issues using only public information'}
-              </p>
+              <p className="text-sm font-bold text-white/80">Key Risks</p>
+              <p className="text-[10px] text-white/35">From publicly visible data — no exploitation</p>
             </div>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            {!vulnOpen && totalIssues > 0 && (
-              <div className="flex gap-1.5">
-                {critCount > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-red-400 bg-red-500/10 border border-red-500/20">{critCount} critical</span>}
-                {highCount > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-orange-400 bg-orange-500/10 border border-orange-500/20">{highCount} high</span>}
-                {medCount > 0  && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-yellow-400 bg-yellow-500/10 border border-yellow-500/20">{medCount} med</span>}
-              </div>
-            )}
-            {!vulnOpen && totalIssues === 0 && passiveFindings.length > 0 && (
-              <span className="text-[10px] font-medium text-white/30">{passiveFindings.length} minor</span>
-            )}
-            <div
-              className="px-4 py-1.5 rounded-lg text-xs font-semibold transition-all"
-              style={vulnOpen
-                ? { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)' }
-                : { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171' }
-              }
+          {/* Severity counters */}
+          <div className="flex gap-2">
+            {critCount > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-red-400 bg-red-500/10 border border-red-500/20">{critCount} critical</span>}
+            {highCount > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-orange-400 bg-orange-500/10 border border-orange-500/20">{highCount} high</span>}
+            {medCount > 0  && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-yellow-400 bg-yellow-500/10 border border-yellow-500/20">{medCount} med</span>}
+            {totalIssues === 0 && <span className="text-[10px] font-medium text-emerald-400">✓ Clean</span>}
+          </div>
+        </div>
+
+        {/* Findings body */}
+        <div className="p-4 space-y-2">
+          {keyRiskFindings.length === 0 && lowerFindings.length === 0 && (
+            <p className="text-sm text-emerald-400 px-1 py-2">No security issues found in publicly visible data.</p>
+          )}
+
+          {/* Critical / high / medium always visible */}
+          {keyRiskFindings.map(f => <PassiveFindingRow key={f.id} f={f} />)}
+
+          {/* Low / info behind toggle */}
+          {lowerFindings.length > 0 && (
+            <>
+              {allRisksOpen && lowerFindings.map(f => <PassiveFindingRow key={f.id} f={f} />)}
+              <button
+                onClick={() => setAllRisksOpen(o => !o)}
+                className="w-full text-center text-xs text-white/30 hover:text-white/50 transition-colors py-2"
+              >
+                {allRisksOpen ? '↑ Hide minor findings' : `+ ${lowerFindings.length} minor finding${lowerFindings.length > 1 ? 's' : ''}`}
+              </button>
+            </>
+          )}
+
+          {/* Deep scan CTA */}
+          <div className="mt-2 rounded-xl border p-3.5 flex items-center justify-between gap-3" style={{ background: 'rgba(239,68,68,0.04)', borderColor: 'rgba(239,68,68,0.12)' }}>
+            <div>
+              <p className="text-xs font-bold text-white/70">Want active testing?</p>
+              <p className="text-[11px] text-white/35 mt-0.5">Deep Scan runs OWASP Top 10 tests on sites you own.</p>
+            </div>
+            <a
+              href={user ? '/dashboard' : '/signup'}
+              className="px-4 py-2 rounded-lg text-xs font-bold text-white shrink-0 transition-all"
+              style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)' }}
             >
-              {vulnOpen ? 'Hide ↑' : 'Scan →'}
+              {user ? 'Deep Scan →' : 'Sign up →'}
+            </a>
+          </div>
+        </div>
+      </div>
+
+      {/* ══ SECTION 3: TECHNICAL BREAKDOWN ══════════════════════════════════ */}
+      <div className="rounded-2xl border border-white/7 overflow-hidden" style={{ background: 'rgba(255,255,255,0.01)' }}>
+        <button
+          onClick={() => setTechOpen(o => !o)}
+          className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-white/2 transition-colors"
+        >
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.22)' }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-bold text-white/80">Technical Breakdown</p>
+              <p className="text-[10px] text-white/35">Tech stack, all signals, rebuild prompt</p>
             </div>
           </div>
+          <svg
+            className="w-4 h-4 text-white/25 transition-transform"
+            style={{ transform: techOpen ? 'rotate(180deg)' : '' }}
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
         </button>
 
-        {vulnOpen && (
-          <div className="px-5 pb-5 space-y-3 border-t border-white/5 pt-4">
-            {/* Summary row */}
-            <div className="flex gap-4 flex-wrap mb-1">
-              {(['critical','high','medium','low','info'] as const).map(sev => {
-                const count = passiveFindings.filter(f => f.severity === sev).length;
-                if (!count) return null;
-                const s = SEV_STYLE[sev];
-                return (
-                  <div key={sev} className="text-center">
-                    <p className="text-lg font-black" style={{ color: s.color }}>{count}</p>
-                    <p className="text-[9px] uppercase tracking-wider" style={{ color: s.color, opacity: 0.6 }}>{sev}</p>
-                  </div>
-                );
-              })}
-              {passiveFindings.length === 0 && (
-                <p className="text-sm text-emerald-400">✓ No issues found in publicly visible data.</p>
-              )}
-            </div>
-
-            <p className="text-[10px] text-white/25 mb-3">
-              All findings are derived from publicly visible HTTP headers, HTML source, and accessible files — no active probing or exploitation.
-            </p>
-
-            {/* Findings */}
-            <div className="space-y-2">
-              {passiveFindings.map(f => <PassiveFindingRow key={f.id} f={f} />)}
-            </div>
-
-            {/* Deep scan CTA */}
-            <div
-              className="mt-4 rounded-xl border p-4 flex items-start justify-between gap-4 flex-wrap"
-              style={{ background: 'rgba(239,68,68,0.04)', borderColor: 'rgba(239,68,68,0.15)' }}
-            >
+        {techOpen && (
+          <div className="border-t border-white/6 px-5 pb-5 pt-4 space-y-5">
+            {/* Tech stack */}
+            {(result.techStack.length > 0 || result.hosting.provider) && (
               <div>
-                <p className="text-sm font-bold text-white/75 mb-0.5">Want active testing?</p>
-                <p className="text-xs text-white/35 max-w-sm">
-                  This passive scan only reads what any browser can see. Deep Scan runs actual OWASP Top 10 tests — SQL injection, XSS, auth bypass, admin discovery — on sites you own.
-                </p>
+                <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wider mb-2.5">Tech Stack Detected</p>
+                <div className="flex flex-wrap gap-2">
+                  {result.techStack.map(t => (
+                    <span
+                      key={t.name}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border"
+                      style={{ color: CATEGORY_COLORS[t.category], background: `${CATEGORY_COLORS[t.category]}18`, borderColor: `${CATEGORY_COLORS[t.category]}33` }}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: CATEGORY_COLORS[t.category] }} />
+                      {t.name}
+                      <span className="opacity-40 text-[10px]">{CATEGORY_LABELS[t.category]}</span>
+                    </span>
+                  ))}
+                  {result.hosting.provider && (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border text-emerald-400 bg-emerald-500/10 border-emerald-500/20">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      {result.hosting.provider}
+                      <span className="opacity-40 text-[10px]">Hosting</span>
+                    </span>
+                  )}
+                </div>
               </div>
-              <a
-                href={user ? '/dashboard' : '/signup'}
-                className="px-5 py-2.5 rounded-xl text-sm font-bold text-white shrink-0 transition-all"
-                style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)', boxShadow: '0 0 16px rgba(220,38,38,0.2)' }}
-              >
-                {user ? 'Run Deep Scan →' : 'Sign up & Deep Scan →'}
-              </a>
-            </div>
+            )}
+
+            {/* Security header table */}
+            {result.security.headers.length > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wider mb-2.5">Security Headers</p>
+                <div className="rounded-xl border border-white/6 overflow-hidden">
+                  {result.security.headers.map((h, i) => (
+                    <div
+                      key={h.name}
+                      className="flex items-center gap-3 px-4 py-2.5 text-xs"
+                      style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${h.present ? 'bg-emerald-400' : 'bg-red-400'}`} />
+                      <span className="font-mono text-white/55 flex-1">{h.name}</span>
+                      <span className={h.present ? 'text-emerald-400' : 'text-red-400/70'}>{h.present ? 'Present' : 'Missing'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Rebuild prompt */}
+            <PromptSection result={result} />
           </div>
         )}
       </div>

@@ -170,14 +170,38 @@ export function detectVibe(
     signals.push({ reason: `${nextChunks} Next.js JS chunks loaded (typical of scaffold-generated apps)`, weight: 10, tag: 'nextjs_chunks' });
   }
 
-  // Vite + React (SPA) — AI default for non-Next apps
-  const hasVite = html.includes('/@vite/client') || html.includes('/node_modules/.vite/') || html.includes('type="module"') && html.includes('/src/main.');
-  const hasReactSPA = html.includes('data-reactroot') || (html.includes('react-dom') && !hasNextJs);
+  // Vite — AI default bundler for SPAs.
+  // Detect via: dev-mode HMR client, node_modules path, data-vite-theme (Vite CSS injection attr),
+  // or hashed /assets/ bundle filenames (Vite production output pattern).
+  const hasViteDevMode = html.includes('/@vite/client') || html.includes('/node_modules/.vite/');
+  const hasViteThemeAttr = html.includes('data-vite-theme') || html.includes('data-inject-first');
+  const hasViteHashedBundle = /\/assets\/[a-zA-Z0-9_.-]+-[A-Za-z0-9_]{6,}\.(js|css)/.test(html);
+  const hasViteModuleEntry = html.includes('type="module"') && (html.includes('/src/main.') || hasViteHashedBundle);
+  const hasVite = hasViteDevMode || hasViteThemeAttr || hasViteHashedBundle || hasViteModuleEntry;
   if (hasVite) {
-    signals.push({ reason: 'Vite build tool detected (AI default for React/Vue SPAs)', weight: 7, tag: 'vite' });
+    signals.push({ reason: 'Vite build tool confirmed (AI default bundler for React/Vue SPAs)', weight: 10, tag: 'vite' });
   }
+
+  // React SPA — empty root div is the hallmark of a client-rendered SPA
+  const hasEmptyRootDiv = /<div\s+id=["'](root|app)["']\s*>\s*<\/div>/.test(html);
+  const hasReactHelmet = html.includes('data-react-helmet');
+  const hasReactSPA =
+    html.includes('data-reactroot') ||
+    hasEmptyRootDiv ||
+    hasReactHelmet ||
+    (html.includes('react-dom') && !hasNextJs);
   if (hasReactSPA) {
-    signals.push({ reason: 'React SPA detected (common AI-generated frontend architecture)', weight: 6, tag: 'react' });
+    signals.push({ reason: 'React SPA detected (client-side rendered, common AI-generated architecture)', weight: 8, tag: 'react' });
+  }
+
+  // React Helmet — AI tools add exhaustive meta tags via react-helmet by default
+  if (hasReactHelmet) {
+    signals.push({ reason: 'React Helmet metadata management (AI-generated SEO over-engineering)', weight: 8, tag: 'react_helmet' });
+  }
+
+  // Hashed asset bundles (Vite/CRA output) — single-module entry with content hash
+  if (hasViteHashedBundle) {
+    signals.push({ reason: 'Hashed asset bundle filenames (Vite build output — AI default SPA pattern)', weight: 8, tag: 'hashed_bundle' });
   }
 
   // Vue.js — common in Bolt/Cursor generated apps
@@ -206,7 +230,7 @@ export function detectVibe(
   }
 
   // Zustand
-  if (html.includes('zustand') || html.includes('createStore') && html.includes('useStore')) {
+  if (html.includes('zustand') || (html.includes('createStore') && html.includes('useStore'))) {
     signals.push({ reason: 'Zustand state management (AI default for React global state)', weight: 7, tag: 'zustand' });
   }
 
@@ -218,6 +242,46 @@ export function detectVibe(
   // React Hook Form
   if (html.includes('react-hook-form') || html.includes('hookform/resolvers')) {
     signals.push({ reason: 'React Hook Form (AI default form library)', weight: 6, tag: 'rhf' });
+  }
+
+  // Express.js backend — AI tools almost universally reach for Express when needing a Node server
+  if ((headers['x-powered-by'] ?? '').toLowerCase().includes('express')) {
+    signals.push({ reason: 'Express.js backend (x-powered-by: Express — AI default Node.js server choice)', weight: 8, tag: 'express' });
+  }
+
+  // Sentry — AI tools default to Sentry for error monitoring
+  if (html.includes('sentry.io') || html.includes('@sentry/') || html.includes('Sentry.init')) {
+    signals.push({ reason: 'Sentry error monitoring (AI default error-tracking integration)', weight: 7, tag: 'sentry' });
+  }
+
+  // Hotjar / FullStory / LogRocket — AI "add session recording" additions
+  if (html.includes('hotjar.com') || html.includes('static.hotjar') || html.includes('hj(')) {
+    signals.push({ reason: 'Hotjar session recording (AI default UX analytics addition)', weight: 6, tag: 'session_rec' });
+  }
+  if (html.includes('fullstory.com') || html.includes('_fs_namespace') || html.includes('logrocket.com')) {
+    signals.push({ reason: 'Session recording tool (AI agent "add analytics" addition)', weight: 6, tag: 'session_rec' });
+  }
+
+  // Live chat widgets — AI reliably adds chat when asked to "add support"
+  if (html.includes('crisp.chat') || html.includes('client.crisp.chat') || html.includes('CRISP_WEBSITE_ID')) {
+    signals.push({ reason: 'Crisp live chat (AI default "add customer support" integration)', weight: 8, tag: 'livechat' });
+  }
+  if (html.includes('intercom.io') || html.includes('widget.intercom.io') || html.includes('Intercom(')) {
+    signals.push({ reason: 'Intercom live chat (AI default enterprise chat integration)', weight: 8, tag: 'livechat' });
+  }
+  if (html.includes('tawk.to') || html.includes('embed.tawk.to')) {
+    signals.push({ reason: 'Tawk.to live chat (AI default free live chat integration)', weight: 7, tag: 'livechat' });
+  }
+
+  // Vercel Analytics / Speed Insights — injected by Next.js AI scaffolds
+  if (html.includes('va.vercel-scripts.com') || html.includes('@vercel/analytics') || html.includes('vitals.vercel-insights.com') || html.includes('@vercel/speed-insights')) {
+    signals.push({ reason: 'Vercel Analytics / Speed Insights (auto-added by AI Next.js scaffolds)', weight: 7, tag: 'vercel_analytics' });
+  }
+
+  // JSON-LD structured data — AI tools add SEO structured data by default
+  const jsonLdCount = (html.match(/type=["']application\/ld\+json["']/g) ?? []).length;
+  if (jsonLdCount >= 1) {
+    signals.push({ reason: `JSON-LD structured data (${jsonLdCount} block${jsonLdCount > 1 ? 's' : ''} — AI default SEO over-engineering)`, weight: 6, tag: 'jsonld' });
   }
 
   // ── 4. shadcn / Radix UI — the AI component kit ──────────────────────────
@@ -487,6 +551,35 @@ export function detectVibe(
   // CSS vars + shadcn/Tailwind = confirmed design system
   if (tags.has('css_vars') && (tags.has('shadcn') || tags.has('tailwind'))) {
     signals.push({ reason: 'CSS design tokens + shadcn/Tailwind — AI-generated design system confirmed', weight: 8, tag: 'compound' });
+  }
+
+  // Vite SPA + shadcn/css_vars + cloud hosting = definitive AI SPA deployment
+  if (tags.has('vite') && (tags.has('css_vars') || tags.has('shadcn')) && (tags.has('replit') || tags.has('vercel') || tags.has('netlify') || tags.has('railway') || tags.has('render') || tags.has('fly'))) {
+    signals.push({ reason: 'Vite SPA + shadcn design system + cloud host — definitive AI-deployed SPA', weight: 18, tag: 'compound' });
+  }
+
+  // React + Vite + hashed bundle + css_vars = AI-built production SPA (even without BaaS)
+  if (tags.has('react') && tags.has('vite') && tags.has('hashed_bundle') && tags.has('css_vars')) {
+    signals.push({ reason: 'React + Vite + hashed bundle + shadcn tokens — AI-assembled production SPA', weight: 15, tag: 'compound' });
+  }
+
+  // AI-generated SEO over-engineering: react-helmet + JSON-LD + full OG/Twitter meta
+  if (tags.has('react_helmet') && tags.has('jsonld')) {
+    signals.push({ reason: 'React Helmet + JSON-LD — AI over-engineered SEO meta stack', weight: 10, tag: 'compound' });
+  }
+
+  // Multiple third-party service stacking — AI agents add many integrations
+  const thirdPartyCount = [
+    tags.has('posthog') || tags.has('vercel_analytics'),
+    tags.has('sentry'),
+    tags.has('livechat'),
+    tags.has('session_rec'),
+    tags.has('stripe'),
+  ].filter(Boolean).length;
+  if (thirdPartyCount >= 3) {
+    signals.push({ reason: `${thirdPartyCount} third-party service integrations (AI agents pile on services)`, weight: 12, tag: 'compound' });
+  } else if (thirdPartyCount >= 2) {
+    signals.push({ reason: 'Multiple third-party integrations co-present (AI agent service-adding pattern)', weight: 6, tag: 'compound' });
   }
 
   // ── Calculate final score ─────────────────────────────────────────────────

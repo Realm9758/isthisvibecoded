@@ -36,7 +36,7 @@ export async function analyzeUrl(rawUrl: string): Promise<AnalysisResult> {
       Promise.resolve(detectVibe(html, headers, parsedUrl.href)),
       Promise.resolve(analyzeSecurityHeaders(headers, httpsEnabled)),
       Promise.resolve(detectTechStack(html, headers)),
-      Promise.resolve(detectHosting(html, headers)),
+      Promise.resolve(detectHosting(html, headers, parsedUrl.href)),
       Promise.resolve(scanForPublicKeys(html)),
       checkPublicFiles(url),
     ]);
