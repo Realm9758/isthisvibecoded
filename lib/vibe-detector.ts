@@ -199,9 +199,10 @@ export function detectVibe(
     signals.push({ reason: 'React Helmet metadata management (AI-generated SEO over-engineering)', weight: 8, tag: 'react_helmet' });
   }
 
-  // Hashed asset bundles (Vite/CRA output) — single-module entry with content hash
+  // Hashed asset bundles tracked for compound detection but not scored alone —
+  // content-hashed filenames are used by webpack, rollup, and esbuild too, not just Vite.
   if (hasViteHashedBundle) {
-    signals.push({ reason: 'Hashed asset bundle filenames (Vite build output — AI default SPA pattern)', weight: 8, tag: 'hashed_bundle' });
+    signals.push({ reason: 'Hashed asset bundle (Vite build output pattern)', weight: 0, tag: 'hashed_bundle' });
   }
 
   // Vue.js — common in Bolt/Cursor generated apps
@@ -278,10 +279,11 @@ export function detectVibe(
     signals.push({ reason: 'Vercel Analytics / Speed Insights (auto-added by AI Next.js scaffolds)', weight: 7, tag: 'vercel_analytics' });
   }
 
-  // JSON-LD structured data — AI tools add SEO structured data by default
+  // JSON-LD structured data — tracked for compound detection but not scored alone
+  // (too common in hand-coded SEO-optimised sites to be a standalone signal)
   const jsonLdCount = (html.match(/type=["']application\/ld\+json["']/g) ?? []).length;
   if (jsonLdCount >= 1) {
-    signals.push({ reason: `JSON-LD structured data (${jsonLdCount} block${jsonLdCount > 1 ? 's' : ''} — AI default SEO over-engineering)`, weight: 6, tag: 'jsonld' });
+    signals.push({ reason: `JSON-LD structured data present (${jsonLdCount} block${jsonLdCount > 1 ? 's' : ''})`, weight: 0, tag: 'jsonld' });
   }
 
   // ── 4. shadcn / Radix UI — the AI component kit ──────────────────────────
@@ -391,9 +393,8 @@ export function detectVibe(
     signals.push({ reason: `Heavy AI marketing copy (${aiCopyMatches} pattern matches — buzzword-dense)`, weight: 25, tag: 'aicopy' });
   } else if (aiCopyMatches >= 3) {
     signals.push({ reason: `Multiple AI copywriting patterns (${aiCopyMatches} matches)`, weight: 15, tag: 'aicopy' });
-  } else if (aiCopyMatches >= 1) {
-    signals.push({ reason: `Generic copy pattern detected (${aiCopyMatches} match)`, weight: 6, tag: 'aicopy' });
   }
+  // Single match intentionally not scored — too many legitimate sites use one of these phrases.
 
   // ── 8. Generic SaaS structure ─────────────────────────────────────────────
 
@@ -448,12 +449,17 @@ export function detectVibe(
   }
 
   // ── 10b. CSS custom properties — AI design system fingerprint ──────────────
-
-  const cssVarMatches = (html.match(/--(?:primary|secondary|background|foreground|muted|accent|destructive|border|input|ring|card|popover|radius)[\s:;]/g) ?? []).length;
-  if (cssVarMatches >= 6) {
-    signals.push({ reason: `shadcn/Tailwind CSS variable design system (${cssVarMatches} tokens — exact AI scaffold pattern)`, weight: 14, tag: 'css_vars' });
-  } else if (cssVarMatches >= 3) {
-    signals.push({ reason: `CSS custom property naming matches AI-generated design system (${cssVarMatches} tokens)`, weight: 7, tag: 'css_vars' });
+  // Count UNIQUE shadcn variable names, not total occurrences.
+  // Many design systems reuse --primary/--background; the real shadcn fingerprint
+  // is having MANY DIFFERENT token names (--ring, --radius, --muted, --card, etc.).
+  const CSS_VAR_NAMES = ['primary','secondary','background','foreground','muted','accent','destructive','border','input','ring','card','popover','radius'];
+  const uniqueCssVarNames = CSS_VAR_NAMES.filter(name => new RegExp(`--${name}[\\s:;]`).test(html)).length;
+  // Bonus: these specific names are shadcn-only; most other design systems don't use them
+  const shadcnOnlyTokens = ['ring','radius','muted','card','popover','destructive'].filter(name => new RegExp(`--${name}[\\s:;]`).test(html)).length;
+  if (uniqueCssVarNames >= 8 || shadcnOnlyTokens >= 3) {
+    signals.push({ reason: `shadcn/Tailwind CSS variable design system (${uniqueCssVarNames} unique tokens — exact AI scaffold pattern)`, weight: 14, tag: 'css_vars' });
+  } else if (uniqueCssVarNames >= 5 || shadcnOnlyTokens >= 2) {
+    signals.push({ reason: `CSS custom property naming matches AI-generated design system (${uniqueCssVarNames} unique tokens)`, weight: 7, tag: 'css_vars' });
   }
 
   // data-testid — AI tools scaffold these by default
