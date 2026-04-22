@@ -66,6 +66,7 @@ const GENERATOR_TOOLS: { pattern: RegExp; label: string }[] = [
 export function detectVibe(
   html: string,
   headers: Record<string, string> = {},
+  url?: string,
 ): { score: number; reasons: string[]; confidence: ConfidenceLevel } {
   const signals: VibeSignal[] = [];
 
@@ -289,6 +290,17 @@ export function detectVibe(
     signals.push({ reason: 'Hosted on Fly.io (common AI-generated app deployment)', weight: 5, tag: 'fly' });
   }
 
+  // Replit — URL-based detection (site is hosted on replit.app) or headers/HTML fingerprints
+  const isReplit =
+    (url && new URL(url).hostname.endsWith('.replit.app')) ||
+    html.includes('replit.app') ||
+    html.includes('replit.com') ||
+    !!headers['x-replit-user-id'] ||
+    !!headers['x-replit-user-name'];
+  if (isReplit) {
+    signals.push({ reason: 'Hosted on Replit (primary AI-assisted / vibe-coded deployment platform)', weight: 20, tag: 'replit' });
+  }
+
   // ── 6. Placeholder / unfinished content ───────────────────────────────────
 
   let placeholderImages = 0;
@@ -428,15 +440,15 @@ export function detectVibe(
 
   const tags = new Set(signals.filter(s => s.weight > 0).map(s => s.tag));
 
-  // Core AI vibe-code combo: Next.js + BaaS + Tailwind/shadcn + Vercel
+  // Core AI vibe-code combo: Next.js + BaaS + Tailwind/shadcn + cloud host
   const coreAiStack = [
     tags.has('nextjs'),
     tags.has('supabase') || tags.has('firebase'),
     tags.has('shadcn') || tags.has('tailwind'),
-    tags.has('vercel'),
+    tags.has('vercel') || tags.has('replit') || tags.has('netlify') || tags.has('railway'),
   ].filter(Boolean).length;
   if (coreAiStack >= 4) {
-    signals.push({ reason: 'Full AI vibe-code stack confirmed: Next.js + BaaS + shadcn/Tailwind + Vercel', weight: 25, tag: 'compound' });
+    signals.push({ reason: 'Full AI vibe-code stack confirmed: Next.js + BaaS + shadcn/Tailwind + cloud host', weight: 25, tag: 'compound' });
   } else if (coreAiStack >= 3) {
     signals.push({ reason: 'Strong AI stack combo detected (3/4 core AI tool indicators)', weight: 15, tag: 'compound' });
   }
