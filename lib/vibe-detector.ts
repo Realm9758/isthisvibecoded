@@ -98,6 +98,10 @@ export function detectVibe(
 
   const reasons: string[] = [];
 
+  // Parse URL hostname once — used in both directEvidence and hosting detection
+  let urlHostname = '';
+  if (url) { try { urlHostname = new URL(url).hostname; } catch { /* invalid URL */ } }
+
   // ══════════════════════════════════════════════════════════════════════════
   // BUCKET 1: Direct Evidence
   //
@@ -130,20 +134,15 @@ export function detectVibe(
   }
 
   // Platform URL — hosting on these domains is conclusive
-  if (url) {
-    try {
-      const hostname = new URL(url).hostname;
-      if (hostname.endsWith('.lovable.app') || hostname.endsWith('.lovableproject.com')) {
-        directEvidence = Math.max(directEvidence, 65);
-        reasons.push('Hosted on Lovable platform (*.lovable.app)');
-      } else if (hostname.endsWith('.replit.app') || hostname.endsWith('.replit.dev')) {
-        directEvidence = Math.max(directEvidence, 60);
-        reasons.push('Hosted on Replit (*.replit.app)');
-      } else if (hostname.includes('stackblitz') || hostname.endsWith('.bolt.new')) {
-        directEvidence = Math.max(directEvidence, 60);
-        reasons.push('Hosted on Bolt / StackBlitz');
-      }
-    } catch { /* invalid URL — skip */ }
+  if (urlHostname.endsWith('.lovable.app') || urlHostname.endsWith('.lovableproject.com')) {
+    directEvidence = Math.max(directEvidence, 65);
+    reasons.push('Hosted on Lovable platform (*.lovable.app)');
+  } else if (urlHostname.endsWith('.replit.app') || urlHostname.endsWith('.replit.dev')) {
+    directEvidence = Math.max(directEvidence, 60);
+    reasons.push('Hosted on Replit (*.replit.app)');
+  } else if (urlHostname.includes('stackblitz') || urlHostname.endsWith('.bolt.new')) {
+    directEvidence = Math.max(directEvidence, 60);
+    reasons.push('Hosted on Bolt / StackBlitz');
   }
 
   // In-source platform fingerprints
@@ -241,11 +240,13 @@ export function detectVibe(
     : 0;
   const hasDenseTailwind = totalTags > 20 && tailwindHits / totalTags > 0.35;
 
-  const hasVercel  = !!headers['x-vercel-id'] || html.includes('vercel.app');
-  const hasNetlify = !!headers['x-nf-request-id'] || html.includes('netlify.app');
-  const hasRailway = html.includes('railway.app') || !!headers['x-railway-request-id'];
-  const hasRender  = html.includes('onrender.com') || !!headers['rndr-id'];
-  const hasFly     = html.includes('fly.dev') || !!headers['fly-request-id'];
+  // URL hostname is checked alongside HTML/headers — the site's own domain is
+  // the most reliable hosting signal (e.g. isthisvibecoded-one.vercel.app).
+  const hasVercel  = !!headers['x-vercel-id'] || html.includes('vercel.app') || urlHostname.endsWith('.vercel.app');
+  const hasNetlify = !!headers['x-nf-request-id'] || html.includes('netlify.app') || urlHostname.endsWith('.netlify.app');
+  const hasRailway = html.includes('railway.app') || !!headers['x-railway-request-id'] || urlHostname.endsWith('.railway.app');
+  const hasRender  = html.includes('onrender.com') || !!headers['rndr-id'] || urlHostname.endsWith('.onrender.com');
+  const hasFly     = html.includes('fly.dev') || !!headers['fly-request-id'] || urlHostname.endsWith('.fly.dev');
 
   const hasFramework = hasNextJs || hasVite;
   const hasBaaS      = hasSupabase || hasFirebase;
