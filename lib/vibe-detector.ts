@@ -78,9 +78,9 @@ const AI_TOOLS: { pattern: RegExp; label: string }[] = [
 // Per-bucket contribution caps — prevent any single category from dominating
 const CAPS = {
   directEvidence:   70,
-  stackPatterns:    28,  // raised: full AI stack should push past any label threshold alone
+  stackPatterns:    45,  // a confirmed full AI stack should reach "Likely" on its own
   artifactPatterns: 22,
-  contentPatterns:  18,  // raised: copy + layout should be able to tip "Possibly" → "Likely"
+  contentPatterns:  18,
 };
 
 // ── Main detector ─────────────────────────────────────────────────────────────
@@ -263,7 +263,7 @@ export function detectVibe(
   const stackReasons: string[] = [];
 
   if (coreStackCount >= 4) {
-    stackScore = 26;
+    stackScore = 42; // all four components co-present → conclusive pattern match
     stackReasons.push('Full AI vibe-code stack: JS framework + BaaS + shadcn/UI kit + cloud host');
   } else if (coreStackCount === 3) {
     stackScore = 17;
