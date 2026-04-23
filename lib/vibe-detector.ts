@@ -229,8 +229,17 @@ export function detectVibe(
   const shadcnTokenHits = SHADCN_TOKENS.filter(t => new RegExp(`--${t}[\\s:;]`).test(html)).length;
   const hasAiCssTokens = shadcnTokenHits >= 3;
 
-  const hasLucide      = /lucide-react|class="lucide lucide-/i.test(html);
+  const hasLucide       = /lucide-react|class="lucide lucide-/i.test(html);
   const hasFramerMotion = html.includes('framer-motion') || html.includes('data-framer-');
+
+  // Tailwind utility density — not a standalone signal, but a meaningful reinforcement
+  // when a framework + cloud host is already present. AI tools almost universally reach
+  // for Tailwind; hand-coders are more likely to mix in custom CSS.
+  const totalTags = (html.match(/<[a-z][a-z0-9]*/gi) ?? []).length;
+  const tailwindHits = totalTags > 20
+    ? (html.match(/class(?:Name)?="[^"]*(?:\bflex\b|\bgrid\b|\bp-\d|\bm-\d|\btext-\w|\bbg-\w|\bborder-\w|\brounded\b|\bshadow\b|\bgap-\d)/g) ?? []).length
+    : 0;
+  const hasDenseTailwind = totalTags > 20 && tailwindHits / totalTags > 0.35;
 
   const hasVercel  = !!headers['x-vercel-id'] || html.includes('vercel.app');
   const hasNetlify = !!headers['x-nf-request-id'] || html.includes('netlify.app');
@@ -260,10 +269,17 @@ export function detectVibe(
       hasCloudHost && 'host',
     ].filter(Boolean) as string[];
     stackReasons.push(`Strong AI stack combo (${parts.join(' + ')})`);
-  } else if (coreStackCount === 2 && (hasBaaS || hasUiKit || hasClerk)) {
-    // Two components, but at least one is non-trivially correlated with AI tools
-    stackScore = 7;
-    stackReasons.push('Partial AI stack pattern detected');
+  } else if (coreStackCount === 2) {
+    if (hasBaaS || hasUiKit) {
+      // At least one component is meaningfully AI-correlated
+      stackScore = 9;
+      stackReasons.push('Partial AI stack (framework or host + BaaS/UI kit)');
+    } else if (hasFramework && hasCloudHost && hasDenseTailwind) {
+      // Next.js/Vite + Vercel/Netlify + heavy Tailwind — very common AI output
+      // even without BaaS or shadcn (e.g. Cursor-generated landing pages)
+      stackScore = 8;
+      stackReasons.push('AI-typical combo: JS framework + cloud host + dense Tailwind');
+    }
   }
 
   // Clerk is a standalone bonus: near-exclusive to AI-scaffolded apps
@@ -330,10 +346,22 @@ export function detectVibe(
   // would score as "Possibly Vibe-Coded".
   // ══════════════════════════════════════════════════════════════════════════
 
-  let contentScore = 0;
-  const hasStackSupport = directEvidence > 0 || stackScore >= 14;
+  // Gating is graduated, not binary:
+  //   Full (1.0)  — direct evidence OR strong stack (≥14): content is well-supported
+  //   Partial (0.55) — modest stack (≥7) OR strong artifacts (≥15): content reinforces
+  //   None (0)  — no supporting evidence: content alone proves nothing
+  let contentGate: number;
+  if (directEvidence > 0 || stackScore >= 14) {
+    contentGate = 1.0;
+  } else if (stackScore >= 7 || artifactScore >= 15) {
+    contentGate = 0.55;
+  } else {
+    contentGate = 0;
+  }
 
-  if (hasStackSupport) {
+  let contentScore = 0;
+
+  if (contentGate > 0) {
     let aiCopyMatches = 0;
     for (const p of AI_COPY_PATTERNS) {
       if (p.test(html)) aiCopyMatches++;
@@ -356,10 +384,54 @@ export function detectVibe(
     if (saasBlocks >= 4) {
       contentScore += 8;
       reasons.push(`Textbook AI SaaS landing page structure (${saasBlocks}/5 sections)`);
+    } else if (saasBlocks >= 3) {
+      contentScore += 4;
+      reasons.push(`Standard SaaS layout structure (${saasBlocks}/5 sections)`);
     }
+
+    contentScore = Math.round(contentScore * contentGate);
   }
 
   contentScore = Math.min(contentScore, CAPS.contentPatterns);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // SOFT INDICATORS
+  //
+  // Low-confidence signals that nudge borderline cases. Each is too weak to
+  // classify a site alone, but co-occurring with stack evidence they shift the
+  // probability. Fires only when there is already some positive evidence.
+  // Hard-capped at 10 to prevent inflating clean hand-coded sites.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  let softScore = 0;
+  if (stackScore > 0 || directEvidence > 0) {
+    // Geist font — Vercel's own font, default in AI Next.js scaffolds
+    if ((html.includes('fonts.vercel.com') || html.includes('Geist')) && hasNextJs) {
+      softScore += 4;
+      reasons.push('Geist font (Vercel-default typography in AI Next.js scaffolds)');
+    }
+    // Vercel Analytics / Speed Insights — auto-injected by AI scaffold templates
+    if (html.includes('va.vercel-scripts.com') || html.includes('@vercel/analytics') || html.includes('vitals.vercel-insights.com')) {
+      softScore += 4;
+      reasons.push('Vercel Analytics (auto-added by AI Next.js scaffolds)');
+    }
+    // Lucide alone (Framer Motion combo already scored in stackPatterns above)
+    if (hasLucide && !hasFramerMotion) {
+      softScore += 4;
+      reasons.push('Lucide React icons (default icon set in AI coding tools)');
+    }
+    // Sonner toast — default in shadcn/Lovable/Bolt apps
+    if (html.includes('[data-sonner') || html.includes('sonner-toast') || /["']sonner["']/.test(html)) {
+      softScore += 3;
+      reasons.push('Sonner toast library (default in AI-generated shadcn stack)');
+    }
+    // TanStack Query — AI default data-fetching choice
+    if (html.includes('tanstack') || html.includes('react-query') || html.includes('QueryClient')) {
+      softScore += 3;
+      reasons.push('TanStack Query (AI default data-fetching library)');
+    }
+    softScore = Math.min(softScore, 10);
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // NEGATIVE EVIDENCE
@@ -386,17 +458,23 @@ export function detectVibe(
     reasons.push('Bootstrap CSS detected (pre-AI toolchain)');
   }
 
+  // Strong direct evidence or unambiguous artifacts should not be fully crushed by
+  // legacy signals (e.g. a Lovable app that also loads jQuery from a CDN).
+  if (directEvidence >= 45 || artifactScore >= 18) {
+    negativeMultiplier = Math.max(negativeMultiplier, 0.55);
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // FINAL SCORE
   // ══════════════════════════════════════════════════════════════════════════
 
-  const rawScore = directEvidence + stackScore + artifactScore + contentScore;
+  const rawScore = directEvidence + stackScore + artifactScore + contentScore + softScore;
   const score = Math.min(100, Math.max(0, Math.round(rawScore * negativeMultiplier)));
 
   let confidence: ConfidenceLevel;
   if (directEvidence >= 50 || score >= 65) {
     confidence = 'High';
-  } else if (score >= 28 || artifactScore >= 15 || stackScore >= 14) {
+  } else if (score >= 24 || artifactScore >= 15 || stackScore >= 14) {
     confidence = 'Medium';
   } else {
     confidence = 'Low';
@@ -407,6 +485,6 @@ export function detectVibe(
 
 export function getVibeLabel(score: number): VibeLabel {
   if (score >= 55) return 'Likely Vibe-Coded';
-  if (score >= 28) return 'Possibly Vibe-Coded';
+  if (score >= 24) return 'Possibly Vibe-Coded';
   return 'Likely Hand-Coded';
 }
