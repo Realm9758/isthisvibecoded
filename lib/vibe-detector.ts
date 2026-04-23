@@ -78,9 +78,9 @@ const AI_TOOLS: { pattern: RegExp; label: string }[] = [
 // Per-bucket contribution caps — prevent any single category from dominating
 const CAPS = {
   directEvidence:   70,
-  stackPatterns:    25,
+  stackPatterns:    28,  // raised: full AI stack should push past any label threshold alone
   artifactPatterns: 22,
-  contentPatterns:  15,
+  contentPatterns:  18,  // raised: copy + layout should be able to tip "Possibly" → "Likely"
 };
 
 // ── Main detector ─────────────────────────────────────────────────────────────
@@ -250,7 +250,11 @@ export function detectVibe(
 
   const hasFramework = hasNextJs || hasVite;
   const hasBaaS      = hasSupabase || hasFirebase;
-  const hasUiKit     = hasShadcn || hasRadix || hasAiCssTokens;
+  // Dense Tailwind (with a framework) is treated as an AI UI kit signal.
+  // AI tools almost universally scaffold Tailwind; hand-coders are more likely
+  // to mix in custom CSS. Requires hasFramework to avoid counting bare static
+  // sites that happen to load Tailwind from a CDN.
+  const hasUiKit     = hasShadcn || hasRadix || hasAiCssTokens || (hasDenseTailwind && hasFramework);
   const hasCloudHost = hasVercel || hasNetlify || hasRailway || hasRender || hasFly;
 
   const coreStackCount = [hasFramework, hasBaaS, hasUiKit, hasCloudHost].filter(Boolean).length;
@@ -259,10 +263,10 @@ export function detectVibe(
   const stackReasons: string[] = [];
 
   if (coreStackCount >= 4) {
-    stackScore = 22;
+    stackScore = 26;
     stackReasons.push('Full AI vibe-code stack: JS framework + BaaS + shadcn/UI kit + cloud host');
   } else if (coreStackCount === 3) {
-    stackScore = 14;
+    stackScore = 17;
     const parts = [
       hasFramework && 'framework',
       hasBaaS && 'BaaS',
@@ -270,17 +274,10 @@ export function detectVibe(
       hasCloudHost && 'host',
     ].filter(Boolean) as string[];
     stackReasons.push(`Strong AI stack combo (${parts.join(' + ')})`);
-  } else if (coreStackCount === 2) {
-    if (hasBaaS || hasUiKit) {
-      // At least one component is meaningfully AI-correlated
-      stackScore = 9;
-      stackReasons.push('Partial AI stack (framework or host + BaaS/UI kit)');
-    } else if (hasFramework && hasCloudHost && hasDenseTailwind) {
-      // Next.js/Vite + Vercel/Netlify + heavy Tailwind — very common AI output
-      // even without BaaS or shadcn (e.g. Cursor-generated landing pages)
-      stackScore = 8;
-      stackReasons.push('AI-typical combo: JS framework + cloud host + dense Tailwind');
-    }
+  } else if (coreStackCount === 2 && (hasBaaS || hasUiKit)) {
+    // Two components, at least one of which is meaningfully AI-correlated
+    stackScore = 10;
+    stackReasons.push('Partial AI stack (framework or host + BaaS/UI kit)');
   }
 
   // Clerk is a standalone bonus: near-exclusive to AI-scaffolded apps
@@ -431,7 +428,7 @@ export function detectVibe(
       softScore += 3;
       reasons.push('TanStack Query (AI default data-fetching library)');
     }
-    softScore = Math.min(softScore, 10);
+    softScore = Math.min(softScore, 12);
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -473,9 +470,9 @@ export function detectVibe(
   const score = Math.min(100, Math.max(0, Math.round(rawScore * negativeMultiplier)));
 
   let confidence: ConfidenceLevel;
-  if (directEvidence >= 50 || score >= 65) {
+  if (directEvidence >= 50 || score >= 45) {
     confidence = 'High';
-  } else if (score >= 24 || artifactScore >= 15 || stackScore >= 14) {
+  } else if (score >= 22 || artifactScore >= 15 || stackScore >= 17) {
     confidence = 'Medium';
   } else {
     confidence = 'Low';
@@ -485,7 +482,7 @@ export function detectVibe(
 }
 
 export function getVibeLabel(score: number): VibeLabel {
-  if (score >= 55) return 'Likely Vibe-Coded';
-  if (score >= 24) return 'Possibly Vibe-Coded';
+  if (score >= 42) return 'Likely Vibe-Coded';
+  if (score >= 22) return 'Possibly Vibe-Coded';
   return 'Likely Hand-Coded';
 }
