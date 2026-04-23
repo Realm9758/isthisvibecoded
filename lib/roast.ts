@@ -33,26 +33,32 @@ const LOW_VIBE: string[] = [
 ];
 
 const SIGNAL_ROASTS: Partial<Record<string, string>> = {
-  'Supabase integration detected (most common AI codegen choice)':
-    "Supabase: the official database of 'I prompted my way to production'.",
-  'Next.js framework detected (overwhelmingly common in AI-generated sites)':
-    "Next.js + Vercel: the 'I followed the AI tutorial' starter pack.",
-  'shadcn/ui component library detected (default AI assistant scaffold)':
-    "shadcn/ui: when the AI doesn't know what components you have, it assumes you have all of them.",
-  'Default framework template title detected':
+  'Full AI vibe-code stack: JS framework + BaaS + shadcn/UI kit + cloud host':
+    "The full starter-pack: Next.js, Supabase, shadcn, Vercel. Assembled by an AI in 11 seconds.",
+  'Strong AI stack combo (framework + BaaS + host)':
+    "Three out of four core AI stack components. Someone was *this* close to full vibe.",
+  'Clerk authentication (default auth layer in AI coding tools)':
+    "Clerk auth: because the AI needed to add login and didn't want to think about it.",
+  'Default framework template title (never customised)':
     "They shipped without changing the page title. Living the 'Create Next App' life.",
-  'Verbatim framework template starter text found':
+  'Verbatim framework template placeholder text found':
     "This literally has the framework starter template text. It shipped. Unironically.",
-  'Classic AI SaaS template structure: hero + features + pricing + testimonials':
+  'Textbook AI SaaS landing page structure (4/5 sections)':
     "Hero → Features → Pricing → Testimonials. Every AI startup. Every time.",
-  'Generic SaaS navigation structure (Home / Features / Pricing / Contact)':
-    "Home / Features / Pricing / Contact. The nav Claude generates before you even ask.",
-  'Heavy AI-style marketing copy (4 pattern matches)':
+  'Textbook AI SaaS landing page structure (5/5 sections)':
+    "Hero → Features → Pricing → Testimonials → FAQ. The AI didn't leave a single section out.",
+  'Heavy AI marketing copy (5 buzzword patterns)':
     "The copy reads like someone asked ChatGPT to 'make it sound more professional and inspiring'.",
-  '5 generic CTA button patterns detected':
-    "'Get Started For Free' appears three times. Classic.",
-  'Placeholder images found (unreplaced defaults)':
-    "They shipped with placeholder.com images. The MVP was a bit too minimum.",
+  'Lovable platform attribution found in source':
+    "Lovable.dev's fingerprints are everywhere. Vibe-coded and proud.",
+  'Hosted on Lovable platform (*.lovable.app)':
+    "Deployed straight to lovable.app. This is peak vibe-code infrastructure.",
+  'Hosted on Replit (*.replit.app)':
+    "Hosted on Replit — built and shipped from a chat window.",
+  'v0 by Vercel fingerprint found in source':
+    "v0.dev's DNA is all over this. Designed by prompt, deployed by Vercel.",
+  'Bolt / StackBlitz origin found in source':
+    "bolt.new strikes again. Born in a browser tab, died in production.",
 };
 
 function pick<T>(arr: T[], n: number): T[] {
