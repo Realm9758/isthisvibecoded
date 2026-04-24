@@ -70,6 +70,53 @@ create table if not exists verification_tokens (
 );
 
 
+-- ── Deep Scans ───────────────────────────────────────────────────────────
+
+create table if not exists deep_scans (
+  id          text primary key,
+  domain      text not null,
+  user_id     text not null references users(id) on delete cascade,
+  result      jsonb not null,
+  created_at  bigint not null
+);
+
+create index if not exists deep_scans_user_idx on deep_scans (user_id, created_at desc);
+
+
+-- ── Community Posts ───────────────────────────────────────────────────────
+-- Only deep scans where checked[] has no 'fail' items are sharable.
+-- The summary snapshot is stored here so the full scan stays private.
+
+create table if not exists community_posts (
+  id            text primary key,
+  deep_scan_id  text not null references deep_scans(id) on delete cascade,
+  user_id       text not null references users(id) on delete cascade,
+  domain        text not null,
+  caption       text,
+  score         integer not null,
+  pass_count    integer not null default 0,
+  warn_count    integer not null default 0,
+  created_at    bigint not null
+);
+
+create index if not exists community_posts_created_idx on community_posts (created_at desc);
+create index if not exists community_posts_user_idx    on community_posts (user_id);
+create index if not exists community_posts_domain_idx  on community_posts (domain);
+create unique index if not exists community_posts_scan_uniq on community_posts (deep_scan_id);
+
+
+-- ── Community Reactions ───────────────────────────────────────────────────
+
+create table if not exists community_reactions (
+  post_id   text not null references community_posts(id) on delete cascade,
+  user_id   text not null references users(id) on delete cascade,
+  type      text not null check (type in ('solid_build', 'interesting_stack', 'surprised')),
+  primary key (post_id, user_id, type)
+);
+
+create index if not exists community_reactions_post_idx on community_reactions (post_id);
+
+
 -- ── Row Level Security ─────────────────────────────────────────────────────
 -- We use the service_role key server-side, so RLS is disabled.
 -- Enable and add policies if you ever expose these tables to client-side code.
@@ -78,3 +125,6 @@ alter table users                disable row level security;
 alter table scans                disable row level security;
 alter table daily_usage          disable row level security;
 alter table verification_tokens  disable row level security;
+alter table deep_scans           disable row level security;
+alter table community_posts      disable row level security;
+alter table community_reactions  disable row level security;

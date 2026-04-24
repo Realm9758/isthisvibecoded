@@ -89,6 +89,13 @@ export function Navbar() {
             <IconFeed />
             <span>Leaderboard</span>
           </Link>
+          <Link href="/community" className="items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden lg:flex">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+            <span>Community</span>
+          </Link>
           <Link href="/pricing" className="px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4">
             Pricing
           </Link>
@@ -152,6 +159,11 @@ export function Navbar() {
                       className="flex items-center gap-2.5 px-3 py-2 text-xs text-white/55 hover:bg-white/4 hover:text-white/80 transition-colors">
                       <IconShield />
                       Security Dashboard
+                    </Link>
+                    <Link href="/community" onClick={() => setMenuOpen(false)}
+                      className="flex items-center gap-2.5 px-3 py-2 text-xs text-white/55 hover:bg-white/4 hover:text-white/80 transition-colors">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+                      Community
                     </Link>
                     <Link href="/profile" onClick={() => setMenuOpen(false)}
                       className="flex items-center gap-2.5 px-3 py-2 text-xs text-white/55 hover:bg-white/4 hover:text-white/80 transition-colors">

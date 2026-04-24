@@ -8,6 +8,9 @@ import { OwnershipVerify } from '@/components/OwnershipVerify';
 import type { DeepScanResult, DeepFinding } from '@/types/deep-scan';
 import type { ScanPhase } from '@/lib/deep-scanner';
 
+// The SSE result event includes scanId alongside the DeepScanResult fields
+type DeepScanResultWithId = DeepScanResult & { scanId?: string };
+
 interface ScanSummary {
   id: string;
   createdAt: number;
@@ -399,7 +402,143 @@ function DeepScanPromptSection({ result }: { result: DeepScanResult }) {
   );
 }
 
-function DeepScanResults({ result, domain, onReset }: { result: DeepScanResult; domain: string; onReset: () => void }) {
+// ── Certified Share Prompt ────────────────────────────────────────────────
+
+function CertifiedSharePrompt({ scanId, domain, score, passCount, warnCount }: {
+  scanId: string; domain: string; score: number; passCount: number; warnCount: number;
+}) {
+  const [step, setStep] = useState<'prompt' | 'caption' | 'done' | 'already'>('prompt');
+  const [caption, setCaption] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function share() {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch('/api/community', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deepScanId: scanId, caption: caption.trim() || null }),
+      });
+      if (res.status === 409) { setStep('already'); return; }
+      if (!res.ok) { const d = await res.json(); setError(d.error ?? 'Failed to share'); return; }
+      setStep('done');
+    } catch {
+      setError('Something went wrong');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (step === 'done') {
+    return (
+      <div className="rounded-2xl border border-emerald-500/30 p-5 flex items-center gap-4" style={{ background: 'rgba(34,197,94,0.05)' }}>
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.25)' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-emerald-300">Your post is live.</p>
+          <p className="text-xs text-white/35 mt-0.5">
+            <Link href="/community" className="text-violet-400 hover:text-violet-300 transition-colors">View it in the community →</Link>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === 'already') {
+    return (
+      <div className="rounded-2xl border border-white/8 p-4 flex items-center gap-3" style={{ background: 'rgba(255,255,255,0.02)' }}>
+        <p className="text-xs text-white/35">This scan has already been shared to the community.</p>
+        <Link href="/community" className="text-xs text-violet-400 hover:text-violet-300 transition-colors shrink-0">View it →</Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-violet-500/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.06), rgba(79,70,229,0.04))' }}>
+      {/* Header */}
+      <div className="px-5 pt-5 pb-4">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-sm font-bold text-white/90">This site is Certified.</p>
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border" style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.12)', borderColor: 'rgba(139,92,246,0.3)' }}>
+                <span className="text-[8px]">✦</span> Certified
+              </span>
+            </div>
+            <p className="text-xs text-white/45 mt-1 leading-relaxed">
+              {domain} passed every check — {passCount} clean{warnCount > 0 ? `, ${warnCount} minor warning${warnCount > 1 ? 's' : ''}` : ''}, score {score}/100. That&apos;s rarer than you&apos;d think.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Caption step */}
+      {step === 'caption' && (
+        <div className="px-5 pb-4 space-y-3">
+          <div>
+            <label className="block text-xs text-white/35 mb-1.5" htmlFor="community-caption">Add a note <span className="text-white/20">(optional)</span></label>
+            <textarea
+              id="community-caption"
+              value={caption}
+              onChange={e => setCaption(e.target.value.slice(0, 280))}
+              placeholder="What stood out? Why'd you scan this one? Keep it useful for others."
+              rows={2}
+              className="w-full px-3 py-2.5 rounded-xl text-sm text-white/80 placeholder-white/20 outline-none resize-none"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(139,92,246,0.3)' }}
+            />
+            <p className="text-[10px] text-white/20 text-right mt-1">{caption.length}/280</p>
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={share}
+              disabled={loading}
+              className="px-4 py-2 rounded-xl text-sm font-semibold text-white disabled:opacity-50 transition-all"
+              style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', boxShadow: '0 0 20px rgba(124,58,237,0.2)' }}
+            >
+              {loading ? 'Posting…' : 'Post to Community'}
+            </button>
+            <button
+              onClick={share}
+              disabled={loading}
+              className="text-xs text-white/30 hover:text-white/55 transition-colors"
+            >
+              Post without a caption →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Initial prompt */}
+      {step === 'prompt' && (
+        <div className="px-5 pb-5 flex items-center gap-3 flex-wrap">
+          <button
+            onClick={() => setStep('caption')}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all"
+            style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', boxShadow: '0 0 20px rgba(124,58,237,0.2)' }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+            Share to Community
+          </button>
+          <button onClick={() => setStep('caption')} className="text-xs text-white/30 hover:text-white/55 transition-colors">
+            Maybe later
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWithId; domain: string; onReset: () => void }) {
   const [tab, setTab] = useState<'findings' | 'checked'>('findings');
   const { summary, findings, checked } = result;
   const grade = GRADE(summary.score);
@@ -409,6 +548,7 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResult; 
   const passCount = checked?.filter(c => c.status === 'pass').length ?? 0;
   const failCount = checked?.filter(c => c.status === 'fail').length ?? 0;
   const warnCount = checked?.filter(c => c.status === 'warn').length ?? 0;
+  const isCertified = failCount === 0;
 
   return (
     <div className="space-y-5">
@@ -467,6 +607,17 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResult; 
           </div>
         </div>
       </div>
+
+      {/* Certified share prompt */}
+      {isCertified && result.scanId && (
+        <CertifiedSharePrompt
+          scanId={result.scanId}
+          domain={domain}
+          score={summary.score}
+          passCount={passCount}
+          warnCount={warnCount}
+        />
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 p-1 rounded-xl bg-white/3 border border-white/6">
@@ -530,7 +681,7 @@ type PhaseState = {
 
 function TerminalScan({ domain, onResult, onError }: {
   domain: string;
-  onResult: (r: DeepScanResult) => void;
+  onResult: (r: DeepScanResultWithId) => void;
   onError: (e: string) => void;
 }) {
   const [phases, setPhases] = useState<PhaseState[]>([]);
@@ -611,8 +762,8 @@ function TerminalScan({ domain, onResult, onError }: {
           }
 
           if (event === 'result') {
-            addLog(`[✓] Scan complete — ${(data as DeepScanResult).findings.length} findings, score ${(data as DeepScanResult).summary.score}/100`);
-            onResult(data as DeepScanResult);
+            addLog(`[✓] Scan complete — ${(data as DeepScanResultWithId).findings.length} findings, score ${(data as DeepScanResultWithId).summary.score}/100`);
+            onResult(data as DeepScanResultWithId);
           }
 
           if (event === 'error') {
@@ -732,7 +883,7 @@ function DeepScanPanel() {
   const [scanDomain, setScanDomain] = useState('');
   const [urlError, setUrlError] = useState('');
   const [scanError, setScanError] = useState('');
-  const [scanResult, setScanResult] = useState<DeepScanResult | null>(null);
+  const [scanResult, setScanResult] = useState<DeepScanResultWithId | null>(null);
 
   function handleUrlSubmit(e: React.FormEvent) {
     e.preventDefault();
