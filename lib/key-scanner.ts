@@ -15,13 +15,13 @@ const KEY_PATTERNS: KeyPattern[] = [
     truncate: (m) => m,
   },
   {
-    type: 'Supabase Anon Key (JWT)',
+    type: 'JWT / Bearer Token',
     pattern: /eyJ[a-zA-Z0-9_-]{40,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/g,
     risk: 'low',
     truncate: (m) => m.slice(0, 20) + '...' + m.slice(-8),
   },
   {
-    type: 'Firebase API Key',
+    type: 'Firebase / Google API Key',
     pattern: /AIza[A-Za-z0-9_\-]{35}/g,
     risk: 'low',
     truncate: (m) => m.slice(0, 8) + '...' + m.slice(-4),
@@ -37,12 +37,6 @@ const KEY_PATTERNS: KeyPattern[] = [
     pattern: /pk\.ey[A-Za-z0-9._\-]{30,}/g,
     risk: 'low',
     truncate: (m) => m.slice(0, 16) + '...',
-  },
-  {
-    type: 'Google Maps API Key',
-    pattern: /AIza[A-Za-z0-9_\-]{35}/g,
-    risk: 'low',
-    truncate: (m) => m.slice(0, 8) + '...' + m.slice(-4),
   },
   {
     type: 'NEXT_PUBLIC_ env variable',

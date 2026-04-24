@@ -20,9 +20,9 @@ const CHECKED_HEADERS: Array<{
   },
   {
     name: 'X-Frame-Options',
-    severity: 'high',
-    penalty: 15,
-    recommendation: 'Prevent clickjacking with: X-Frame-Options: DENY or SAMEORIGIN',
+    severity: 'medium',
+    penalty: 5,
+    recommendation: "Prevent clickjacking. Modern alternative: add frame-ancestors 'none' to your CSP.",
   },
   {
     name: 'X-Content-Type-Options',
@@ -75,8 +75,8 @@ export function analyzeSecurityHeaders(
   score = Math.max(0, Math.min(100, score));
 
   let riskLevel: RiskLevel;
-  if (score >= 70) riskLevel = 'Low Risk';
-  else if (score >= 40) riskLevel = 'Medium Risk';
+  if (score >= 80) riskLevel = 'Low Risk';
+  else if (score >= 50) riskLevel = 'Medium Risk';
   else riskLevel = 'High Risk';
 
   return { score: Math.round(score), riskLevel, headers };
