@@ -12,7 +12,7 @@ async function getCurrentUserId(): Promise<string | null> {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const sort = (searchParams.get('sort') ?? 'new') as 'new' | 'trending' | 'discussed';
+  const sort = (searchParams.get('sort') ?? 'new') as 'new' | 'trending' | 'discussed' | 'score';
   const limit = Math.min(50, Number(searchParams.get('limit') ?? 30));
   const currentUserId = await getCurrentUserId();
 
@@ -37,26 +37,17 @@ export async function POST(request: Request) {
     return Response.json({ error: 'deepScanId required' }, { status: 400 });
   }
 
-  // Load the deep scan and verify ownership
   const scan = await getDeepScanById(body.deepScanId, currentUserId);
   if (!scan) {
     return Response.json({ error: 'Deep scan not found or not owned by you' }, { status: 404 });
   }
 
-  // Verify no 'fail' items — only certified scans can be shared
   const checked: CheckedItem[] = scan.result?.checked ?? [];
-  if (checked.some((c: CheckedItem) => c.status === 'fail')) {
-    return Response.json(
-      { error: 'Only scans where all checks passed can be shared to the community.' },
-      { status: 403 }
-    );
-  }
-
-  // Guard against duplicate posts for the same scan
   const caption = body.caption?.trim().slice(0, 280) || null;
   const summary = scan.result?.summary ?? {};
   const passCount = checked.filter((c: CheckedItem) => c.status === 'pass').length;
   const warnCount = checked.filter((c: CheckedItem) => c.status === 'warn').length;
+  const failCount = checked.filter((c: CheckedItem) => c.status === 'fail').length;
 
   try {
     const post = await createCommunityPost({
@@ -67,10 +58,10 @@ export async function POST(request: Request) {
       score: summary.score ?? 0,
       passCount,
       warnCount,
+      failCount,
     });
     return Response.json(post, { status: 201 });
   } catch (err) {
-    // Unique constraint on deep_scan_id — already shared
     const msg = err instanceof Error ? err.message : '';
     if (msg.includes('community_posts_scan_uniq') || msg.includes('duplicate')) {
       return Response.json({ error: 'This scan has already been shared.' }, { status: 409 });

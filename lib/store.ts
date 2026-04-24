@@ -303,6 +303,8 @@ export interface CommunityPost {
   score: number;
   passCount: number;
   warnCount: number;
+  failCount: number;
+  certified: boolean;
   createdAt: number;
   reactions: Record<ReactionType, number>;
   myReactions: ReactionType[];
@@ -321,6 +323,8 @@ function rowToPost(row: any, names: Map<string, string>, reactions: Map<string, 
     score: row.score,
     passCount: row.pass_count,
     warnCount: row.warn_count,
+    failCount: row.fail_count ?? 0,
+    certified: (row.fail_count ?? 0) === 0,
     createdAt: row.created_at,
     reactions: reactions.get(row.id) ?? { solid_build: 0, interesting_stack: 0, surprised: 0 },
     myReactions: myRxns.get(row.id) ?? [],
@@ -366,7 +370,7 @@ async function enrichPosts(rows: Record<string, unknown>[], currentUserId: strin
 }
 
 export async function getCommunityPosts(
-  sort: 'new' | 'trending' | 'discussed',
+  sort: 'new' | 'trending' | 'discussed' | 'score',
   limit: number,
   currentUserId: string | null,
 ): Promise<CommunityPost[]> {
@@ -374,7 +378,7 @@ export async function getCommunityPosts(
     .from('community_posts')
     .select('*')
     .order('created_at', { ascending: false })
-    .limit(sort === 'new' ? limit : limit * 3);
+    .limit(sort === 'new' || sort === 'score' ? limit : limit * 3);
 
   const posts = await enrichPosts(rows ?? [], currentUserId);
 
@@ -390,6 +394,9 @@ export async function getCommunityPosts(
   if (sort === 'discussed') {
     return posts.sort((a, b) => b.commentCount - a.commentCount).slice(0, limit);
   }
+  if (sort === 'score') {
+    return posts.sort((a, b) => b.score - a.score).slice(0, limit);
+  }
   return posts.slice(0, limit);
 }
 
@@ -401,6 +408,7 @@ export async function createCommunityPost(data: {
   score: number;
   passCount: number;
   warnCount: number;
+  failCount: number;
 }): Promise<CommunityPost> {
   const id = genId(12);
   const row = {
@@ -412,6 +420,7 @@ export async function createCommunityPost(data: {
     score: data.score,
     pass_count: data.passCount,
     warn_count: data.warnCount,
+    fail_count: data.failCount,
     created_at: Date.now(),
   };
   const { error } = await supabase.from('community_posts').insert(row);
@@ -483,4 +492,73 @@ export async function getRemainingScans(id: string, plan: Plan): Promise<number 
   if (plan === 'pro' || plan === 'team') return null;
   const used = await getDailyCount(id);
   return Math.max(0, 5 - used);
+}
+
+// ── Rank snapshots ────────────────────────────────────────────────────────
+
+export async function saveRankSnapshot(
+  entries: { domain: string; rank: number; score: number }[],
+  category: 'vibe' | 'secure',
+  timeFilter: 'today' | 'week' | 'all',
+): Promise<void> {
+  if (!entries.length) return;
+  const today = new Date().toISOString().split('T')[0];
+  const rows = entries.map(e => ({
+    domain: e.domain,
+    category,
+    time_filter: timeFilter,
+    rank_position: e.rank,
+    score: e.score,
+    snapshot_date: today,
+  }));
+  await supabase
+    .from('rank_snapshots')
+    .upsert(rows, { onConflict: 'domain,category,time_filter,snapshot_date' });
+}
+
+export async function getRankDeltas(
+  domains: string[],
+  category: 'vibe' | 'secure',
+  timeFilter: 'today' | 'week' | 'all',
+): Promise<Map<string, number>> {
+  if (!domains.length) return new Map();
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString().split('T')[0];
+  const { data } = await supabase
+    .from('rank_snapshots')
+    .select('domain, rank_position')
+    .in('domain', domains)
+    .eq('category', category)
+    .eq('time_filter', timeFilter)
+    .eq('snapshot_date', yesterday);
+  return new Map((data ?? []).map(r => [r.domain as string, r.rank_position as number]));
+}
+
+export async function getTopRankStreak(domain: string): Promise<number> {
+  const { data } = await supabase
+    .from('rank_snapshots')
+    .select('snapshot_date')
+    .eq('domain', domain)
+    .eq('rank_position', 1)
+    .order('snapshot_date', { ascending: false })
+    .limit(30);
+  if (!data?.length) return 0;
+  let streak = 0;
+  const today = new Date();
+  for (let i = 0; i < data.length; i++) {
+    const expected = new Date(today);
+    expected.setUTCDate(today.getUTCDate() - i);
+    const expectedStr = expected.toISOString().split('T')[0];
+    if ((data[i].snapshot_date as string) === expectedStr) streak++;
+    else break;
+  }
+  return streak;
+}
+
+export async function getHourlyScanCount(): Promise<number> {
+  const since = Date.now() - 3_600_000;
+  const { count } = await supabase
+    .from('scans')
+    .select('id', { count: 'exact', head: true })
+    .gte('created_at', since);
+  return count ?? 0;
 }

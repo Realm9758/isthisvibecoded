@@ -96,6 +96,7 @@ create table if not exists community_posts (
   score         integer not null,
   pass_count    integer not null default 0,
   warn_count    integer not null default 0,
+  fail_count    integer not null default 0,
   created_at    bigint not null
 );
 
@@ -121,6 +122,25 @@ create index if not exists community_reactions_post_idx on community_reactions (
 -- We use the service_role key server-side, so RLS is disabled.
 -- Enable and add policies if you ever expose these tables to client-side code.
 
+-- ── Rank Snapshots ───────────────────────────────────────────────────────
+-- Stores one row per domain/category/time_filter per UTC day.
+-- Used to compute rank delta (↑3, ↓2) shown on the leaderboard.
+
+create table if not exists rank_snapshots (
+  domain        text    not null,
+  category      text    not null check (category in ('vibe', 'secure')),
+  time_filter   text    not null check (time_filter in ('today', 'week', 'all')),
+  rank_position integer not null,
+  score         integer not null,
+  snapshot_date date    not null default current_date,
+  primary key (domain, category, time_filter, snapshot_date)
+);
+
+create index if not exists rank_snapshots_date_idx on rank_snapshots (snapshot_date desc);
+
+
+-- ── Row Level Security ─────────────────────────────────────────────────────
+
 alter table users                disable row level security;
 alter table scans                disable row level security;
 alter table daily_usage          disable row level security;
@@ -128,3 +148,4 @@ alter table verification_tokens  disable row level security;
 alter table deep_scans           disable row level security;
 alter table community_posts      disable row level security;
 alter table community_reactions  disable row level security;
+alter table rank_snapshots       disable row level security;

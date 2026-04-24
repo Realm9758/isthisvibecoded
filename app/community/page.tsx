@@ -17,13 +17,15 @@ interface CommunityPost {
   score: number;
   passCount: number;
   warnCount: number;
+  failCount: number;
+  certified: boolean;
   createdAt: number;
   reactions: Record<ReactionType, number>;
   myReactions: ReactionType[];
   commentCount: number;
 }
 
-type SortTab = 'new' | 'trending' | 'discussed';
+type SortTab = 'new' | 'trending' | 'discussed' | 'score';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -161,15 +163,16 @@ function TopThisWeek({ posts }: { posts: CommunityPost[] }) {
 
 // ── Post card ──────────────────────────────────────────────────────────────
 
-function PostCard({ post, onReact, isFirst }: {
+function PostCard({ post, onReact, isFirst, rank }: {
   post: CommunityPost;
   onReact: (postId: string, type: ReactionType) => void;
   isFirst: boolean;
+  rank?: number;
 }) {
   const sc = scoreColor(post.score);
   const grade = gradeLetter(post.score);
-  const totalChecks = post.passCount + post.warnCount;
-  const isFlawless = post.warnCount === 0 && totalChecks > 0;
+  const totalChecks = post.passCount + post.warnCount + post.failCount;
+  const isFlawless = post.certified && post.warnCount === 0 && totalChecks > 0;
   const totalReactions = Object.values(post.reactions).reduce((s, n) => s + n, 0);
   const ageDays = Math.floor((Date.now() - post.createdAt) / ONE_DAY);
   const isStale = ageDays > 90;
@@ -182,6 +185,15 @@ function PostCard({ post, onReact, isFirst }: {
       {/* Header row */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          {/* Rank number */}
+          {rank !== undefined && (
+            <span
+              className="text-sm font-bold font-mono w-6 text-right shrink-0"
+              style={{ color: rank <= 3 ? '#fbbf24' : 'rgba(255,255,255,0.25)' }}
+            >
+              {rank}
+            </span>
+          )}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={`/api/favicon?domain=${encodeURIComponent(post.domain)}`}
@@ -202,53 +214,56 @@ function PostCard({ post, onReact, isFirst }: {
           </div>
         </div>
 
-        {/* Score + grade + certified badge */}
+        {/* Score + grade + status badge */}
         <div className="flex items-center gap-2 shrink-0">
           <div className="text-center">
             <p className="text-base font-black tabular-nums leading-none" style={{ color: sc }}>{post.score}</p>
             <p className="text-[9px] font-bold mt-0.5 tabular-nums" style={{ color: `${sc}99` }}>{grade}</p>
           </div>
-          <span
-            className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border"
-            style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.1)', borderColor: 'rgba(139,92,246,0.25)' }}
-            title={`Passed all Deep Scan checks — ${post.passCount} passed${post.warnCount > 0 ? `, ${post.warnCount} warnings` : ''}`}
-          >
-            <span aria-hidden="true" className="text-[8px]">✦</span> Certified
-          </span>
+          {post.certified ? (
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border"
+              style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.1)', borderColor: 'rgba(139,92,246,0.25)' }}
+              title={`Passed all Deep Scan checks — ${post.passCount} passed${post.warnCount > 0 ? `, ${post.warnCount} warnings` : ''}`}
+            >
+              <span aria-hidden="true" className="text-[8px]">✦</span> Certified
+            </span>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border"
+              style={{ color: '#fbbf24', background: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.22)' }}
+              title={`${post.failCount} check${post.failCount !== 1 ? 's' : ''} failed — score and non-sensitive info only`}
+            >
+              ⚠ {post.failCount} failed
+            </span>
+          )}
         </div>
       </div>
 
       {/* Score bar */}
       <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
-        <div
-          className="h-full rounded-full"
-          style={{ width: `${post.score}%`, background: sc, opacity: 0.65 }}
-        />
+        <div className="h-full rounded-full" style={{ width: `${post.score}%`, background: sc, opacity: 0.65 }} />
       </div>
 
       {/* Badges */}
       <div className="flex items-center gap-1.5 flex-wrap">
         {isFlawless && (
-          <span
-            className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border"
-            style={{ color: '#4ade80', background: 'rgba(74,222,128,0.07)', borderColor: 'rgba(74,222,128,0.18)' }}
-          >
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border" style={{ color: '#4ade80', background: 'rgba(74,222,128,0.07)', borderColor: 'rgba(74,222,128,0.18)' }}>
             ✓ Flawless
           </span>
         )}
         {totalChecks > 0 && (
-          <span
-            className="inline-flex items-center text-[10px] font-mono px-2 py-0.5 rounded-full border"
-            style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.07)' }}
-          >
-            {post.passCount}/{totalChecks} checks
+          <span className="inline-flex items-center text-[10px] font-mono px-2 py-0.5 rounded-full border" style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.07)' }}>
+            {post.passCount}/{totalChecks} checks passed
           </span>
         )}
-        {isFirst && (
-          <span
-            className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border"
-            style={{ color: '#fbbf24', background: 'rgba(251,191,36,0.07)', borderColor: 'rgba(251,191,36,0.18)' }}
-          >
+        {!post.certified && post.failCount > 0 && (
+          <span className="inline-flex items-center text-[10px] font-mono px-2 py-0.5 rounded-full border" style={{ color: '#f87171', background: 'rgba(239,68,68,0.06)', borderColor: 'rgba(239,68,68,0.18)' }}>
+            {post.failCount} failed
+          </span>
+        )}
+        {isFirst && post.certified && (
+          <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border" style={{ color: '#fbbf24', background: 'rgba(251,191,36,0.07)', borderColor: 'rgba(251,191,36,0.18)' }}>
             ★ First Certified
           </span>
         )}
@@ -258,7 +273,7 @@ function PostCard({ post, onReact, isFirst }: {
             style={{ color: 'rgba(255,255,255,0.28)', background: 'rgba(255,255,255,0.03)', borderColor: 'rgba(255,255,255,0.06)' }}
             title={`Scan run ${ageDays} days ago — results may not reflect the current site`}
           >
-            ⚠ {ageDays}d old scan
+            ⚠ {ageDays}d old
           </span>
         )}
       </div>
@@ -379,6 +394,7 @@ export default function CommunityPage() {
   }, [posts]);
 
   const tabs: { id: SortTab; label: string }[] = [
+    { id: 'score',     label: 'Top Score' },
     { id: 'new',       label: 'Just posted' },
     { id: 'trending',  label: 'On fire' },
     { id: 'discussed', label: 'Getting talked about' },
@@ -395,19 +411,26 @@ export default function CommunityPage() {
       <div className="relative max-w-2xl mx-auto">
         {/* Page header */}
         <div className="mb-10 text-center">
-          <div className="flex items-center justify-center gap-2 mb-4">
+          <div className="flex items-center justify-center gap-2 mb-4 flex-wrap">
             <span
               className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border"
               style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.1)', borderColor: 'rgba(139,92,246,0.25)' }}
             >
-              <span aria-hidden="true" className="text-[8px]">✦</span> Certified only
+              <span aria-hidden="true" className="text-[8px]">✦</span> Certified
+            </span>
+            <span className="text-[10px] text-white/20">+</span>
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border"
+              style={{ color: '#fbbf24', background: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.22)' }}
+            >
+              Scanned results
             </span>
           </div>
           <h1 className="text-3xl font-bold text-white mb-2 leading-tight">
-            The internet&apos;s most<br />security-conscious builders.
+            The internet&apos;s<br />security rankings.
           </h1>
           <p className="text-white/35 text-sm">
-            Every site here passed a full Deep Scan. No exceptions.
+            Deep-scanned sites, ranked by score. Certified means every check passed.
           </p>
         </div>
 
@@ -457,10 +480,10 @@ export default function CommunityPage() {
               </div>
               <p className="text-sm font-semibold text-white/60 mb-1">Nothing here yet.</p>
               <p className="text-xs text-white/30 max-w-xs mx-auto leading-relaxed">
-                The first Certified site posted here will be remembered.
+                Be the first to post a Deep Scan result — certified or not.
               </p>
               <p className="text-xs text-white/20 max-w-xs mx-auto leading-relaxed mt-1">
-                Run a Deep Scan on a site you own, pass every check, and claim the spot.
+                Run a Deep Scan on any site you own and share your score.
               </p>
               <Link
                 href="/dashboard"
@@ -471,12 +494,13 @@ export default function CommunityPage() {
               </Link>
             </div>
           ) : (
-            posts.map(post => (
+            posts.map((post, i) => (
               <PostCard
                 key={post.id}
                 post={post}
                 onReact={handleReact}
                 isFirst={post.id === firstPostId}
+                rank={sort === 'score' ? i + 1 : undefined}
               />
             ))
           )}

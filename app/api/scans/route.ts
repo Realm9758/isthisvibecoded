@@ -1,4 +1,12 @@
-import { getPublicScans, getTopVibeScans, getTopSecureScans, getMostScannedDomains } from '@/lib/store';
+import {
+  getPublicScans,
+  getTopVibeScans,
+  getTopSecureScans,
+  getMostScannedDomains,
+  saveRankSnapshot,
+  getRankDeltas,
+  getTopRankStreak,
+} from '@/lib/store';
 import { supabase } from '@/lib/supabase';
 
 async function getUserNames(userIds: (string | undefined)[]): Promise<Map<string, string>> {
@@ -8,19 +16,8 @@ async function getUserNames(userIds: (string | undefined)[]): Promise<Map<string
   return new Map((data ?? []).map(u => [u.id, u.name as string]));
 }
 
-function formatScan(s: ReturnType<typeof Object.assign>, names: Map<string, string>) {
-  return {
-    id: s.id,
-    url: s.result.url,
-    vibeScore: s.result.vibe.score,
-    vibeLabel: s.result.vibe.label,
-    securityScore: s.result.security.score,
-    riskLevel: s.result.security.riskLevel,
-    techStack: s.result.techStack.slice(0, 5).map((t: { name: string }) => t.name),
-    hosting: s.result.hosting.provider,
-    createdAt: s.createdAt,
-    scannedBy: s.userId ? (names.get(s.userId) ?? 'Anonymous') : 'Anonymous',
-  };
+function extractDomain(url: string): string {
+  try { return new URL(url).hostname; } catch { return url; }
 }
 
 function sinceFromTime(time: string | null): number | undefined {
@@ -33,7 +30,9 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const type = searchParams.get('type') ?? 'recent';
   const limit = Math.min(50, Number(searchParams.get('limit') ?? 20));
-  const since = sinceFromTime(searchParams.get('time'));
+  const timeParam = searchParams.get('time');
+  const since = sinceFromTime(timeParam);
+  const timeFilter = (timeParam === 'today' || timeParam === 'week' ? timeParam : 'all') as 'today' | 'week' | 'all';
 
   if (type === 'popular') {
     const domains = await getMostScannedDomains(limit, since);
@@ -57,8 +56,75 @@ export async function GET(request: Request) {
   let scans;
   if (type === 'vibe') scans = await getTopVibeScans(limit, since);
   else if (type === 'secure') scans = await getTopSecureScans(limit, since);
-  else scans = await getPublicScans(limit, since);
+  else {
+    // Recent tab — no rank delta needed
+    scans = await getPublicScans(limit, since);
+    const names = await getUserNames(scans.map(s => s.userId));
+    return Response.json(scans.map(s => ({
+      id: s.id,
+      url: s.result.url,
+      vibeScore: s.result.vibe.score,
+      vibeLabel: s.result.vibe.label,
+      securityScore: s.result.security.score,
+      riskLevel: s.result.security.riskLevel,
+      techStack: s.result.techStack.slice(0, 5).map((t: { name: string }) => t.name),
+      hosting: s.result.hosting.provider,
+      createdAt: s.createdAt,
+      scannedBy: s.userId ? (names.get(s.userId) ?? 'Anonymous') : 'Anonymous',
+      rankDelta: null,
+      previousRank: null,
+    })));
+  }
 
+  const category = type as 'vibe' | 'secure';
   const names = await getUserNames(scans.map(s => s.userId));
-  return Response.json(scans.map(s => formatScan(s, names)));
+
+  // Compute current ranks and domains
+  const domains = scans.map(s => extractDomain(s.result.url));
+
+  // Fetch yesterday's ranks + #1 streak for top entry in parallel
+  const [yesterdayRanks, topStreak] = await Promise.all([
+    getRankDeltas(domains, category, timeFilter),
+    domains[0] ? getTopRankStreak(domains[0]) : Promise.resolve(0),
+  ]);
+
+  // Build response with rank deltas
+  const formatted = scans.map((s, i) => {
+    const domain = extractDomain(s.result.url);
+    const currentRank = i + 1;
+    const score = category === 'vibe' ? s.result.vibe.score : s.result.security.score;
+    const yesterdayRank = yesterdayRanks.get(domain) ?? null;
+    const rankDelta = yesterdayRank !== null ? yesterdayRank - currentRank : null;
+
+    return {
+      id: s.id,
+      url: s.result.url,
+      vibeScore: s.result.vibe.score,
+      vibeLabel: s.result.vibe.label,
+      securityScore: s.result.security.score,
+      riskLevel: s.result.security.riskLevel,
+      techStack: s.result.techStack.slice(0, 5).map((t: { name: string }) => t.name),
+      hosting: s.result.hosting.provider,
+      createdAt: s.createdAt,
+      scannedBy: s.userId ? (names.get(s.userId) ?? 'Anonymous') : 'Anonymous',
+      rankDelta,
+      previousRank: yesterdayRank,
+      // Pass streak for #1 so frontend can show "held for X days"
+      topStreak: currentRank === 1 ? topStreak : undefined,
+      score,
+    };
+  });
+
+  // Save today's snapshot in the background — don't block the response
+  saveRankSnapshot(
+    scans.map((s, i) => ({
+      domain: extractDomain(s.result.url),
+      rank: i + 1,
+      score: category === 'vibe' ? s.result.vibe.score : s.result.security.score,
+    })),
+    category,
+    timeFilter,
+  ).catch(() => {});
+
+  return Response.json(formatted);
 }

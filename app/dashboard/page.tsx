@@ -402,15 +402,18 @@ function DeepScanPromptSection({ result }: { result: DeepScanResult }) {
   );
 }
 
-// ── Certified Share Prompt ────────────────────────────────────────────────
+// ── Share Prompt ──────────────────────────────────────────────────────────
 
-function CertifiedSharePrompt({ scanId, domain, score, passCount, warnCount }: {
-  scanId: string; domain: string; score: number; passCount: number; warnCount: number;
+function SharePrompt({ scanId, domain, score, passCount, warnCount, failCount }: {
+  scanId: string; domain: string; score: number;
+  passCount: number; warnCount: number; failCount: number;
 }) {
   const [step, setStep] = useState<'prompt' | 'caption' | 'done' | 'already'>('prompt');
   const [caption, setCaption] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const isCertified = failCount === 0;
 
   async function share() {
     setLoading(true);
@@ -438,9 +441,9 @@ function CertifiedSharePrompt({ scanId, domain, score, passCount, warnCount }: {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-emerald-300">Your post is live.</p>
+          <p className="text-sm font-semibold text-emerald-300">Your result is live on the community board.</p>
           <p className="text-xs text-white/35 mt-0.5">
-            <Link href="/community" className="text-violet-400 hover:text-violet-300 transition-colors">View it in the community →</Link>
+            <Link href="/community" className="text-violet-400 hover:text-violet-300 transition-colors">See how it ranks →</Link>
           </p>
         </div>
       </div>
@@ -451,31 +454,59 @@ function CertifiedSharePrompt({ scanId, domain, score, passCount, warnCount }: {
     return (
       <div className="rounded-2xl border border-white/8 p-4 flex items-center gap-3" style={{ background: 'rgba(255,255,255,0.02)' }}>
         <p className="text-xs text-white/35">This scan has already been shared to the community.</p>
-        <Link href="/community" className="text-xs text-violet-400 hover:text-violet-300 transition-colors shrink-0">View it →</Link>
+        <Link href="/community" className="text-xs text-violet-400 hover:text-violet-300 transition-colors shrink-0">See your rank →</Link>
       </div>
     );
   }
 
+  const borderColor  = isCertified ? 'rgba(139,92,246,0.3)'  : 'rgba(245,158,11,0.25)';
+  const iconStroke   = isCertified ? '#a78bfa'                : '#fbbf24';
+  const iconBg       = isCertified ? 'rgba(139,92,246,0.15)'  : 'rgba(245,158,11,0.12)';
+  const iconBorder   = isCertified ? 'rgba(139,92,246,0.3)'   : 'rgba(245,158,11,0.25)';
+  const gradientBg   = isCertified
+    ? 'linear-gradient(135deg, rgba(139,92,246,0.06), rgba(79,70,229,0.04))'
+    : 'linear-gradient(135deg, rgba(245,158,11,0.05), rgba(249,115,22,0.03))';
+
   return (
-    <div className="rounded-2xl border border-violet-500/30 overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.06), rgba(79,70,229,0.04))' }}>
+    <div className="rounded-2xl border overflow-hidden" style={{ background: gradientBg, borderColor }}>
       {/* Header */}
       <div className="px-5 pt-5 pb-4">
         <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)' }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-              <path d="m9 12 2 2 4-4"/>
-            </svg>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: iconBg, border: `1px solid ${iconBorder}` }}>
+            {isCertified ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                <path d="m9 12 2 2 4-4"/>
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={iconStroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>
+              </svg>
+            )}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-sm font-bold text-white/90">This site is Certified.</p>
-              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border" style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.12)', borderColor: 'rgba(139,92,246,0.3)' }}>
-                <span className="text-[8px]">✦</span> Certified
-              </span>
+              {isCertified ? (
+                <>
+                  <p className="text-sm font-bold text-white/90">This site is Certified.</p>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border" style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.12)', borderColor: 'rgba(139,92,246,0.3)' }}>
+                    <span className="text-[8px]">✦</span> Certified
+                  </span>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-bold text-white/90">Share your results.</p>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border" style={{ color: '#fbbf24', background: 'rgba(245,158,11,0.1)', borderColor: 'rgba(245,158,11,0.25)' }}>
+                    {failCount} check{failCount !== 1 ? 's' : ''} failed
+                  </span>
+                </>
+              )}
             </div>
             <p className="text-xs text-white/45 mt-1 leading-relaxed">
-              {domain} passed every check — {passCount} clean{warnCount > 0 ? `, ${warnCount} minor warning${warnCount > 1 ? 's' : ''}` : ''}, score {score}/100. That&apos;s rarer than you&apos;d think.
+              {isCertified
+                ? `${domain} passed every check — ${passCount} clean${warnCount > 0 ? `, ${warnCount} warning${warnCount > 1 ? 's' : ''}` : ''}, score ${score}/100. That's rarer than you'd think.`
+                : `${domain} scored ${score}/100 — ${passCount} passed, ${warnCount} warnings, ${failCount} failed. Your score still counts on the board.`
+              }
             </p>
           </div>
         </div>
@@ -493,7 +524,7 @@ function CertifiedSharePrompt({ scanId, domain, score, passCount, warnCount }: {
               placeholder="What stood out? Why'd you scan this one? Keep it useful for others."
               rows={2}
               className="w-full px-3 py-2.5 rounded-xl text-sm text-white/80 placeholder-white/20 outline-none resize-none"
-              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(139,92,246,0.3)' }}
+              style={{ background: 'rgba(255,255,255,0.04)', border: `1px solid ${borderColor}` }}
             />
             <p className="text-[10px] text-white/20 text-right mt-1">{caption.length}/280</p>
           </div>
@@ -507,11 +538,7 @@ function CertifiedSharePrompt({ scanId, domain, score, passCount, warnCount }: {
             >
               {loading ? 'Posting…' : 'Post to Community'}
             </button>
-            <button
-              onClick={share}
-              disabled={loading}
-              className="text-xs text-white/30 hover:text-white/55 transition-colors"
-            >
+            <button onClick={share} disabled={loading} className="text-xs text-white/30 hover:text-white/55 transition-colors">
               Post without a caption →
             </button>
           </div>
@@ -527,11 +554,11 @@ function CertifiedSharePrompt({ scanId, domain, score, passCount, warnCount }: {
             style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', boxShadow: '0 0 20px rgba(124,58,237,0.2)' }}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-            Share to Community
+            {isCertified ? 'Share to Community' : 'Post My Results'}
           </button>
-          <button onClick={() => setStep('caption')} className="text-xs text-white/30 hover:text-white/55 transition-colors">
-            Maybe later
-          </button>
+          <p className="text-[10px] text-white/25">
+            {isCertified ? 'Show the world your clean build.' : 'Score, checks, and grade — no sensitive findings exposed.'}
+          </p>
         </div>
       )}
     </div>
@@ -608,14 +635,15 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
         </div>
       </div>
 
-      {/* Certified share prompt */}
-      {isCertified && result.scanId && (
-        <CertifiedSharePrompt
+      {/* Share prompt — available for all completed scans */}
+      {result.scanId && (
+        <SharePrompt
           scanId={result.scanId}
           domain={domain}
           score={summary.score}
           passCount={passCount}
           warnCount={warnCount}
+          failCount={failCount}
         />
       )}
 
