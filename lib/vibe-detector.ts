@@ -2,29 +2,19 @@ import * as cheerio from 'cheerio';
 import type { VibeLabel, ConfidenceLevel } from '@/types/analysis';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DETECTION MODEL OVERVIEW
+// DETECTION MODEL — Five capped buckets + negative suppressor
 //
-// Scoring is split into four capped buckets that are summed after gating:
+//   directEvidence   (max 70) — near-proof fingerprints (generator tags, platform URLs)
+//   stackPatterns    (max 45) — co-occurring AI-stack components (not individual picks)
+//   artifactPatterns (max 22) — scaffolding never cleaned up (placeholders, default titles)
+//   contentPatterns  (max 18) — AI copy / layout, gated on stack/direct evidence
+//   softScore        (max 12) — low-confidence nudges, only when other evidence exists
 //
-//   directEvidence   (max 70) — near-proof: generator tags, platform URLs
-//   stackPatterns    (max 25) — tech COMBOS, not individual libraries
-//   artifactPatterns (max 22) — scaffolding left behind (placeholders, etc.)
-//   contentPatterns  (max 15) — AI copy & structure, GATED on stack/direct
+//   negativeMultiplier (0.15–1.0) — suppresses legacy/hand-coded patterns
 //
-// A negativeMultiplier (0.15–1.0) then suppresses legacy/hand-coded sites.
-//
-// Gating rule: contentPatterns only contributes when there is either direct
-// evidence OR a meaningful stack match (stackScore ≥ 14). This prevents a
-// modern hand-coded Next.js + Tailwind + Vercel site from being flagged purely
-// because its landing page copy uses common marketing phrases.
-//
-// Signal stacking from the old flat model caused false positives: a developer
-// who chose Next.js (8) + Tailwind (6) + Vercel (8) + Supabase (20) + shadcn
-// (10) accumulated 52 pts with zero AI-specific evidence. The new model treats
-// those five choices as ONE cluster worth 22 pts at most.
+// Score → label:  ≥42 Likely Vibe-Coded  |  ≥22 Possibly  |  <22 Likely Hand-Coded
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── AI marketing copy patterns ────────────────────────────────────────────────
 const AI_COPY_PATTERNS: RegExp[] = [
   /transform\s+your\s+(workflow|business|life|world)/i,
   /get\s+started\s+(today|for\s+free|now|in\s+minutes)/i,
@@ -61,24 +51,24 @@ const PLACEHOLDER_DOMAINS = [
   'placehold.co', 'dummyimage.com', 'lorempixel.com',
 ];
 
-// Known AI coding tool fingerprints — finding any of these is near-conclusive
+// Patterns for generator meta tag and HTML comments only — kept tight to
+// avoid false positives from site content that mentions these tools by name.
 const AI_TOOLS: { pattern: RegExp; label: string }[] = [
   { pattern: /lovable/i,              label: 'Lovable' },
   { pattern: /v0\.dev|v0 by vercel/i, label: 'v0 by Vercel' },
   { pattern: /bolt\.new|stackblitz/i, label: 'Bolt / StackBlitz' },
   { pattern: /cursor\.sh/i,           label: 'Cursor' },
-  { pattern: /replit/i,               label: 'Replit' },
-  { pattern: /webflow/i,              label: 'Webflow' },
+  { pattern: /windsurf\.ai/i,         label: 'Windsurf' },
+  { pattern: /replit\.com/i,          label: 'Replit' },      // more specific than /replit/i
+  { pattern: /webflow\.com/i,         label: 'Webflow' },     // more specific than /webflow/i
   { pattern: /framer\.com/i,          label: 'Framer' },
-  { pattern: /wix/i,                  label: 'Wix' },
   { pattern: /squarespace/i,          label: 'Squarespace' },
   { pattern: /create\.t3\.gg/i,       label: 'T3 App' },
 ];
 
-// Per-bucket contribution caps — prevent any single category from dominating
 const CAPS = {
   directEvidence:   70,
-  stackPatterns:    45,  // a confirmed full AI stack should reach "Likely" on its own
+  stackPatterns:    45,  // full 4/4 stack = 42, just under the cap
   artifactPatterns: 22,
   contentPatterns:  18,
 };
@@ -98,7 +88,7 @@ export function detectVibe(
 
   const reasons: string[] = [];
 
-  // Parse URL hostname once — used in both directEvidence and hosting detection
+  // Parse hostname once — reused for both platform detection and hosting detection
   let urlHostname = '';
   if (url) { try { urlHostname = new URL(url).hostname; } catch { /* invalid URL */ } }
 
@@ -106,12 +96,13 @@ export function detectVibe(
   // BUCKET 1: Direct Evidence
   //
   // Near-deterministic proof that a specific AI tool generated the site.
-  // Uses Math.max (not addition) to avoid double-counting the same tool.
+  // Uses Math.max (not addition) so multiple signals from the same tool
+  // don't double-count.
   // ══════════════════════════════════════════════════════════════════════════
 
   let directEvidence = 0;
 
-  // Generator meta tag — the most explicit signal possible
+  // Generator meta tag — explicit tool declaration
   const generator = $('meta[name="generator"]').attr('content') ?? '';
   for (const tool of AI_TOOLS) {
     if (tool.pattern.test(generator)) {
@@ -121,8 +112,9 @@ export function detectVibe(
     }
   }
 
-  // HTML comments injected by AI tools during code generation
-  const comments = html.match(/<!--[^>]*-->/g) ?? [];
+  // HTML comments injected during AI code generation
+  // Fixed regex: [\s\S]*? handles multiline comments correctly (old [^>]* broke on >)
+  const comments = html.match(/<!--[\s\S]*?-->/g) ?? [];
   for (const c of comments) {
     for (const tool of AI_TOOLS) {
       if (tool.pattern.test(c)) {
@@ -133,8 +125,12 @@ export function detectVibe(
     }
   }
 
-  // Platform URL — hosting on these domains is conclusive
-  if (urlHostname.endsWith('.lovable.app') || urlHostname.endsWith('.lovableproject.com')) {
+  // Platform URL — hosting on these domains is near-conclusive
+  if (
+    urlHostname.endsWith('.lovable.app') ||
+    urlHostname.endsWith('.lovableproject.com') ||
+    urlHostname.endsWith('.gptengineer.app')
+  ) {
     directEvidence = Math.max(directEvidence, 65);
     reasons.push('Hosted on Lovable platform (*.lovable.app)');
   } else if (urlHostname.endsWith('.replit.app') || urlHostname.endsWith('.replit.dev')) {
@@ -145,19 +141,15 @@ export function detectVibe(
     reasons.push('Hosted on Bolt / StackBlitz');
   }
 
-  // In-source platform fingerprints
-  const lovableInSource =
-    html.includes('lovable.app') ||
-    html.includes('lovable.dev') ||
-    html.includes('lovable-uploads') ||
-    html.includes('gptengineer') ||
-    /built\s+with\s+lovable/i.test(html) ||
-    /edit\s+(in|with)\s+lovable/i.test(html);
-  if (lovableInSource) {
+  // In-source platform fingerprints embedded in the HTML body
+  if (
+    html.includes('lovable.app') || html.includes('lovable.dev') ||
+    html.includes('lovable-uploads') || html.includes('gptengineer') ||
+    /built\s+with\s+lovable/i.test(html) || /edit\s+(in|with)\s+lovable/i.test(html)
+  ) {
     directEvidence = Math.max(directEvidence, 60);
     reasons.push('Lovable platform attribution found in source');
   }
-
   if (html.includes('v0.dev') || html.includes('vercel.com/templates')) {
     directEvidence = Math.max(directEvidence, 50);
     reasons.push('v0 by Vercel fingerprint found in source');
@@ -187,61 +179,78 @@ export function detectVibe(
   // ══════════════════════════════════════════════════════════════════════════
   // BUCKET 2: Stack Patterns
   //
-  // Measures how many of the 4 canonical AI-stack components co-exist:
-  //   1. JS framework  (Next.js or Vite)
-  //   2. BaaS          (Supabase or Firebase)
-  //   3. UI kit        (shadcn / Radix / AI design tokens)
+  // Measures how many of the 4 canonical AI-stack components co-exist.
+  // The combination is the signal — not any individual choice.
+  //
+  //   1. JS framework  (Next.js / Vite)
+  //   2. BaaS          (Supabase / Firebase / Convex / Neon / Turso)
+  //   3. UI kit        (shadcn / Radix / AI CSS tokens / dense Tailwind)
   //   4. Cloud host    (Vercel / Netlify / Railway / Render / Fly)
-  //
-  // A hand-coder might use one or two of these. AI tools almost always
-  // generate all four together. That's the signal — the combo, not the parts.
-  //
-  // Clerk auth is a standalone bonus: it's the default auth layer in most
-  // AI coding tools but uncommon in long-standing hand-coded projects.
   // ══════════════════════════════════════════════════════════════════════════
 
-  const hasNextJs  = html.includes('__NEXT_DATA__') || html.includes('/_next/static');
-  const hasVite    =
+  const hasNextJs = html.includes('__NEXT_DATA__') || html.includes('/_next/static');
+  const hasVite   =
     html.includes('/@vite/client') ||
     html.includes('data-vite-theme') ||
     html.includes('data-inject-first') ||
     /\/assets\/[a-zA-Z0-9_.-]+-[A-Za-z0-9_]{6,}\.(js|css)/.test(html) ||
     (html.includes('type="module"') && html.includes('/src/main.'));
 
-  const hasSupabase  = html.includes('supabase.co') || html.includes('supabase.io') || html.includes('NEXT_PUBLIC_SUPABASE');
-  const hasFirebase  = html.includes('firebaseapp.com') || html.includes('firebase.googleapis.com');
-  const hasClerk     = html.includes('clerk.com') || html.includes('clerk.dev') || html.includes('__clerk_') || html.includes('clerk-js');
+  const hasSupabase   = html.includes('supabase.co') || html.includes('supabase.io') || html.includes('NEXT_PUBLIC_SUPABASE');
+  const hasFirebase   = html.includes('firebaseapp.com') || html.includes('firebase.googleapis.com');
+  // Modern BaaS options increasingly chosen by AI coding tools
+  const hasModernBaaS =
+    html.includes('convex.dev') || html.includes('convex.cloud') ||
+    html.includes('neon.tech') ||
+    html.includes('turso.tech') ||
+    html.includes('appwrite.io');
 
-  // shadcn/ui confirmation — score from multiple co-present Radix attributes
+  const hasClerk = html.includes('clerk.com') || html.includes('clerk.dev') || html.includes('__clerk_') || html.includes('clerk-js');
+
+  // ── shadcn/ui detection via two complementary methods ──────────────────
+  //
+  // Method A: Radix runtime attributes (present in SSR HTML for rendered components)
   let shadcnPoints = 0;
   if (html.includes('data-radix-'))  shadcnPoints += 2;
   if (html.includes('cmdk-'))        shadcnPoints += 2;
   if (html.includes('@radix-ui'))    shadcnPoints += 2;
-  if (html.includes('data-slot='))   shadcnPoints += 3; // shadcn v2 marker
+  if (html.includes('data-slot='))   shadcnPoints += 3; // shadcn v2 — exclusive marker
   if (html.includes('vaul-drawer'))  shadcnPoints += 2;
+
+  // Method B: shadcn CSS variable class names in server-rendered HTML
+  // These class names ONLY exist when shadcn's CSS variable system is configured.
+  // Regular Tailwind uses concrete values (bg-gray-100, text-gray-900); shadcn
+  // uses CSS-variable-backed names (bg-background, text-muted-foreground).
+  // Crucially, these ARE present in the initial server-rendered HTML in class attrs,
+  // making them reliable even when Radix runtime attributes haven't hydrated yet.
+  if (html.includes('bg-background'))          shadcnPoints += 2;
+  if (html.includes('text-muted-foreground'))   shadcnPoints += 3; // very shadcn-specific
+  if (html.includes('border-border'))           shadcnPoints += 2;
+  if (html.includes('bg-card'))                 shadcnPoints += 2;
+  if (html.includes('ring-offset-background'))  shadcnPoints += 2; // shadcn focus token
+  if (html.includes('text-foreground'))         shadcnPoints += 1;
+
   const hasShadcn = shadcnPoints >= 5;
   const hasRadix  = shadcnPoints >= 2;
 
-  // shadcn-exclusive CSS token names — a generic design system won't use
-  // --ring, --radius, --muted, --popover, --destructive together
+  // shadcn CSS variable token names in inline <style> blocks
   const SHADCN_TOKENS = ['ring', 'radius', 'muted', 'card', 'popover', 'destructive'];
   const shadcnTokenHits = SHADCN_TOKENS.filter(t => new RegExp(`--${t}[\\s:;]`).test(html)).length;
   const hasAiCssTokens = shadcnTokenHits >= 3;
 
-  const hasLucide       = /lucide-react|class="lucide lucide-/i.test(html);
+  const hasLucide       = /lucide-react|class="[^"]*\blucide-[^"]*"|data-lucide=/i.test(html);
   const hasFramerMotion = html.includes('framer-motion') || html.includes('data-framer-');
 
-  // Tailwind utility density — not a standalone signal, but a meaningful reinforcement
-  // when a framework + cloud host is already present. AI tools almost universally reach
-  // for Tailwind; hand-coders are more likely to mix in custom CSS.
-  const totalTags = (html.match(/<[a-z][a-z0-9]*/gi) ?? []).length;
-  const tailwindHits = totalTags > 20
-    ? (html.match(/class(?:Name)?="[^"]*(?:\bflex\b|\bgrid\b|\bp-\d|\bm-\d|\btext-\w|\bbg-\w|\bborder-\w|\brounded\b|\bshadow\b|\bgap-\d)/g) ?? []).length
+  // Tailwind density — ratio of class attributes that contain Tailwind patterns.
+  // Uses class attribute count as denominator (not total tag count) to avoid
+  // dilution from <meta>, <link>, <script> tags that never carry class attributes.
+  const classAttrs   = (html.match(/\sclass(?:Name)?="/g) ?? []).length;
+  const tailwindHits = classAttrs > 0
+    ? (html.match(/class(?:Name)?="[^"]*(?:\bflex\b|\bgrid\b|\bp-\d|\bm-\d|\btext-\w+\b|\bbg-\w+\b|\bborder-\w+\b|\brounded(?:-\w+)?\b|\bshadow(?:-\w+)?\b|\bgap-\d)/g) ?? []).length
     : 0;
-  const hasDenseTailwind = totalTags > 20 && tailwindHits / totalTags > 0.35;
+  const hasDenseTailwind = classAttrs > 10 && tailwindHits / classAttrs > 0.5;
 
-  // URL hostname is checked alongside HTML/headers — the site's own domain is
-  // the most reliable hosting signal (e.g. isthisvibecoded-one.vercel.app).
+  // Hosting detection — URL hostname is the most reliable signal
   const hasVercel  = !!headers['x-vercel-id'] || html.includes('vercel.app') || urlHostname.endsWith('.vercel.app');
   const hasNetlify = !!headers['x-nf-request-id'] || html.includes('netlify.app') || urlHostname.endsWith('.netlify.app');
   const hasRailway = html.includes('railway.app') || !!headers['x-railway-request-id'] || urlHostname.endsWith('.railway.app');
@@ -249,11 +258,7 @@ export function detectVibe(
   const hasFly     = html.includes('fly.dev') || !!headers['fly-request-id'] || urlHostname.endsWith('.fly.dev');
 
   const hasFramework = hasNextJs || hasVite;
-  const hasBaaS      = hasSupabase || hasFirebase;
-  // Dense Tailwind (with a framework) is treated as an AI UI kit signal.
-  // AI tools almost universally scaffold Tailwind; hand-coders are more likely
-  // to mix in custom CSS. Requires hasFramework to avoid counting bare static
-  // sites that happen to load Tailwind from a CDN.
+  const hasBaaS      = hasSupabase || hasFirebase || hasModernBaaS;
   const hasUiKit     = hasShadcn || hasRadix || hasAiCssTokens || (hasDenseTailwind && hasFramework);
   const hasCloudHost = hasVercel || hasNetlify || hasRailway || hasRender || hasFly;
 
@@ -263,30 +268,30 @@ export function detectVibe(
   const stackReasons: string[] = [];
 
   if (coreStackCount >= 4) {
-    stackScore = 42; // all four components co-present → conclusive pattern match
+    stackScore = 42; // all four canonical components → conclusive pattern match
     stackReasons.push('Full AI vibe-code stack: JS framework + BaaS + shadcn/UI kit + cloud host');
   } else if (coreStackCount === 3) {
     stackScore = 17;
     const parts = [
       hasFramework && 'framework',
-      hasBaaS && 'BaaS',
-      hasUiKit && 'UI kit',
+      hasBaaS      && 'BaaS',
+      hasUiKit     && 'UI kit',
       hasCloudHost && 'host',
     ].filter(Boolean) as string[];
     stackReasons.push(`Strong AI stack combo (${parts.join(' + ')})`);
   } else if (coreStackCount === 2 && (hasBaaS || hasUiKit)) {
-    // Two components, at least one of which is meaningfully AI-correlated
+    // Two components, at least one meaningfully AI-correlated
     stackScore = 10;
     stackReasons.push('Partial AI stack (framework or host + BaaS/UI kit)');
   }
 
-  // Clerk is a standalone bonus: near-exclusive to AI-scaffolded apps
+  // Clerk auth — near-exclusive to AI-scaffolded apps (standalone bonus)
   if (hasClerk) {
     stackScore = Math.min(stackScore + 8, CAPS.stackPatterns);
     stackReasons.push('Clerk authentication (default auth layer in AI coding tools)');
   }
 
-  // Lucide + Framer Motion together = textbook AI React UI choice
+  // Lucide + Framer Motion co-present = textbook AI React UI choice
   if (hasLucide && hasFramerMotion && stackScore > 0) {
     stackScore = Math.min(stackScore + 4, CAPS.stackPatterns);
     stackReasons.push('Lucide icons + Framer Motion (default AI React UI combo)');
@@ -298,8 +303,8 @@ export function detectVibe(
   // ══════════════════════════════════════════════════════════════════════════
   // BUCKET 3: Artifact Patterns
   //
-  // Evidence of scaffolding that was never cleaned up. These are strong
-  // signals regardless of stack — a real user would have replaced them.
+  // Evidence of scaffolding that was never cleaned up. Strong signals
+  // regardless of stack — a real user would have replaced these.
   // ══════════════════════════════════════════════════════════════════════════
 
   let artifactScore = 0;
@@ -337,17 +342,13 @@ export function detectVibe(
   //
   // AI marketing copy and generic SaaS page structure.
   //
-  // GATED: these signals are weak in isolation — many hand-coded SaaS sites
-  // use the exact same phrases and layouts. Content only contributes when
-  // there is already stack or direct evidence (stackScore ≥ 14 OR
-  // directEvidence > 0). Without that gate, any polished landing page
-  // would score as "Possibly Vibe-Coded".
+  // Gating is graduated — content signals are weak alone and must be
+  // supported by stack or direct evidence before they contribute:
+  //   Full  (1.0) — directEvidence > 0 OR stackScore ≥ 14
+  //   Partial (0.55) — stackScore ≥ 7 OR artifactScore ≥ 15
+  //   None  (0)   — no supporting evidence
   // ══════════════════════════════════════════════════════════════════════════
 
-  // Gating is graduated, not binary:
-  //   Full (1.0)  — direct evidence OR strong stack (≥14): content is well-supported
-  //   Partial (0.55) — modest stack (≥7) OR strong artifacts (≥15): content reinforces
-  //   None (0)  — no supporting evidence: content alone proves nothing
   let contentGate: number;
   if (directEvidence > 0 || stackScore >= 14) {
     contentGate = 1.0;
@@ -395,38 +396,57 @@ export function detectVibe(
   // ══════════════════════════════════════════════════════════════════════════
   // SOFT INDICATORS
   //
-  // Low-confidence signals that nudge borderline cases. Each is too weak to
-  // classify a site alone, but co-occurring with stack evidence they shift the
-  // probability. Fires only when there is already some positive evidence.
-  // Hard-capped at 10 to prevent inflating clean hand-coded sites.
+  // Low-confidence nudges that help borderline cases. Each is too weak to
+  // classify a site alone. Only fire when other positive evidence exists.
   // ══════════════════════════════════════════════════════════════════════════
 
   let softScore = 0;
   if (stackScore > 0 || directEvidence > 0) {
-    // Geist font — Vercel's own font, default in AI Next.js scaffolds
-    if ((html.includes('fonts.vercel.com') || html.includes('Geist')) && hasNextJs) {
+    // Geist font — Vercel's default font, auto-selected by AI Next.js scaffolds.
+    // Check for font name, CSS variable, and CDN source.
+    if (
+      (html.includes('fonts.vercel.com') || html.includes('--font-geist') || html.includes('Geist')) &&
+      hasNextJs
+    ) {
       softScore += 4;
       reasons.push('Geist font (Vercel-default typography in AI Next.js scaffolds)');
     }
-    // Vercel Analytics / Speed Insights — auto-injected by AI scaffold templates
-    if (html.includes('va.vercel-scripts.com') || html.includes('@vercel/analytics') || html.includes('vitals.vercel-insights.com')) {
+    // Vercel Analytics / Speed Insights — auto-injected by AI scaffold templates.
+    // /_vercel/insights is the script path injected at the Vercel edge level.
+    if (
+      html.includes('va.vercel-scripts.com') ||
+      html.includes('@vercel/analytics') ||
+      html.includes('vitals.vercel-insights.com') ||
+      html.includes('/_vercel/insights')
+    ) {
       softScore += 4;
       reasons.push('Vercel Analytics (auto-added by AI Next.js scaffolds)');
     }
-    // Lucide alone (Framer Motion combo already scored in stackPatterns above)
+    // Lucide icons standalone (Framer Motion combo already scored in stackPatterns)
     if (hasLucide && !hasFramerMotion) {
       softScore += 4;
       reasons.push('Lucide React icons (default icon set in AI coding tools)');
     }
-    // Sonner toast — default in shadcn/Lovable/Bolt apps
+    // Sonner toast — default in shadcn / Lovable / Bolt stacks
     if (html.includes('[data-sonner') || html.includes('sonner-toast') || /["']sonner["']/.test(html)) {
       softScore += 3;
       reasons.push('Sonner toast library (default in AI-generated shadcn stack)');
     }
-    // TanStack Query — AI default data-fetching choice
+    // TanStack Query — AI default data-fetching choice for React apps
     if (html.includes('tanstack') || html.includes('react-query') || html.includes('QueryClient')) {
       softScore += 3;
       reasons.push('TanStack Query (AI default data-fetching library)');
+    }
+    // PostHog — very commonly added by AI coding tools as the default analytics
+    if (html.includes('posthog.com') || html.includes('posthog-js') || html.includes('posthog.init')) {
+      softScore += 3;
+      reasons.push('PostHog analytics (common default in AI-generated apps)');
+    }
+    // data-testid attributes — AI tools auto-scaffold these on interactive elements
+    const testIdCount = (html.match(/data-testid=/g) ?? []).length;
+    if (testIdCount >= 5) {
+      softScore += 3;
+      reasons.push(`${testIdCount} data-testid attributes (AI tools auto-scaffold test IDs)`);
     }
     softScore = Math.min(softScore, 12);
   }
@@ -435,7 +455,8 @@ export function detectVibe(
   // NEGATIVE EVIDENCE
   //
   // Legacy / hand-coded patterns that contradict AI generation.
-  // Applied as a multiplier on the final sum — suppresses rather than zeroes.
+  // Applied as a multiplier on the total — suppresses rather than zeroes.
+  // Strong direct evidence or artifacts prevent full suppression.
   // ══════════════════════════════════════════════════════════════════════════
 
   let negativeMultiplier = 1.0;
@@ -456,8 +477,7 @@ export function detectVibe(
     reasons.push('Bootstrap CSS detected (pre-AI toolchain)');
   }
 
-  // Strong direct evidence or unambiguous artifacts should not be fully crushed by
-  // legacy signals (e.g. a Lovable app that also loads jQuery from a CDN).
+  // Don't let legacy signals fully crush strong direct evidence or artifact proof
   if (directEvidence >= 45 || artifactScore >= 18) {
     negativeMultiplier = Math.max(negativeMultiplier, 0.55);
   }
