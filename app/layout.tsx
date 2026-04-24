@@ -7,9 +7,20 @@ import { Navbar } from '@/components/Navbar';
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] });
 const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin'] });
 
+const BASE = 'https://isthisvibecoded-one.vercel.app';
+
 export const metadata: Metadata = {
   title: 'Is This Vibe-Coded?',
   description: 'Detect AI-generated websites, audit security headers, and identify tech stacks — instantly.',
+  alternates: { canonical: BASE },
+  openGraph: {
+    type: 'website',
+    url: BASE,
+    title: 'Is This Vibe-Coded?',
+    description: 'Detect AI-generated websites, audit security headers, and identify tech stacks — instantly.',
+    images: [{ url: `${BASE}/og/default.png` }],
+  },
+  twitter: { card: 'summary_large_image' },
   other: {
     'vibecoded-verification': '3da58e179094f251086315103d2d8a9a8e86',
   },

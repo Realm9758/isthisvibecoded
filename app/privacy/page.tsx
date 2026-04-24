@@ -1,9 +1,20 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 
+const BASE = 'https://isthisvibecoded-one.vercel.app';
+
 export const metadata: Metadata = {
   title: 'Privacy Policy — Is This Vibe-Coded?',
   description: 'How we handle your data, what we collect, and your rights.',
+  alternates: { canonical: `${BASE}/privacy` },
+  openGraph: {
+    type: 'website',
+    url: `${BASE}/privacy`,
+    title: 'Privacy Policy — Is This Vibe-Coded?',
+    description: 'How we handle your data, what we collect, and your rights.',
+    images: [{ url: `${BASE}/og/default.png` }],
+  },
+  twitter: { card: 'summary_large_image' },
 };
 
 export default function PrivacyPage() {

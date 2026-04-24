@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -286,16 +286,16 @@ function CommentCard({ comment: c, onLike, onReply, onEdit, onDelete, isReply }:
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
                   onClick={() => { setEditBody(c.body); setEditing(true); }}
+                  aria-label="Edit comment"
                   className="p-1 rounded text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors"
-                  title="Edit"
                 >
                   <IconEdit />
                 </button>
                 {!confirmDelete ? (
                   <button
                     onClick={() => setConfirmDelete(true)}
+                    aria-label="Delete comment"
                     className="p-1 rounded text-white/30 hover:text-red-400 hover:bg-red-500/8 transition-colors"
-                    title="Delete"
                   >
                     <IconTrash />
                   </button>
@@ -348,6 +348,7 @@ function CommentCard({ comment: c, onLike, onReply, onEdit, onDelete, isReply }:
             <div className="flex items-center gap-3 mt-2.5">
               <button
                 onClick={() => onLike(c.id)}
+                aria-label={c.liked_by_me ? 'Unlike comment' : 'Like comment'}
                 className="flex items-center gap-1.5 text-[11px] transition-colors"
                 style={{ color: c.liked_by_me ? '#f43f5e' : 'rgba(255,255,255,0.25)' }}
               >
@@ -678,11 +679,12 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
               {/* Favicon */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={`https://www.google.com/s2/favicons?domain=${site}&sz=32`}
+                src={`/api/favicon?domain=${encodeURIComponent(site)}`}
                 alt=""
                 width={28}
                 height={28}
                 className="rounded-md mt-0.5 shrink-0 opacity-90"
+                loading="lazy"
                 onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
               />
               <div className="min-w-0">
@@ -709,7 +711,7 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
                   ? { color: '#a78bfa', background: 'rgba(139,92,246,0.12)', borderColor: 'rgba(139,92,246,0.3)' }
                   : { color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.1)' }
                 }
-                title={user ? (likedScan ? 'Unlike' : 'Upvote') : 'Sign in to upvote'}
+                aria-label={user ? (likedScan ? 'Unlike scan' : 'Upvote scan') : 'Sign in to upvote'}
               >
                 <IconArrowUp />
                 {scanLikes > 0 && <span>{scanLikes}</span>}
@@ -717,6 +719,7 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
               {/* Close */}
               <button
                 onClick={onClose}
+                aria-label="Close"
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-white/35 hover:bg-white/8 hover:text-white/60 transition-colors"
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1005,10 +1008,11 @@ function LeaderboardRow({
         </div>
         <button
           onClick={onMoreInfo}
+          aria-label="More Info"
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all hover:border-violet-500/40 hover:text-violet-300"
           style={{ background: 'rgba(139,92,246,0.06)', borderColor: 'rgba(139,92,246,0.2)', color: 'rgba(167,139,250,0.7)' }}
         >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
           </svg>
           <span className="hidden sm:inline">More Info</span>
@@ -1027,28 +1031,33 @@ export default function LeaderboardPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<LeaderboardItem | null>(null);
 
-  const fetchTab = useCallback((t: Tab) => {
+  useEffect(() => {
+    const ac = new AbortController();
+    let mounted = true;
     setLoading(true);
-    if (t === 'popular') {
-      fetch('/api/scans?type=popular&limit=30')
-        .then(r => r.json())
-        .then(d => { setPopular(d); setLoading(false); })
-        .catch(() => setLoading(false));
-    } else {
-      const limit = t === 'recent' ? 50 : 30;
-      fetch(`/api/scans?type=${t}&limit=${limit}`)
-        .then(r => r.json())
-        .then(d => { setItems(d); setLoading(false); })
-        .catch(() => setLoading(false));
-    }
-  }, []);
-
-  useEffect(() => { fetchTab(tab); }, [tab, fetchTab]);
+    const url = tab === 'popular'
+      ? '/api/scans?type=popular&limit=30'
+      : `/api/scans?type=${tab}&limit=${tab === 'recent' ? 50 : 30}`;
+    fetch(url, { signal: ac.signal })
+      .then(r => r.json())
+      .then(d => {
+        if (!mounted) return;
+        if (tab === 'popular') setPopular(d); else setItems(d);
+        setLoading(false);
+      })
+      .catch(e => { if (e.name !== 'AbortError' && mounted) setLoading(false); });
+    return () => { mounted = false; ac.abort(); };
+  }, [tab]);
 
   useEffect(() => {
     if (tab !== 'recent') return;
     const interval = setInterval(() => {
-      fetch('/api/scans?type=recent&limit=50').then(r => r.json()).then(setItems);
+      const ac = new AbortController();
+      fetch('/api/scans?type=recent&limit=50', { signal: ac.signal })
+        .then(r => r.json())
+        .then(setItems)
+        .catch(() => {});
+      return () => ac.abort();
     }, 15_000);
     return () => clearInterval(interval);
   }, [tab]);
@@ -1118,7 +1127,8 @@ export default function LeaderboardPage() {
                 return (
                   <div key={item.domain} className="flex items-center gap-3 sm:gap-4 px-4 py-3.5 border-b border-white/4 last:border-0 hover:bg-white/2 transition-colors group">
                     <span className="text-sm font-bold w-6 text-right shrink-0" style={{ color: i < 3 ? '#a78bfa' : 'rgba(255,255,255,0.2)' }}>{i + 1}</span>
-                    <img src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=32`} alt="" className="w-5 h-5 rounded shrink-0 opacity-70" />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={`/api/favicon?domain=${encodeURIComponent(item.domain)}`} alt="" className="w-5 h-5 rounded shrink-0 opacity-70" loading="lazy" />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-white/80 truncate">{item.domain}</p>
                       <p className="text-[10px] text-white/30 mt-0.5">
