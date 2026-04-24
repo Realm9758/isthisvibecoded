@@ -23,13 +23,20 @@ function formatScan(s: ReturnType<typeof Object.assign>, names: Map<string, stri
   };
 }
 
+function sinceFromTime(time: string | null): number | undefined {
+  if (time === 'today') return Date.now() - 86_400_000;
+  if (time === 'week') return Date.now() - 604_800_000;
+  return undefined;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const type = searchParams.get('type') ?? 'recent';
   const limit = Math.min(50, Number(searchParams.get('limit') ?? 20));
+  const since = sinceFromTime(searchParams.get('time'));
 
   if (type === 'popular') {
-    const domains = await getMostScannedDomains(limit);
+    const domains = await getMostScannedDomains(limit, since);
     const names = await getUserNames(domains.map(d => d.latestScan.userId));
     return Response.json(domains.map(d => ({
       domain: d.domain,
@@ -48,9 +55,9 @@ export async function GET(request: Request) {
   }
 
   let scans;
-  if (type === 'vibe') scans = await getTopVibeScans(limit);
-  else if (type === 'secure') scans = await getTopSecureScans(limit);
-  else scans = await getPublicScans(limit);
+  if (type === 'vibe') scans = await getTopVibeScans(limit, since);
+  else if (type === 'secure') scans = await getTopSecureScans(limit, since);
+  else scans = await getPublicScans(limit, since);
 
   const names = await getUserNames(scans.map(s => s.userId));
   return Response.json(scans.map(s => formatScan(s, names)));

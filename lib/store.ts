@@ -182,24 +182,28 @@ function dedupeByDomain(scans: StoredScan[]): StoredScan[] {
   return [...seen.values()];
 }
 
-export async function getPublicScans(limit = 30): Promise<StoredScan[]> {
-  const { data } = await supabase
+export async function getPublicScans(limit = 30, since?: number): Promise<StoredScan[]> {
+  let query = supabase
     .from('scans')
     .select('*')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(limit * 5); // fetch extra so dedup still returns enough
+  if (since) query = query.gte('created_at', since);
+  const { data } = await query;
   const deduped = dedupeByDomain((data ?? []).map(rowToScan));
   return deduped.slice(0, limit);
 }
 
-export async function getTopVibeScans(limit = 10): Promise<StoredScan[]> {
-  const { data } = await supabase
+export async function getTopVibeScans(limit = 10, since?: number): Promise<StoredScan[]> {
+  let query = supabase
     .from('scans')
     .select('*')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(500);
+  if (since) query = query.gte('created_at', since);
+  const { data } = await query;
   // Per domain: keep the scan with the highest vibe score
   const best = new Map<string, StoredScan>();
   for (const scan of (data ?? []).map(rowToScan)) {
@@ -216,28 +220,42 @@ export async function getTopVibeScans(limit = 10): Promise<StoredScan[]> {
     .slice(0, limit);
 }
 
-export async function getTopSecureScans(limit = 10): Promise<StoredScan[]> {
-  const { data } = await supabase
+export async function getTopSecureScans(limit = 10, since?: number): Promise<StoredScan[]> {
+  let query = supabase
     .from('scans')
     .select('*')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(200);
-  return (data ?? [])
-    .map(rowToScan)
+  if (since) query = query.gte('created_at', since);
+  const { data } = await query;
+  const best = new Map<string, StoredScan>();
+  for (const scan of (data ?? []).map(rowToScan)) {
+    try {
+      const domain = new URL(scan.result.url).hostname;
+      const existing = best.get(domain);
+      if (!existing || scan.result.security.score > existing.result.security.score) {
+        best.set(domain, scan);
+      }
+    } catch { /* skip */ }
+  }
+  return [...best.values()]
     .sort((a, b) => b.result.security.score - a.result.security.score)
     .slice(0, limit);
 }
 
 export async function getMostScannedDomains(
-  limit = 10
+  limit = 10,
+  since?: number
 ): Promise<{ domain: string; count: number; latestScan: StoredScan }[]> {
-  const { data } = await supabase
+  let query = supabase
     .from('scans')
     .select('*')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(500);
+  if (since) query = query.gte('created_at', since);
+  const { data } = await query;
 
   const counts = new Map<string, { count: number; latestScan: StoredScan }>();
   for (const row of data ?? []) {

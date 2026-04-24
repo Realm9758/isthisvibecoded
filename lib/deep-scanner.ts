@@ -80,13 +80,8 @@ const SENSITIVE_FILES: {
     description: 'A PHP info page is publicly accessible.',
     remediation: 'Remove info.php from the webroot.',
   },
-  {
-    path: '/server-status',
-    title: 'Apache Server Status Exposed',
-    severity: 'high',
-    description: 'Apache mod_status exposes real-time server information including active connections and request URIs.',
-    remediation: 'Restrict /server-status to trusted IPs only, or disable mod_status.',
-  },
+  // /server-status is checked separately with content verification — a 200 response
+  // that doesn't contain actual Apache mod_status output is not a finding.
   {
     path: '/backup.sql',
     title: 'Database Backup Exposed',
@@ -129,13 +124,8 @@ const SENSITIVE_FILES: {
     description: '.DS_Store reveals directory structure metadata and filenames.',
     remediation: 'Add .DS_Store to .gitignore and block access via server config.',
   },
-  {
-    path: '/crossdomain.xml',
-    title: 'Adobe Crossdomain Policy',
-    severity: 'medium',
-    description: 'A crossdomain.xml policy file is present. Overly permissive policies enable unauthorized cross-domain access.',
-    remediation: 'Review and tighten the crossdomain.xml policy. Restrict to specific trusted domains.',
-  },
+  // crossdomain.xml is checked separately with content analysis — not via the static list
+  // because a restrictive policy file is not a vulnerability.
   {
     path: '/.npmrc',
     title: 'npm Config File Exposed',
@@ -618,7 +608,10 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
   if (!res || res.status !== 200) return [];
 
   const text = await res.text();
-  const sensitiveRe = /\/admin|\/backup|\/config|\/database|\/private|\/secret|\/internal|\/staging|\/dev\b|\/test\b/i;
+  // Only flag paths that are genuinely non-obvious and give attackers real info.
+  // /admin, /login, /dashboard are universally guessed — listing them adds no signal
+  // and Disallow: /admin is actually best practice. Focus on specific, unusual paths.
+  const sensitiveRe = /\/backup|\/database|\/private|\/secret|\/internal|\/staging|\/\.git|\/config\/|\/api\/internal|\/dev\//i;
 
   const disallowed = text
     .split('\n')
@@ -633,34 +626,121 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
       id: 'robots-sensitive-paths',
       category: 'info-disclosure',
       severity: 'low',
-      title: 'robots.txt Reveals Sensitive Paths',
-      description: `robots.txt inadvertently maps out sensitive paths: ${disallowed.join(', ')}. While it prevents crawling, it tells attackers exactly where to look.`,
+      title: 'robots.txt Reveals Non-Obvious Sensitive Paths',
+      description: `robots.txt lists specific internal paths that attackers wouldn't otherwise guess: ${disallowed.join(', ')}. While Disallow prevents crawling, it serves as a directory of targets.`,
       evidence: disallowed.map(p => `Disallow: ${p}`).join('\n'),
-      remediation: 'Remove sensitive paths from robots.txt. Security should not depend on obscurity.',
+      remediation: 'Remove non-obvious internal paths from robots.txt. Security should not depend on obscurity — protect these endpoints with authentication instead.',
     },
   ];
 }
 
+// ── crossdomain.xml — content-aware check ────────────────────────────────
+
+async function checkCrossdomain(baseUrl: string): Promise<DeepFinding[]> {
+  const res = await safeFetch(`${baseUrl}/crossdomain.xml`);
+  if (!res || res.status !== 200) return [];
+  const text = await res.text().catch(() => '');
+  // Only flag if the policy actually allows broad cross-domain access
+  const isPermissive = /allow-access-from\s+domain=["']\*["']/i.test(text)
+    || /allow-http-request-headers-from\s+domain=["']\*["']/i.test(text);
+  if (!isPermissive) return [];
+  return [{
+    id: 'crossdomain-permissive',
+    category: 'cors',
+    severity: 'high',
+    title: 'Permissive crossdomain.xml Policy',
+    description: 'crossdomain.xml allows all domains (`domain="*"`). Flash/PDF clients can make credentialed cross-origin requests from any attacker-controlled site.',
+    evidence: `GET ${baseUrl}/crossdomain.xml → 200\n${text.substring(0, 200)}`,
+    remediation: 'Replace `domain="*"` with a specific allowlist of trusted domains. If Flash/Silverlight is not used, remove the file entirely.',
+    url: `${baseUrl}/crossdomain.xml`,
+  }];
+}
+
+// ── Apache server-status — content-aware check ───────────────────────────
+
+async function checkServerStatus(baseUrl: string): Promise<DeepFinding[]> {
+  const res = await safeFetch(`${baseUrl}/server-status`);
+  if (!res || res.status !== 200) return [];
+  const text = await res.text().catch(() => '');
+  // Confirm this is actual Apache mod_status output — not just a 200 page
+  const isRealStatus = /Apache\s+Server\s+Status|Current\s+Time.*Server\s+uptime|requests\s+currently\s+being\s+processed/i.test(text);
+  if (!isRealStatus) return [];
+  return [{
+    id: 'server-status-exposed',
+    category: 'info-disclosure',
+    severity: 'high',
+    title: 'Apache Server Status Page Exposed',
+    description: 'Apache mod_status is publicly accessible, exposing real-time server info: active connections, request URIs, worker states, and client IPs — useful for targeted attacks.',
+    evidence: `GET ${baseUrl}/server-status → 200 (Apache mod_status content confirmed)`,
+    remediation: 'Restrict /server-status to localhost or trusted IPs: `Require ip 127.0.0.1`',
+    url: `${baseUrl}/server-status`,
+  }];
+}
+
 // ── Admin path discovery ──────────────────────────────────────────────────
 
+// Only paths that are unambiguously admin/management software — not generic app routes
+// like /dashboard (user dashboards) or /portal (marketing pages), /root, /manager
 const ADMIN_PATHS = [
-  '/admin', '/admin/', '/administrator', '/wp-admin', '/wp-admin/',
-  '/dashboard', '/cpanel', '/phpmyadmin', '/pma', '/manager',
-  '/admin/login', '/admin/index', '/adminpanel', '/cms', '/backend',
-  '/controlpanel', '/portal', '/superadmin', '/root',
+  '/admin', '/admin/', '/administrator', '/administrator/',
+  '/wp-admin', '/wp-admin/',
+  '/cpanel', '/phpmyadmin', '/phpmyadmin/', '/pma', '/pma/',
+  '/admin/login', '/adminpanel', '/controlpanel', '/superadmin',
+  '/manager/html', '/manager/text',  // Tomcat manager — specific path
+  '/cms', '/cms/',
+];
+
+// These specific software panels should always be flagged if reachable at all —
+// they are well-known attack targets and should never be publicly accessible.
+const ALWAYS_FLAG_PATHS = new Set([
+  '/wp-admin', '/wp-admin/', '/phpmyadmin', '/phpmyadmin/', '/pma', '/pma/',
+  '/cpanel', '/adminpanel', '/controlpanel', '/superadmin', '/manager/html',
+]);
+
+// Patterns that confirm the page is actually an admin panel with live content
+const ADMIN_CONTENT_INDICATORS = [
+  /phpMyAdmin/i,
+  /cPanel/i,
+  /Plesk\b/,
+  /WHM\b/,
+  /Webmin/i,
+  /admin(?:istrat(?:ion|or))?\s+(?:panel|console|dashboard|area)/i,
+  /manage\s+users/i,
+  /user\s+management/i,
+  /site\s+administration/i,
+];
+
+// Patterns that indicate the page is merely a login gate (admin IS protected)
+const LOGIN_GATE_PATTERNS = [
+  /type=["']password["']/i,
+  /window\.location.*login/i,
+  /href=["'][^"']*login/i,
 ];
 
 async function checkAdminPaths(baseUrl: string): Promise<DeepFinding[]> {
   const results = await Promise.allSettled(
     ADMIN_PATHS.map(async (path) => {
       const res = await safeFetch(`${baseUrl}${path}`, { redirect: 'follow' });
-      return { path, status: res?.status ?? 0 };
+      if (!res || res.status !== 200) return { path, exposed: false };
+
+      // Always flag well-known software panels on 200 — login form or not,
+      // they should not be reachable without IP restriction.
+      if (ALWAYS_FLAG_PATHS.has(path)) return { path, exposed: true };
+
+      // For generic paths, read the body and check for actual admin content.
+      // A login form returning 200 is acceptable — it means auth is required.
+      const text = await res.text().catch(() => '');
+      const isLoginGate = LOGIN_GATE_PATTERNS.some(re => re.test(text));
+      if (isLoginGate) return { path, exposed: false };
+
+      const hasAdminContent = ADMIN_CONTENT_INDICATORS.some(re => re.test(text));
+      return { path, exposed: hasAdminContent };
     })
   );
 
   const exposed = results
-    .filter(r => r.status === 'fulfilled' && r.value.status === 200)
-    .map(r => (r as PromiseFulfilledResult<{ path: string; status: number }>).value.path);
+    .filter(r => r.status === 'fulfilled' && r.value.exposed)
+    .map(r => (r as PromiseFulfilledResult<{ path: string; exposed: boolean }>).value.path);
 
   if (!exposed.length) return [];
 
@@ -668,9 +748,9 @@ async function checkAdminPaths(baseUrl: string): Promise<DeepFinding[]> {
     id: 'admin-paths-exposed',
     category: 'exposed-files',
     severity: 'high',
-    title: `Admin Panel Accessible: ${exposed.slice(0, 3).join(', ')}${exposed.length > 3 ? '…' : ''}`,
-    description: `${exposed.length} admin path${exposed.length > 1 ? 's' : ''} returned HTTP 200 without redirecting to a login page. Exposed admin panels are high-value targets.`,
-    evidence: exposed.map(p => `GET ${baseUrl}${p} → 200 OK`).join('\n'),
+    title: `Admin Panel Accessible Without Auth: ${exposed.slice(0, 3).join(', ')}${exposed.length > 3 ? '…' : ''}`,
+    description: `${exposed.length} admin path${exposed.length > 1 ? 's' : ''} returned HTTP 200 with admin panel content and no login gate. Exposed admin panels are high-value targets for attackers.`,
+    evidence: exposed.map(p => `GET ${baseUrl}${p} → 200 OK (admin content confirmed)`).join('\n'),
     remediation: 'Restrict admin paths to specific IP ranges, require authentication, or move them to a non-public subdomain.',
   }];
 }
@@ -1012,9 +1092,13 @@ async function checkForcedBrowsing(baseUrl: string): Promise<DeepFinding[]> {
     const { path, res } = r.value;
     if (!res || res.status !== 200) continue;
     const text = await res.text().catch(() => '');
+    // Require specific user/admin field names — not just any JSON with a "data" key,
+    // which would be a false positive for any standard API response envelope.
     const looksLikeData =
       (text.trimStart().startsWith('{') || text.trimStart().startsWith('[')) &&
-      (text.includes('"email"') || text.includes('"userId"') || text.includes('"role"') || text.includes('"users"') || text.includes('"data"'));
+      (text.includes('"email"') || text.includes('"userId"') || text.includes('"role"') ||
+       text.includes('"users"') || text.includes('"password"') || text.includes('"apiKey"') ||
+       text.includes('"secret"') || text.includes('"token"'));
     if (looksLikeData) exposed.push(path);
   }
 
@@ -1554,7 +1638,7 @@ function buildChecked(findings: DeepFinding[], mainRes: Response | null): import
     item('xss',        'Reflected XSS',                'Script tag injection into search/query parameters',                     findingsFor('xss-'), 'Input correctly encoded — no unencoded script reflection found'),
     item('vibe',       'Exposed Secrets in HTML',      'Supabase service role key, Stripe secret, API keys in page source',     findingsFor('vibe-'), 'No exposed secrets or dangerous keys found in page HTML'),
     item('files',      'Sensitive File Exposure',      '.env, .git, wp-config.php, phpinfo.php, backup.sql, .htaccess',         findingsFor('exposed-'), 'No sensitive files or paths accessible publicly'),
-    item('admin',      'Admin Panel Exposure',         '/admin, /wp-admin, /phpmyadmin, /cpanel, /manager, 13 more',            findingsFor('admin-'), 'No unauthenticated admin panels found at tested paths'),
+    item('admin',      'Admin Panel Exposure',         '/wp-admin, /phpmyadmin, /cpanel, /adminpanel — specific software panels', findingsFor('admin-'), 'No unauthenticated admin panels found at tested paths'),
     item('dirlist',    'Directory Listing',            '/uploads, /static, /assets, /files, /backup — open indexes',            findingsFor('directory-'), 'No open directory listings detected'),
     item('redirect',   'Open Redirect',                '?redirect=, ?url=, ?next=, ?return=, ?goto= hijacking',                 findingsFor('open-redirect'), 'No open redirect vectors found — redirect params are absent or validated'),
     item('methods',    'Dangerous HTTP Methods',       'TRACE (XST), unauthenticated PUT/DELETE',                               findingsFor('methods-'), 'No dangerous HTTP methods advertised via OPTIONS'),
@@ -1660,6 +1744,8 @@ export async function deepScanDomain(
   await run('redirect', () => checkOpenRedirect(baseUrl));
   await run('dirlist',  () => checkDirectoryListing(baseUrl));
   await run('robots',   () => checkRobotsTxt(baseUrl));
+  await run('cors',     () => checkCrossdomain(baseUrl));
+  await run('info',     () => checkServerStatus(baseUrl));
   await run('sri',        () => checkSRI(baseUrl, mainRes));
   await run('info',       () => checkInfoDisclosure(mainRes));
   await run('forced',     () => checkForcedBrowsing(baseUrl));

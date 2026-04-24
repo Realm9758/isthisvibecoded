@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -64,7 +64,22 @@ interface FullScan {
   };
 }
 
-type Tab = 'recent' | 'vibe' | 'popular';
+interface Badge {
+  emoji: string;
+  label: string;
+  color: string;
+  bg: string;
+  border: string;
+}
+
+interface Moment {
+  id: string;
+  icon: string;
+  text: string;
+}
+
+type Category = 'vibe' | 'secure' | 'recent' | 'popular';
+type TimeFilter = 'today' | 'week' | 'all';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -98,7 +113,61 @@ const RISK_BORDER: Record<string, string> = {
   Low: 'rgba(34,197,94,0.25)', Medium: 'rgba(245,158,11,0.25)', High: 'rgba(249,115,22,0.25)', Critical: 'rgba(239,68,68,0.25)',
 };
 
-// ── Small inline SVGs ──────────────────────────────────────────────────────
+const PODIUM = {
+  1: { rank: '#fbbf24', bg: 'rgba(251,191,36,0.05)',  border: 'rgba(251,191,36,0.22)', glow: 'rgba(251,191,36,0.08)' },
+  2: { rank: '#94a3b8', bg: 'rgba(148,163,184,0.04)', border: 'rgba(148,163,184,0.18)', glow: 'transparent' },
+  3: { rank: '#cd7f32', bg: 'rgba(180,110,60,0.04)',  border: 'rgba(180,110,60,0.16)', glow: 'transparent' },
+} as Record<number, { rank: string; bg: string; border: string; glow: string }>;
+
+function getBadges(item: LeaderboardItem, rank: number): Badge[] {
+  const badges: Badge[] = [];
+  const age = Date.now() - item.createdAt;
+
+  if (rank === 1)
+    badges.push({ emoji: '👑', label: 'Champion', color: '#fbbf24', bg: 'rgba(251,191,36,0.1)', border: 'rgba(251,191,36,0.3)' });
+  if (item.vibeScore >= 95 && item.securityScore >= 95)
+    badges.push({ emoji: '💯', label: 'Flawless', color: '#a78bfa', bg: 'rgba(167,139,250,0.1)', border: 'rgba(167,139,250,0.3)' });
+  else if (item.securityScore >= 90)
+    badges.push({ emoji: '🔒', label: 'Fortress', color: '#34d399', bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.25)' });
+  if (item.vibeScore >= 90 && !(item.vibeScore >= 95 && item.securityScore >= 95))
+    badges.push({ emoji: '🔥', label: 'Pure Vibe', color: '#c4b5fd', bg: 'rgba(139,92,246,0.1)', border: 'rgba(139,92,246,0.28)' });
+  if (age < 3_600_000)
+    badges.push({ emoji: '🆕', label: 'Just Arrived', color: '#38bdf8', bg: 'rgba(56,189,248,0.08)', border: 'rgba(56,189,248,0.22)' });
+
+  return badges.slice(0, 2);
+}
+
+function generateMoments(items: LeaderboardItem[], category: Category): Moment[] {
+  const moments: Moment[] = [];
+  if (items.length === 0) return moments;
+
+  const top = items[0];
+  const topAge = Date.now() - top.createdAt;
+
+  if (topAge < 3_600_000 && (category === 'vibe' || category === 'secure'))
+    moments.push({ id: 'new-1', icon: '👑', text: `New #1 just dropped — ${hostname(top.url)}` });
+
+  const perfect = items.find(i => i.vibeScore >= 99 && i.securityScore >= 99);
+  if (perfect)
+    moments.push({ id: 'perfect', icon: '💯', text: `${hostname(perfect.url)} hit a perfect score` });
+
+  const rocketEntry = items.find((i, idx) => idx > 8 && Date.now() - i.createdAt < 7_200_000 && i.vibeScore >= 85);
+  if (rocketEntry)
+    moments.push({ id: 'rocket', icon: '🚀', text: `${hostname(rocketEntry.url)} is a new high-scorer` });
+
+  return moments;
+}
+
+function buildApiUrl(category: Category, time: TimeFilter): string {
+  const limit = category === 'recent' ? 50 : 30;
+  let url = `/api/scans?type=${category}&limit=${limit}`;
+  if ((category === 'vibe' || category === 'secure' || category === 'popular') && time !== 'all') {
+    url += `&time=${time}`;
+  }
+  return url;
+}
+
+// ── Icons ──────────────────────────────────────────────────────────────────
 
 function IconHeart({ filled }: { filled?: boolean }) {
   return (
@@ -165,6 +234,15 @@ function IconUser() {
     </svg>
   );
 }
+function IconScan() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+      <path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+      <line x1="7" y1="12" x2="17" y2="12"/>
+    </svg>
+  );
+}
 
 // Tech stack color map
 const TECH_COLORS: Record<string, { color: string; bg: string; border: string }> = {
@@ -186,7 +264,7 @@ function getTechStyle(name: string) {
   return TECH_COLORS[name.toLowerCase()] ?? { color: 'rgba(255,255,255,0.55)', bg: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.1)' };
 }
 
-// ── Progress bar ───────────────────────────────────────────────────────────
+// ── ProgressBar ────────────────────────────────────────────────────────────
 
 function ProgressBar({ value, max = 100, color }: { value: number; max?: number; color: string }) {
   const pct = Math.min(100, Math.round((value / max) * 100));
@@ -200,7 +278,7 @@ function ProgressBar({ value, max = 100, color }: { value: number; max?: number;
   );
 }
 
-// ── Section header ─────────────────────────────────────────────────────────
+// ── SectionHeader ──────────────────────────────────────────────────────────
 
 function SectionHeader({ label, icon }: { label: string; icon?: React.ReactNode }) {
   return (
@@ -215,6 +293,165 @@ function SectionHeader({ label, icon }: { label: string; icon?: React.ReactNode 
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`rounded-lg bg-white/5 animate-pulse ${className ?? ''}`} />;
+}
+
+// ── LiveTicker ─────────────────────────────────────────────────────────────
+
+function LiveTicker({ items }: { items: LeaderboardItem[] }) {
+  if (items.length === 0) return null;
+
+  const segments = items.map(item => {
+    const vc = getVibeColor(item.vibeScore);
+    const sc = getSecColor(item.securityScore);
+    return { domain: hostname(item.url), vibeScore: item.vibeScore, secScore: item.securityScore, vc, sc, ago: timeAgo(item.createdAt) };
+  });
+
+  // Duplicate to create seamless loop
+  const all = [...segments, ...segments];
+
+  return (
+    <div
+      className="border-b border-white/6 overflow-hidden"
+      style={{ background: 'rgba(139,92,246,0.03)', height: '34px' }}
+    >
+      <style>{`
+        @keyframes ticker-scroll {
+          0%   { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+        .ticker-track { animation: ticker-scroll ${Math.max(30, segments.length * 8)}s linear infinite; }
+        .ticker-track:hover { animation-play-state: paused; }
+      `}</style>
+      <div className="ticker-track flex items-center h-full gap-0 whitespace-nowrap">
+        {all.map((seg, i) => (
+          <span key={i} className="flex items-center gap-2 px-5 text-[11px]">
+            <span className="text-white/20">🔍</span>
+            <span className="text-white/55 font-medium">{seg.domain}</span>
+            <span className="text-white/20">—</span>
+            <span className="font-semibold tabular-nums" style={{ color: seg.vc }}>{seg.vibeScore}</span>
+            <span className="text-white/20 text-[9px]">vibe</span>
+            <span className="font-semibold tabular-nums" style={{ color: seg.sc }}>{seg.secScore}</span>
+            <span className="text-white/20 text-[9px]">sec</span>
+            <span className="text-white/20">·</span>
+            <span className="text-white/25">{seg.ago}</span>
+            <span className="text-white/10 ml-3">│</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── MomentToasts ───────────────────────────────────────────────────────────
+
+function MomentToasts({ moments }: { moments: Moment[] }) {
+  const [visible, setVisible] = useState<Moment | null>(null);
+  const [queue, setQueue] = useState<Moment[]>([]);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (moments.length > 0) {
+      setTimeout(() => setQueue(moments), 2000); // delay first toast
+    }
+  }, [moments]);
+
+  useEffect(() => {
+    if (!visible && queue.length > 0) {
+      const [next, ...rest] = queue;
+      setVisible(next);
+      setQueue(rest);
+    }
+  }, [visible, queue]);
+
+  useEffect(() => {
+    if (!visible) return;
+    timerRef.current = setTimeout(() => setVisible(null), 5000);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <div
+      className="fixed top-20 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl"
+      style={{
+        background: 'rgba(13,13,22,0.95)',
+        borderColor: 'rgba(139,92,246,0.3)',
+        backdropFilter: 'blur(16px)',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(139,92,246,0.1)',
+        animation: 'moment-in 0.3s ease',
+      }}
+    >
+      <style>{`
+        @keyframes moment-in {
+          from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      `}</style>
+      <span className="text-base">{visible.icon}</span>
+      <p className="text-xs text-white/70 max-w-[220px]">{visible.text}</p>
+      <button
+        onClick={() => setVisible(null)}
+        className="ml-1 text-white/25 hover:text-white/55 transition-colors text-sm leading-none"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+// ── PersonalRankStrip ──────────────────────────────────────────────────────
+
+function PersonalRankStrip({ items, category }: { items: LeaderboardItem[]; category: Category }) {
+  const { user } = useAuth();
+  if (!user) return null;
+
+  const myRank = items.findIndex(i => i.scannedBy === user.name);
+  if (myRank === -1) return null;
+
+  const item = items[myRank];
+  const rank = myRank + 1;
+  const isNearTop10 = rank > 7 && rank <= 15;
+
+  return (
+    <div
+      className="fixed bottom-0 left-0 right-0 z-40 border-t border-violet-500/20"
+      style={{ background: 'rgba(10,10,20,0.97)', backdropFilter: 'blur(20px)' }}
+    >
+      <div className="max-w-3xl mx-auto px-6 py-3 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+            style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.25)' }}
+          >
+            {user.name[0]?.toUpperCase()}
+          </div>
+          <div>
+            <p className="text-xs text-white/70">
+              <span className="font-semibold text-white">@{user.name}</span>
+              {' '}·{' '}
+              <span className="font-bold tabular-nums" style={{ color: rank <= 3 ? '#fbbf24' : '#a78bfa' }}>#{rank}</span>
+              {' '}on{' '}
+              <span className="text-white/50">{hostname(item.url)}</span>
+            </p>
+            {isNearTop10 && (
+              <p className="text-[10px] text-amber-400/70 mt-0.5">
+                You&rsquo;re close to top 10 — scan again to improve your score
+              </p>
+            )}
+          </div>
+        </div>
+        <Link
+          href="/"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all shrink-0"
+          style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.3)' }}
+        >
+          <IconScan />
+          Scan again
+        </Link>
+      </div>
+    </div>
+  );
 }
 
 // ── Comment component ──────────────────────────────────────────────────────
@@ -266,7 +503,6 @@ function CommentCard({ comment: c, onLike, onReply, onEdit, onDelete, isReply }:
         }}
       >
         <div className="p-3">
-          {/* Header */}
           <div className="flex items-start justify-between gap-2 mb-2">
             <div className="flex items-center gap-2">
               <div
@@ -281,7 +517,6 @@ function CommentCard({ comment: c, onLike, onReply, onEdit, onDelete, isReply }:
                 {c.edited_at && <span className="text-[9px] text-white/20 ml-1.5 italic">edited</span>}
               </div>
             </div>
-            {/* Actions (visible on hover or if own) */}
             {c.is_mine && !editing && (
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
@@ -313,7 +548,6 @@ function CommentCard({ comment: c, onLike, onReply, onEdit, onDelete, isReply }:
             )}
           </div>
 
-          {/* Body */}
           {editing ? (
             <div className="space-y-2">
               <textarea
@@ -343,7 +577,6 @@ function CommentCard({ comment: c, onLike, onReply, onEdit, onDelete, isReply }:
             <p className="text-sm text-white/60 leading-relaxed">{c.body}</p>
           )}
 
-          {/* Footer actions */}
           {!editing && (
             <div className="flex items-center gap-3 mt-2.5">
               <button
@@ -368,7 +601,6 @@ function CommentCard({ comment: c, onLike, onReply, onEdit, onDelete, isReply }:
           )}
         </div>
 
-        {/* Replies */}
         {c.replies && c.replies.length > 0 && (
           <div className="border-t border-white/5 px-3 pb-3 pt-2 space-y-2">
             {c.replies.map(reply => (
@@ -389,7 +621,7 @@ function CommentCard({ comment: c, onLike, onReply, onEdit, onDelete, isReply }:
   );
 }
 
-// ── Comments section ───────────────────────────────────────────────────────
+// ── CommentsSection ────────────────────────────────────────────────────────
 
 function CommentsSection({ scanId }: { scanId: string }) {
   const { user } = useAuth();
@@ -407,7 +639,6 @@ function CommentsSection({ scanId }: { scanId: string }) {
       .then(r => r.json())
       .then(d => {
         if (!Array.isArray(d)) return;
-        // Nest replies under their parents
         const top: Comment[] = [];
         const map = new Map<string, Comment>();
         for (const c of d) { map.set(c.id, { ...c, replies: [] }); }
@@ -418,14 +649,12 @@ function CommentsSection({ scanId }: { scanId: string }) {
             top.push(c);
           }
         }
-        // Sort top-level newest first, replies oldest first
         top.sort((a, b) => b.created_at - a.created_at);
         setComments(top);
       })
       .finally(() => setLoading(false));
   }, [scanId]);
 
-  // Focus textarea when reply is set
   useEffect(() => {
     if (replyTo) textRef.current?.focus();
   }, [replyTo]);
@@ -443,12 +672,9 @@ function CommentsSection({ scanId }: { scanId: string }) {
       });
       const data = await res.json();
       if (!res.ok) { setError(data.error ?? 'Failed to post'); return; }
-
       if (replyTo) {
         setComments(prev => prev.map(c =>
-          c.id === replyTo.id
-            ? { ...c, replies: [...(c.replies ?? []), data] }
-            : c
+          c.id === replyTo.id ? { ...c, replies: [...(c.replies ?? []), data] } : c
         ));
         setReplyTo(null);
       } else {
@@ -467,31 +693,29 @@ function CommentsSection({ scanId }: { scanId: string }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ commentId }),
     }).then(r => r.json()).then(data => {
-      function updateComment(c: Comment): Comment {
+      function update(c: Comment): Comment {
         if (c.id === commentId) return { ...c, liked_by_me: data.liked, like_count: data.count };
-        if (c.replies) return { ...c, replies: c.replies.map(updateComment) };
+        if (c.replies) return { ...c, replies: c.replies.map(update) };
         return c;
       }
-      setComments(prev => prev.map(updateComment));
+      setComments(prev => prev.map(update));
     });
   }
 
   function handleEdit(commentId: string, newBody: string) {
-    function updateComment(c: Comment): Comment {
+    function update(c: Comment): Comment {
       if (c.id === commentId) return { ...c, body: newBody, edited_at: Date.now() };
-      if (c.replies) return { ...c, replies: c.replies.map(updateComment) };
+      if (c.replies) return { ...c, replies: c.replies.map(update) };
       return c;
     }
-    setComments(prev => prev.map(updateComment));
+    setComments(prev => prev.map(update));
   }
 
   function handleDelete(commentId: string) {
-    function removeComment(list: Comment[]): Comment[] {
-      return list
-        .filter(c => c.id !== commentId)
-        .map(c => ({ ...c, replies: removeComment(c.replies ?? []) }));
+    function remove(list: Comment[]): Comment[] {
+      return list.filter(c => c.id !== commentId).map(c => ({ ...c, replies: remove(c.replies ?? []) }));
     }
-    setComments(prev => removeComment(prev));
+    setComments(prev => remove(prev));
   }
 
   const topCount = comments.length;
@@ -508,7 +732,6 @@ function CommentsSection({ scanId }: { scanId: string }) {
         }
       />
 
-      {/* Post form */}
       {user ? (
         <form onSubmit={handlePost} className="mb-4">
           {replyTo && (
@@ -568,11 +791,8 @@ function CommentsSection({ scanId }: { scanId: string }) {
         </div>
       )}
 
-      {/* Comment list */}
       {loading ? (
-        <div className="space-y-2">
-          {[1, 2].map(i => <Skeleton key={i} className="h-16" />)}
-        </div>
+        <div className="space-y-2">{[1, 2].map(i => <Skeleton key={i} className="h-16" />)}</div>
       ) : topCount === 0 ? (
         <div className="text-center py-8 rounded-xl border border-white/5" style={{ background: 'rgba(255,255,255,0.015)' }}>
           <p className="text-xs text-white/25">No comments yet. Start the discussion.</p>
@@ -595,7 +815,7 @@ function CommentsSection({ scanId }: { scanId: string }) {
   );
 }
 
-// ── More Info modal ────────────────────────────────────────────────────────
+// ── MoreInfoModal ──────────────────────────────────────────────────────────
 
 function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () => void }) {
   const { user } = useAuth();
@@ -612,7 +832,6 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
   const riskBorder = RISK_BORDER[item.riskLevel] ?? 'rgba(148,163,184,0.15)';
   const site = hostname(item.url);
 
-  // Fetch full scan data + scan likes
   useEffect(() => {
     setScanLoading(true);
     Promise.all([
@@ -635,7 +854,6 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
     setLikingScanning(false);
   }
 
-  // Keyboard + body scroll
   useEffect(() => {
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
     window.addEventListener('keydown', onKey);
@@ -647,12 +865,10 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
     if (e.target === e.currentTarget) onClose();
   }
 
-  // Security findings from full scan
   const missingHeaders = fullScan?.result.security.headers.filter(h => !h.present) ?? [];
   const exposedKeys    = fullScan?.result.publicKeys.filter(k => k.risk === 'high' || k.risk === 'medium') ?? [];
   const noHttps        = fullScan && !fullScan.result.security.httpsEnabled;
   const vibeReasons    = fullScan?.result.vibe.reasons ?? [];
-
   const allTech = [...(fullScan?.result.techStack.map(t => t.name) ?? item.techStack)];
   if (item.hosting && !allTech.some(t => t.toLowerCase() === item.hosting?.toLowerCase())) {
     allTech.push(item.hosting);
@@ -669,14 +885,13 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
         style={{ background: '#0d0d16' }}
         onClick={e => e.stopPropagation()}
       >
-        {/* ── Sticky header ── */}
+        {/* Sticky header */}
         <div
           className="sticky top-0 z-10 rounded-t-2xl sm:rounded-t-2xl border-b border-white/8 px-5 py-4"
           style={{ background: 'rgba(13,13,22,0.98)', backdropFilter: 'blur(16px)' }}
         >
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-3 min-w-0 flex-1">
-              {/* Favicon */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`/api/favicon?domain=${encodeURIComponent(site)}`}
@@ -703,7 +918,6 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              {/* Scan upvote */}
               <button
                 onClick={toggleScanLike}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all"
@@ -716,7 +930,6 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
                 <IconArrowUp />
                 {scanLikes > 0 && <span>{scanLikes}</span>}
               </button>
-              {/* Close */}
               <button
                 onClick={onClose}
                 aria-label="Close"
@@ -730,28 +943,18 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
           </div>
         </div>
 
-        {/* ── Scrollable body ── */}
+        {/* Scrollable body */}
         <div className="overflow-y-auto flex-1 px-5 py-5 space-y-6">
-
-          {/* ── Overview scores ── */}
           <div>
             <SectionHeader label="Overview" />
             <div className="grid grid-cols-2 gap-3">
-              {/* Vibe score */}
-              <div
-                className="rounded-xl border p-4"
-                style={{ background: `${vc}0d`, borderColor: `${vc}30` }}
-              >
+              <div className="rounded-xl border p-4" style={{ background: `${vc}0d`, borderColor: `${vc}30` }}>
                 <p className="text-[10px] text-white/35 uppercase tracking-wider mb-2">Vibe-Coded Score</p>
                 <p className="text-3xl font-black tabular-nums mb-1" style={{ color: vc }}>{item.vibeScore}<span className="text-sm font-medium text-white/30">%</span></p>
                 <p className="text-xs mb-2.5" style={{ color: `${vc}cc` }}>{item.vibeLabel}</p>
                 <ProgressBar value={item.vibeScore} color={vc} />
               </div>
-              {/* Security score */}
-              <div
-                className="rounded-xl border p-4"
-                style={{ background: `${sc}0d`, borderColor: `${sc}30` }}
-              >
+              <div className="rounded-xl border p-4" style={{ background: `${sc}0d`, borderColor: `${sc}30` }}>
                 <p className="text-[10px] text-white/35 uppercase tracking-wider mb-2">Security Score</p>
                 <p className="text-3xl font-black tabular-nums mb-1" style={{ color: sc }}>{item.securityScore}<span className="text-sm font-medium text-white/30">/100</span></p>
                 <p className="text-xs font-semibold mb-2.5" style={{ color: riskColor }}>{item.riskLevel} Risk</p>
@@ -760,7 +963,6 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             </div>
           </div>
 
-          {/* ── Tech stack ── */}
           {allTech.length > 0 && (
             <div>
               <SectionHeader label="Tech Stack" />
@@ -782,31 +984,23 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             </div>
           )}
 
-          {/* ── Risk breakdown ── */}
           <div>
             <SectionHeader label="Risk Breakdown" icon={<IconShield />} />
             <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)' }}>
               <div className="divide-y divide-white/5">
                 <div className="px-4 py-3 flex items-center gap-4">
                   <p className="text-xs text-white/45 w-36 shrink-0">Vibe-coded likelihood</p>
-                  <div className="flex-1">
-                    <ProgressBar value={item.vibeScore} color={vc} />
-                  </div>
+                  <div className="flex-1"><ProgressBar value={item.vibeScore} color={vc} /></div>
                   <span className="text-xs font-bold tabular-nums w-10 text-right shrink-0" style={{ color: vc }}>{item.vibeScore}%</span>
                 </div>
                 <div className="px-4 py-3 flex items-center gap-4">
                   <p className="text-xs text-white/45 w-36 shrink-0">Security posture</p>
-                  <div className="flex-1">
-                    <ProgressBar value={item.securityScore} color={sc} />
-                  </div>
+                  <div className="flex-1"><ProgressBar value={item.securityScore} color={sc} /></div>
                   <span className="text-xs font-bold tabular-nums w-10 text-right shrink-0" style={{ color: sc }}>{item.securityScore}</span>
                 </div>
                 <div className="px-4 py-3 flex items-center justify-between">
                   <p className="text-xs text-white/45">Overall risk level</p>
-                  <span
-                    className="text-[11px] font-bold px-2.5 py-1 rounded-full border"
-                    style={{ color: riskColor, background: riskBg, borderColor: riskBorder }}
-                  >
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-full border" style={{ color: riskColor, background: riskBg, borderColor: riskBorder }}>
                     {item.riskLevel} Risk
                   </span>
                 </div>
@@ -814,7 +1008,6 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             </div>
           </div>
 
-          {/* ── Vibe signals ── */}
           {scanLoading ? (
             <div><SectionHeader label="Vibe Signals" /><div className="space-y-2"><Skeleton className="h-7" /><Skeleton className="h-7 w-4/5" /><Skeleton className="h-7 w-2/3" /></div></div>
           ) : vibeReasons.length > 0 ? (
@@ -822,10 +1015,7 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
               <SectionHeader label="Vibe Signals" />
               <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: 'rgba(139,92,246,0.03)' }}>
                 {vibeReasons.map((r, i) => (
-                  <div
-                    key={i}
-                    className="flex items-start gap-3 px-4 py-2.5 border-b border-white/5 last:border-0"
-                  >
+                  <div key={i} className="flex items-start gap-3 px-4 py-2.5 border-b border-white/5 last:border-0">
                     <span className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ background: vc }} />
                     <p className="text-xs text-white/55 leading-relaxed">{r}</p>
                   </div>
@@ -839,7 +1029,6 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             </div>
           )}
 
-          {/* ── Security findings ── */}
           {scanLoading ? (
             <div><SectionHeader label="Security Findings" /><div className="space-y-2"><Skeleton className="h-8" /><Skeleton className="h-8 w-5/6" /></div></div>
           ) : (noHttps || missingHeaders.length > 0 || exposedKeys.length > 0) ? (
@@ -880,13 +1069,9 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             </div>
           ) : null}
 
-          {/* ── Most recent scan ── */}
           <div>
             <SectionHeader label="Most Recent Scan" icon={<IconClock />} />
-            <div
-              className="rounded-xl border p-4"
-              style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}
-            >
+            <div className="rounded-xl border p-4" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
               <div className="flex items-start gap-3">
                 <div
                   className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
@@ -917,7 +1102,6 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             </div>
           </div>
 
-          {/* ── Full report CTA ── */}
           <Link
             href={`/result/${item.id}`}
             className="flex items-center justify-between gap-3 w-full px-5 py-3.5 rounded-xl border border-violet-500/25 transition-all group hover:border-violet-500/45"
@@ -940,18 +1124,16 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             </div>
           </Link>
 
-          {/* ── Discussion ── */}
           <div className="border-t border-white/6 pt-5">
             <CommentsSection scanId={item.id} />
           </div>
-
         </div>
       </div>
     </div>
   );
 }
 
-// ── Leaderboard row ────────────────────────────────────────────────────────
+// ── LeaderboardRow ─────────────────────────────────────────────────────────
 
 function LeaderboardRow({
   item,
@@ -965,20 +1147,77 @@ function LeaderboardRow({
   const vc = getVibeColor(item.vibeScore);
   const sc = getSecColor(item.securityScore);
   const site = hostname(item.url);
+  const podium = rank !== undefined && rank <= 3 ? PODIUM[rank] : null;
+  const badges = rank !== undefined ? getBadges(item, rank) : [];
+  const isNew = Date.now() - item.createdAt < 3_600_000;
 
   return (
-    <div className="flex items-center gap-3 sm:gap-4 px-4 py-3.5 border-b border-white/4 last:border-0 hover:bg-white/2 transition-colors group">
-      {rank !== undefined && (
-        <span className="text-sm font-bold w-6 text-right shrink-0" style={{ color: rank <= 3 ? '#a78bfa' : 'rgba(255,255,255,0.2)' }}>
-          {rank}
-        </span>
+    <div
+      className="relative flex items-center gap-3 sm:gap-4 px-4 py-3.5 border-b border-white/4 last:border-0 transition-colors group"
+      style={podium
+        ? { background: podium.bg, borderColor: podium.border }
+        : { background: 'transparent' }
+      }
+    >
+      {/* Gold shimmer line for #1 */}
+      {rank === 1 && (
+        <div
+          className="absolute inset-x-0 top-0 h-px"
+          style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(251,191,36,0.5) 50%, transparent 100%)' }}
+        />
       )}
 
+      {/* Rank */}
+      {rank !== undefined && (
+        <div className="flex flex-col items-center justify-center w-7 shrink-0">
+          {rank === 1 && <span className="text-[11px] leading-none mb-0.5">👑</span>}
+          <span
+            className="text-sm font-bold font-mono leading-none"
+            style={{ color: podium?.rank ?? 'rgba(255,255,255,0.2)' }}
+          >
+            {rank}
+          </span>
+        </div>
+      )}
+
+      {/* Favicon */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`/api/favicon?domain=${encodeURIComponent(site)}`}
+        alt=""
+        className="w-5 h-5 rounded shrink-0"
+        style={{ opacity: podium ? 0.9 : 0.65 }}
+        loading="lazy"
+        onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+      />
+
+      {/* Site info */}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-white/80 truncate">{site}</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <p
+            className="text-sm font-semibold truncate"
+            style={{ color: rank === 1 ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.8)' }}
+          >
+            {site}
+          </p>
+          {badges.map(b => (
+            <span
+              key={b.label}
+              className="hidden sm:inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap"
+              style={{ color: b.color, background: b.bg, borderColor: b.border }}
+            >
+              {b.emoji} {b.label}
+            </span>
+          ))}
+          {isNew && badges.length === 0 && (
+            <span className="hidden sm:inline text-[9px] font-bold px-1.5 py-0.5 rounded-full border text-sky-400 bg-sky-500/8 border-sky-500/20 whitespace-nowrap">
+              🆕 New
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2 mt-0.5 flex-wrap">
           {item.techStack.slice(0, 2).map(t => (
-            <span key={t} className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">{t}</span>
+            <span key={t} className="text-[10px] text-white/30 bg-white/4 px-1.5 py-0.5 rounded">{t}</span>
           ))}
           {item.scannedBy && item.scannedBy !== 'Anonymous' ? (
             <Link
@@ -988,15 +1227,12 @@ function LeaderboardRow({
             >
               @{item.scannedBy}
             </Link>
-          ) : (
-            <span className="text-[10px] text-white/20">{timeAgo(item.createdAt)}</span>
-          )}
-          {item.scannedBy && item.scannedBy !== 'Anonymous' && (
-            <span className="text-[10px] text-white/20">{timeAgo(item.createdAt)}</span>
-          )}
+          ) : null}
+          <span className="text-[10px] text-white/20">{timeAgo(item.createdAt)}</span>
         </div>
       </div>
 
+      {/* Scores + CTA */}
       <div className="flex items-center gap-3 sm:gap-4 shrink-0">
         <div className="text-center hidden sm:block">
           <p className="text-sm font-bold tabular-nums leading-none" style={{ color: vc }}>{item.vibeScore}</p>
@@ -1024,81 +1260,185 @@ function LeaderboardRow({
 
 // ── Main page ──────────────────────────────────────────────────────────────
 
+const CATEGORIES: { id: Category; emoji: string; label: string }[] = [
+  { id: 'vibe',    emoji: '🔥', label: 'Most Vibes' },
+  { id: 'secure',  emoji: '🔒', label: 'Built Like a Vault' },
+  { id: 'recent',  emoji: '⚡', label: 'Just Arrived' },
+  { id: 'popular', emoji: '📊', label: 'Most Scanned' },
+];
+
+const TIME_FILTERS: { id: TimeFilter; label: string }[] = [
+  { id: 'today', label: 'Today' },
+  { id: 'week',  label: 'This Week' },
+  { id: 'all',   label: 'All Time' },
+];
+
 export default function LeaderboardPage() {
-  const [tab, setTab] = useState<Tab>('vibe');
+  const { user } = useAuth();
+  const [category, setCategory] = useState<Category>('vibe');
+  const [time, setTime] = useState<TimeFilter>('all');
   const [items, setItems] = useState<LeaderboardItem[]>([]);
   const [popular, setPopular] = useState<PopularItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<LeaderboardItem | null>(null);
+  const [tickerItems, setTickerItems] = useState<LeaderboardItem[]>([]);
+  const [moments, setMoments] = useState<Moment[]>([]);
 
+  // Fetch ticker items (always recent, always all-time)
   useEffect(() => {
+    fetch('/api/scans?type=recent&limit=15')
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setTickerItems(d); })
+      .catch(() => {});
+
+    const interval = setInterval(() => {
+      fetch('/api/scans?type=recent&limit=15')
+        .then(r => r.json())
+        .then(d => { if (Array.isArray(d)) setTickerItems(d); })
+        .catch(() => {});
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch main leaderboard
+  const fetchData = useCallback(() => {
     const ac = new AbortController();
-    let mounted = true;
     setLoading(true);
-    const url = tab === 'popular'
-      ? '/api/scans?type=popular&limit=30'
-      : `/api/scans?type=${tab}&limit=${tab === 'recent' ? 50 : 30}`;
+    const url = buildApiUrl(category, time);
     fetch(url, { signal: ac.signal })
       .then(r => r.json())
       .then(d => {
-        if (!mounted) return;
-        if (tab === 'popular') setPopular(d); else setItems(d);
+        if (category === 'popular') {
+          setPopular(Array.isArray(d) ? d : []);
+          setItems([]);
+        } else {
+          setItems(Array.isArray(d) ? d : []);
+          setPopular([]);
+        }
         setLoading(false);
       })
-      .catch(e => { if (e.name !== 'AbortError' && mounted) setLoading(false); });
-    return () => { mounted = false; ac.abort(); };
-  }, [tab]);
+      .catch(e => { if (e.name !== 'AbortError') setLoading(false); });
+    return () => ac.abort();
+  }, [category, time]);
 
   useEffect(() => {
-    if (tab !== 'recent') return;
+    const cleanup = fetchData();
+    return cleanup;
+  }, [fetchData]);
+
+  // Auto-refresh recent tab
+  useEffect(() => {
+    if (category !== 'recent') return;
     const interval = setInterval(() => {
-      const ac = new AbortController();
-      fetch('/api/scans?type=recent&limit=50', { signal: ac.signal })
+      fetch(buildApiUrl('recent', time))
         .then(r => r.json())
-        .then(setItems)
+        .then(d => { if (Array.isArray(d)) setItems(d); })
         .catch(() => {});
-      return () => ac.abort();
     }, 15_000);
     return () => clearInterval(interval);
-  }, [tab]);
+  }, [category, time]);
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'recent',  label: 'Most Recent' },
-    { id: 'vibe',    label: 'Most Vibe-Coded' },
-    { id: 'popular', label: 'Most Scanned' },
-  ];
+  // Generate moments when data loads
+  useEffect(() => {
+    if (items.length > 0) {
+      setMoments(generateMoments(items, category));
+    }
+  }, [items, category]);
+
+  const showTimeFilter = category === 'vibe' || category === 'secure' || category === 'popular';
+  const hasPersonalRank = !loading && items.length > 0;
 
   return (
-    <main className="min-h-screen px-6 py-16" style={{ background: '#0a0a0f' }}>
+    <main className="min-h-screen" style={{ background: '#0a0a0f' }}>
+      <style>{`
+        @keyframes fade-up {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
+
+      {/* Ambient gradient */}
       <div
         className="fixed inset-0 pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse 60% 40% at 50% 0%, rgba(139,92,246,0.07) 0%, transparent 70%)' }}
+        style={{ background: 'radial-gradient(ellipse 70% 45% at 50% 0%, rgba(139,92,246,0.08) 0%, transparent 70%)' }}
       />
-      <div className="relative max-w-3xl mx-auto">
-        <div className="mb-10 text-center">
-          <h1 className="text-3xl font-bold text-white mb-2">Leaderboard</h1>
-          <p className="text-white/40 text-sm">Community-scanned sites ranked by security and vibe-code detection</p>
+
+      {/* Live ticker */}
+      <LiveTicker items={tickerItems} />
+
+      {/* Moment toasts */}
+      <MomentToasts moments={moments} />
+
+      <div className="relative max-w-3xl mx-auto px-6 py-12">
+
+        {/* ── Hero ── */}
+        <div className="mb-10 text-center" style={{ animation: 'fade-up 0.5s ease' }}>
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-violet-500/20 text-[11px] text-violet-300/60 mb-4" style={{ background: 'rgba(139,92,246,0.06)' }}>
+            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+            Live rankings · updated in real time
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight">
+            Who&rsquo;s Built Different
+          </h1>
+          <p className="text-white/40 text-sm mb-6">
+            Real sites. Real scores. Scanned in public.
+          </p>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all hover:scale-[1.02]"
+            style={{
+              background: 'linear-gradient(135deg, rgba(139,92,246,0.8) 0%, rgba(109,40,217,0.8) 100%)',
+              border: '1px solid rgba(139,92,246,0.4)',
+              boxShadow: '0 4px 20px rgba(139,92,246,0.25)',
+            }}
+          >
+            <IconScan />
+            Scan your site → Claim your rank
+          </Link>
         </div>
 
-        <div className="flex gap-1 p-1 rounded-xl bg-white/3 border border-white/6 mb-6 overflow-x-auto">
-          {tabs.map(t => (
+        {/* ── Category tabs ── */}
+        <div className="flex gap-1 p-1 rounded-xl bg-white/3 border border-white/6 mb-2 overflow-x-auto">
+          {CATEGORIES.map(c => (
             <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className="px-4 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap flex-1"
+              key={c.id}
+              onClick={() => setCategory(c.id)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap flex-1 justify-center"
               style={{
-                background: tab === t.id ? 'rgba(139,92,246,0.15)' : 'transparent',
-                color: tab === t.id ? 'rgba(167,139,250,0.9)' : 'rgba(255,255,255,0.4)',
+                background: category === c.id ? 'rgba(139,92,246,0.15)' : 'transparent',
+                color: category === c.id ? 'rgba(167,139,250,0.9)' : 'rgba(255,255,255,0.4)',
               }}
             >
-              {t.label}
+              <span>{c.emoji}</span>
+              <span className="hidden sm:inline">{c.label}</span>
             </button>
           ))}
         </div>
 
-        {tab === 'vibe' && !loading && items.length > 0 && (
+        {/* ── Time filter ── */}
+        {showTimeFilter && (
+          <div className="flex gap-1 mb-5">
+            {TIME_FILTERS.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setTime(t.id)}
+                className="px-3 py-1 rounded-lg text-[11px] font-medium transition-colors"
+                style={{
+                  background: time === t.id ? 'rgba(255,255,255,0.08)' : 'transparent',
+                  color: time === t.id ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)',
+                }}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* ── Column headers (vibe/secure tabs only) ── */}
+        {(category === 'vibe' || category === 'secure') && !loading && items.length > 0 && (
           <div className="flex items-center gap-3 sm:gap-4 px-4 pb-2 text-[10px] text-white/25 uppercase tracking-wider">
-            <span className="w-6 text-right shrink-0">#</span>
+            <span className="w-7 text-right shrink-0">#</span>
+            <span className="w-5 shrink-0" />
             <span className="flex-1">Site</span>
             <div className="flex items-center gap-3 sm:gap-4 shrink-0">
               <span className="text-center hidden sm:block w-8">Vibe</span>
@@ -1108,29 +1448,39 @@ export default function LeaderboardPage() {
           </div>
         )}
 
+        {/* ── Board ── */}
         <div className="rounded-xl border border-white/6 overflow-hidden" style={{ background: 'rgba(255,255,255,0.015)' }}>
           {loading ? (
             <div className="py-16 flex items-center justify-center gap-3 text-white/25 text-sm">
               <div className="w-4 h-4 border-2 border-white/20 border-t-violet-400 rounded-full animate-spin" />
               Loading…
             </div>
-          ) : tab === 'popular' ? (
+          ) : category === 'popular' ? (
             popular.length === 0 ? (
-              <div className="py-16 text-center text-white/30 text-sm">
-                No scans yet.{' '}
-                <Link href="/" className="text-violet-400 hover:text-violet-300 transition-colors">Be the first →</Link>
-              </div>
+              <EmptyState category={category} time={time} />
             ) : (
               popular.map((item, i) => {
                 const vc = getVibeColor(item.latestScan.result?.vibe?.score ?? 0);
                 const sc = getSecColor(item.latestScan.result?.security?.score ?? 0);
+                const rank = i + 1;
+                const podium = rank <= 3 ? PODIUM[rank] : null;
                 return (
-                  <div key={item.domain} className="flex items-center gap-3 sm:gap-4 px-4 py-3.5 border-b border-white/4 last:border-0 hover:bg-white/2 transition-colors group">
-                    <span className="text-sm font-bold w-6 text-right shrink-0" style={{ color: i < 3 ? '#a78bfa' : 'rgba(255,255,255,0.2)' }}>{i + 1}</span>
+                  <div
+                    key={item.domain}
+                    className="relative flex items-center gap-3 sm:gap-4 px-4 py-3.5 border-b border-white/4 last:border-0 transition-colors group"
+                    style={podium ? { background: podium.bg } : undefined}
+                  >
+                    {rank === 1 && (
+                      <div className="absolute inset-x-0 top-0 h-px" style={{ background: 'linear-gradient(90deg, transparent, rgba(251,191,36,0.5), transparent)' }} />
+                    )}
+                    <div className="flex flex-col items-center justify-center w-7 shrink-0">
+                      {rank === 1 && <span className="text-[11px] leading-none mb-0.5">👑</span>}
+                      <span className="text-sm font-bold font-mono leading-none" style={{ color: podium?.rank ?? 'rgba(255,255,255,0.2)' }}>{rank}</span>
+                    </div>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={`/api/favicon?domain=${encodeURIComponent(item.domain)}`} alt="" className="w-5 h-5 rounded shrink-0 opacity-70" loading="lazy" />
+                    <img src={`/api/favicon?domain=${encodeURIComponent(item.domain)}`} alt="" className="w-5 h-5 rounded shrink-0" style={{ opacity: podium ? 0.9 : 0.65 }} loading="lazy" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-white/80 truncate">{item.domain}</p>
+                      <p className="text-sm font-semibold truncate" style={{ color: rank === 1 ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.8)' }}>{item.domain}</p>
                       <p className="text-[10px] text-white/30 mt-0.5">
                         scanned <span className="font-semibold text-white/45">{item.count}</span> time{item.count !== 1 ? 's' : ''}
                       </p>
@@ -1172,28 +1522,73 @@ export default function LeaderboardPage() {
               })
             )
           ) : items.length === 0 ? (
-            <div className="py-16 text-center text-white/30 text-sm">
-              No scans yet.{' '}
-              <Link href="/" className="text-violet-400 hover:text-violet-300 transition-colors">Scan a site →</Link>
-            </div>
+            <EmptyState category={category} time={time} />
           ) : (
             items.map((item, i) => (
               <LeaderboardRow
                 key={item.id}
                 item={item}
-                rank={tab === 'vibe' ? i + 1 : undefined}
+                rank={(category === 'vibe' || category === 'secure') ? i + 1 : undefined}
                 onMoreInfo={() => setSelected(item)}
               />
             ))
           )}
         </div>
 
-        {tab === 'recent' && (
+        {/* ── Footer notes ── */}
+        {category === 'recent' && (
           <p className="text-center text-xs text-white/20 mt-4">Auto-refreshes every 15 seconds</p>
+        )}
+        {time !== 'all' && (category === 'vibe' || category === 'secure') && (
+          <p className="text-center text-xs text-white/20 mt-4">
+            Showing scans from the last {time === 'today' ? '24 hours' : '7 days'}
+          </p>
+        )}
+
+        {/* ── Bottom CTA (for non-users) ── */}
+        {!user && !loading && (items.length > 0 || popular.length > 0) && (
+          <div
+            className="mt-6 rounded-xl border px-5 py-4 flex items-center justify-between gap-4"
+            style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}
+          >
+            <div>
+              <p className="text-sm font-semibold text-white/80">Your site isn&rsquo;t on the board yet.</p>
+              <p className="text-xs text-white/35 mt-0.5">That&rsquo;s fixable in 30 seconds.</p>
+            </div>
+            <Link
+              href="/"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-white whitespace-nowrap shrink-0 transition-all hover:scale-[1.02]"
+              style={{ background: 'rgba(139,92,246,0.5)', border: '1px solid rgba(139,92,246,0.35)' }}
+            >
+              <IconScan />
+              Get your score
+            </Link>
+          </div>
         )}
       </div>
 
+      {/* Personal rank strip */}
+      {hasPersonalRank && <PersonalRankStrip items={items} category={category} />}
+
+      {/* Detail modal */}
       {selected && <MoreInfoModal item={selected} onClose={() => setSelected(null)} />}
     </main>
+  );
+}
+
+// ── EmptyState ─────────────────────────────────────────────────────────────
+
+function EmptyState({ category, time }: { category: Category; time: TimeFilter }) {
+  const msg = time !== 'all'
+    ? `No scans yet ${time === 'today' ? 'today' : 'this week'}.`
+    : 'No scans yet.';
+  return (
+    <div className="py-16 text-center text-white/30 text-sm">
+      {msg}{' '}
+      {category === 'recent'
+        ? <Link href="/" className="text-violet-400 hover:text-violet-300 transition-colors">Scan a site →</Link>
+        : <Link href="/" className="text-violet-400 hover:text-violet-300 transition-colors">Be the first →</Link>
+      }
+    </div>
   );
 }
