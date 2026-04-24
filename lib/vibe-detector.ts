@@ -68,7 +68,7 @@ const AI_TOOLS: { pattern: RegExp; label: string }[] = [
 
 const CAPS = {
   directEvidence:   70,
-  stackPatterns:    45,  // full 4/4 stack = 42, just under the cap
+  stackPatterns:    60,
   artifactPatterns: 22,
   contentPatterns:  18,
 };
@@ -268,10 +268,10 @@ export function detectVibe(
   const stackReasons: string[] = [];
 
   if (coreStackCount >= 4) {
-    stackScore = 42; // all four canonical components → conclusive pattern match
+    stackScore = 55; // all four canonical components — high-confidence vibe stack
     stackReasons.push('Full AI vibe-code stack: JS framework + BaaS + shadcn/UI kit + cloud host');
   } else if (coreStackCount === 3) {
-    stackScore = 17;
+    stackScore = 25;
     const parts = [
       hasFramework && 'framework',
       hasBaaS      && 'BaaS',
@@ -280,8 +280,7 @@ export function detectVibe(
     ].filter(Boolean) as string[];
     stackReasons.push(`Strong AI stack combo (${parts.join(' + ')})`);
   } else if (coreStackCount === 2 && (hasBaaS || hasUiKit)) {
-    // Two components, at least one meaningfully AI-correlated
-    stackScore = 10;
+    stackScore = 12;
     stackReasons.push('Partial AI stack (framework or host + BaaS/UI kit)');
   }
 
