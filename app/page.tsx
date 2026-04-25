@@ -186,6 +186,12 @@ export default function Home() {
                 )}
               </div>
 
+              {/* Safety notice */}
+              <p className="mt-3 text-[11px] text-white/20 text-center">
+                Only scan sites you own or have explicit permission to test.{' '}
+                <a href="/privacy" className="underline underline-offset-2 hover:text-white/40 transition-colors">Privacy policy</a>
+              </p>
+
               {/* Roast mode toggle */}
               <div className="mt-4 flex justify-center">
                 <button

@@ -13,7 +13,6 @@ export async function analyzeUrl(rawUrl: string): Promise<AnalysisResult> {
   // Normalize URL
   const url = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
   const parsedUrl = new URL(url);
-  const httpsEnabled = parsedUrl.protocol === 'https:';
 
   // Fetch the page (10s timeout)
   const response = await fetch(url, {
@@ -29,6 +28,9 @@ export async function analyzeUrl(rawUrl: string): Promise<AnalysisResult> {
   response.headers.forEach((value, key) => {
     headers[key.toLowerCase()] = value;
   });
+
+  // If the original URL was HTTP but the server redirected to HTTPS, treat as HTTPS-enabled
+  const httpsEnabled = parsedUrl.protocol === 'https:' || response.url.startsWith('https://');
 
   // Run all detectors concurrently
   const [vibeRaw, securityResult, techStack, hosting, publicKeys, publicFiles] =
