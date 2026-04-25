@@ -4,13 +4,13 @@ const BASE = 'https://isthisvibecoded-one.vercel.app';
 
 export const metadata: Metadata = {
   title: 'Feed — Is This Vibe-Coded?',
-  description: 'Browse community-scanned sites ranked by vibe-code detection and security scores.',
+  description: 'Browse sites ranked by vibe-code detection and security scores.',
   alternates: { canonical: `${BASE}/feed` },
   openGraph: {
     type: 'website',
     url: `${BASE}/feed`,
     title: 'Feed — Is This Vibe-Coded?',
-    description: 'Browse community-scanned sites ranked by vibe-code detection and security scores.',
+    description: 'Browse sites ranked by vibe-code detection and security scores.',
     images: [{ url: `${BASE}/og/default.png` }],
   },
   twitter: { card: 'summary_large_image' },

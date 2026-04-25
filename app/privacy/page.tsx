@@ -197,7 +197,7 @@ export default function PrivacyPage() {
               Public feed
             </h2>
             <p>
-              Scan results are public by default and may appear in the community feed. You can make any scan private at any time
+              Scan results are public by default and appear on the Leaderboard. You can make any scan private at any time
               from the Share tab of your results. Private scans are only accessible via their direct link.
             </p>
           </section>

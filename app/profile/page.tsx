@@ -18,7 +18,7 @@ const PLAN_BADGE: Record<string, { cls: string; label: string }> = {
   free: { cls: 'bg-white/5 text-white/40 border-white/10',              label: 'Free' },
 };
 
-type Tab = 'overview' | 'activity' | 'settings';
+type Tab = 'overview' | 'settings';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -30,8 +30,6 @@ function timeAgo(ms: number) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function vibeColor(s: number) { return s >= 70 ? '#8b5cf6' : s >= 30 ? '#f59e0b' : '#22c55e'; }
-function secColor(s: number)  { return s >= 70 ? '#22c55e' : s >= 40 ? '#f59e0b' : '#ef4444'; }
 
 // Compress image to base64 via canvas (max 120×120, JPEG 0.82)
 function compressImage(file: File): Promise<string> {
@@ -122,23 +120,21 @@ function AvatarDisplay({
 
 function OverviewTab({
   user,
-  passiveCount, deepCount, postCount,
+  passiveCount, deepCount,
   avatarColor,
   onEditProfile,
 }: {
   user: NonNullable<ReturnType<typeof useAuth>['user']>;
   passiveCount: number | null;
   deepCount: number | null;
-  postCount: number | null;
   avatarColor: string;
   onEditProfile: () => void;
 }) {
   const badge = PLAN_BADGE[user.plan] ?? PLAN_BADGE.free;
 
   const stats = [
-    { label: 'Scans run',   value: passiveCount, color: 'rgba(255,255,255,0.7)' },
-    { label: 'Deep scans',  value: deepCount,    color: '#a78bfa' },
-    { label: 'Posts shared', value: postCount,   color: '#34d399' },
+    { label: 'Scans run',  value: passiveCount, color: 'rgba(255,255,255,0.7)' },
+    { label: 'Deep scans', value: deepCount,    color: '#a78bfa' },
   ];
 
   return (
@@ -200,7 +196,7 @@ function OverviewTab({
         ))}
       </div>
 
-      {/* Publish CTA */}
+      {/* Leaderboard CTA */}
       <div
         className="rounded-2xl border p-5 relative overflow-hidden"
         style={{ background: 'rgba(139,92,246,0.04)', borderColor: 'rgba(139,92,246,0.2)' }}
@@ -208,9 +204,9 @@ function OverviewTab({
         <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 60% 100% at 100% 50%, rgba(139,92,246,0.06), transparent)' }} />
         <div className="relative flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <p className="text-sm font-semibold text-white/85 mb-1">Share your scan with the community</p>
+            <p className="text-sm font-semibold text-white/85 mb-1">See how you rank</p>
             <p className="text-xs text-white/40 leading-relaxed max-w-xs">
-              Published scans appear on the Leaderboard where others can upvote, comment, and learn from them.
+              Public scans appear on the Leaderboard. Run a scan to compete for the top spot.
             </p>
           </div>
           <div className="flex gap-2 shrink-0">
@@ -219,13 +215,13 @@ function OverviewTab({
               className="px-4 py-2 rounded-xl text-xs font-semibold text-white transition-colors"
               style={{ background: 'rgba(139,92,246,0.85)', border: '1px solid rgba(139,92,246,0.5)' }}
             >
-              Scan &amp; publish
+              Run a scan
             </Link>
             <Link
               href="/feed"
               className="px-4 py-2 rounded-xl text-xs font-semibold text-white/50 hover:text-white/75 border border-white/10 hover:bg-white/4 transition-colors"
             >
-              Browse
+              Leaderboard
             </Link>
           </div>
         </div>
@@ -253,147 +249,6 @@ function OverviewTab({
           </Link>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Activity tab ──────────────────────────────────────────────────────────
-
-interface Activity {
-  posts: { id: string; domain: string; vibeScore: number; securityScore: number; createdAt: number }[];
-  comments: { id: string; body: string; scanId: string; scanDomain: string; createdAt: number }[];
-}
-
-function ActivityTab({ activity, loading }: { activity: Activity | null; loading: boolean }) {
-  const posts    = activity?.posts    ?? [];
-  const comments = activity?.comments ?? [];
-
-  return (
-    <div className="space-y-6">
-      {/* Posts */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <SectionTitle>Your published posts</SectionTitle>
-          {posts.length > 0 && (
-            <Link href="/feed" className="text-[11px] text-violet-400 hover:text-violet-300 transition-colors">
-              View all →
-            </Link>
-          )}
-        </div>
-        <div className="rounded-2xl border border-white/8 overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)' }}>
-          {loading ? (
-            <div className="p-4 space-y-3">
-              {[1, 2, 3].map(i => <Skeleton key={i} className="h-12" />)}
-            </div>
-          ) : posts.length === 0 ? (
-            <div className="py-12 px-6 text-center">
-              <div
-                className="w-12 h-12 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-                style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)' }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-              </div>
-              <p className="text-sm font-medium text-white/50 mb-1">No posts yet</p>
-              <p className="text-xs text-white/25 mb-5 max-w-xs mx-auto">
-                Scan any website, then click &quot;Publish to Leaderboard&quot; to share it with the community and get reactions.
-              </p>
-              <Link
-                href="/"
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white"
-                style={{ background: 'rgba(139,92,246,0.85)', border: '1px solid rgba(139,92,246,0.5)' }}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-                </svg>
-                Run your first scan
-              </Link>
-            </div>
-          ) : (
-            <>
-              {posts.map(p => (
-                <Link
-                  key={p.id}
-                  href={`/result/${p.id}`}
-                  className="flex items-center gap-3 px-4 py-3.5 border-b border-white/5 last:border-0 hover:bg-white/2 transition-colors group"
-                >
-                  <img
-                    src={`https://www.google.com/s2/favicons?domain=${p.domain}&sz=32`}
-                    alt=""
-                    className="w-5 h-5 rounded shrink-0 opacity-70"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-white/75 truncate group-hover:text-white/90 transition-colors">{p.domain}</p>
-                    <p className="text-[11px] text-white/25">{timeAgo(p.createdAt)}</p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0 text-right">
-                    <div>
-                      <p className="text-xs font-bold" style={{ color: vibeColor(p.vibeScore) }}>{p.vibeScore}%</p>
-                      <p className="text-[9px] text-white/25">vibe</p>
-                    </div>
-                    <div>
-                      <p className="text-xs font-bold" style={{ color: secColor(p.securityScore) }}>{p.securityScore}</p>
-                      <p className="text-[9px] text-white/25">sec</p>
-                    </div>
-                  </div>
-                </Link>
-              ))}
-              {/* Publish more CTA */}
-              <div className="px-4 py-3 flex items-center justify-between border-t border-white/5" style={{ background: 'rgba(139,92,246,0.03)' }}>
-                <p className="text-xs text-white/30">Have more scans to share?</p>
-                <Link href="/" className="text-xs font-semibold text-violet-400 hover:text-violet-300 transition-colors">
-                  Scan &amp; publish →
-                </Link>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Comments */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <SectionTitle>Your recent comments</SectionTitle>
-          {comments.length > 0 && (
-            <Link href="/feed" className="text-[11px] text-violet-400 hover:text-violet-300 transition-colors">
-              Browse leaderboard →
-            </Link>
-          )}
-        </div>
-        <div className="rounded-2xl border border-white/8 overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)' }}>
-          {loading ? (
-            <div className="p-4 space-y-3">
-              {[1, 2].map(i => <Skeleton key={i} className="h-14" />)}
-            </div>
-          ) : comments.length === 0 ? (
-            <div className="py-10 px-6 text-center">
-              <p className="text-sm text-white/30 mb-1">No comments yet</p>
-              <p className="text-xs text-white/20 mb-4">Join the conversation on any scan in the Leaderboard.</p>
-              <Link href="/feed" className="text-xs text-violet-400 hover:text-violet-300 transition-colors">
-                Go to Leaderboard →
-              </Link>
-            </div>
-          ) : (
-            comments.map(c => (
-              <div key={c.id} className="px-4 py-3.5 border-b border-white/5 last:border-0">
-                <div className="flex items-start justify-between gap-2 mb-1">
-                  {c.scanDomain ? (
-                    <Link href={`/result/${c.scanId}`} className="text-[11px] font-mono text-white/40 hover:text-white/65 transition-colors truncate">
-                      {c.scanDomain}
-                    </Link>
-                  ) : (
-                    <span className="text-[11px] text-white/25">Unknown site</span>
-                  )}
-                  <span className="text-[10px] text-white/20 shrink-0">{timeAgo(c.createdAt)}</span>
-                </div>
-                <p className="text-sm text-white/55 leading-relaxed line-clamp-2">{c.body}</p>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
     </div>
   );
 }
@@ -789,19 +644,15 @@ export default function ProfilePage() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [editModalOpen, setEditModalOpen] = useState(false);
 
-  const [activity, setActivity] = useState<Activity | null>(null);
-  const [activityLoading, setActivityLoading] = useState(false);
   const [passiveCount, setPassiveCount] = useState<number | null>(null);
   const [deepCount, setDeepCount] = useState<number | null>(null);
 
   const fetchActivity = useCallback(() => {
     if (!user) return;
-    setActivityLoading(true);
     Promise.all([
       fetch('/api/user/scans').then(r => r.json()).then(d => { if (Array.isArray(d)) setPassiveCount(d.length); }),
       fetch('/api/user/deep-scans').then(r => r.json()).then(d => { if (Array.isArray(d)) setDeepCount(d.length); }),
-      fetch('/api/user/activity').then(r => r.json()).then(d => { if (d.posts) setActivity(d); }),
-    ]).finally(() => setActivityLoading(false));
+    ]);
   }, [user]);
 
   useEffect(() => { fetchActivity(); }, [fetchActivity]);
@@ -837,7 +688,6 @@ export default function ProfilePage() {
 
   const TABS: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
-    { id: 'activity', label: 'Activity' },
     { id: 'settings', label: 'Settings' },
   ];
 
@@ -905,14 +755,9 @@ export default function ProfilePage() {
             user={user}
             passiveCount={passiveCount}
             deepCount={deepCount}
-            postCount={activity?.posts.length ?? null}
             avatarColor={avatarColor}
             onEditProfile={() => setEditModalOpen(true)}
           />
-        )}
-
-        {activeTab === 'activity' && (
-          <ActivityTab activity={activity} loading={activityLoading} />
         )}
 
         {activeTab === 'settings' && (
