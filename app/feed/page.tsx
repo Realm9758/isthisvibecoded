@@ -357,141 +357,6 @@ function ActivityPulse({ count }: { count: number }) {
   );
 }
 
-// ── SpotlightBanner ────────────────────────────────────────────────────────
-
-function SpotlightBanner({ item, isOwn }: { item: LeaderboardItem; isOwn: boolean }) {
-  const vc = getVibeColor(item.vibeScore);
-  const sc = getSecColor(item.securityScore);
-  const site = hostname(item.url);
-  const streak = item.topStreak ?? 0;
-
-  return (
-    <div
-      className="flex items-center gap-3 px-4 py-3 rounded-xl border mb-5"
-      style={{ background: 'rgba(251,191,36,0.04)', borderColor: 'rgba(251,191,36,0.18)' }}
-    >
-      <span className="text-base shrink-0" aria-hidden="true">👑</span>
-      <div className="flex items-center gap-2 min-w-0 flex-1 flex-wrap">
-        <span className="text-[10px] font-bold tracking-widest text-amber-400/60 uppercase shrink-0">
-          {isOwn ? 'You hold #1' : 'Current #1'}
-        </span>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={`/api/favicon?domain=${encodeURIComponent(site)}`}
-          alt=""
-          width={14}
-          height={14}
-          className="rounded shrink-0"
-          onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-        />
-        <span className="text-sm font-bold text-white/85 font-mono">{site}</span>
-        <span className="text-xs font-black tabular-nums" style={{ color: vc }}>{item.vibeScore}</span>
-        <span className="text-[10px] text-white/25">vibe</span>
-        <span className="text-xs font-black tabular-nums" style={{ color: sc }}>{item.securityScore}</span>
-        <span className="text-[10px] text-white/25">sec</span>
-        {streak > 1 && (
-          <span className="text-[10px] text-amber-400/45 shrink-0">{streak} days at the top</span>
-        )}
-      </div>
-      {isOwn && (
-        <span className="text-[10px] text-amber-400/50 italic shrink-0 hidden sm:block">
-          Something feels different up here.
-        </span>
-      )}
-    </div>
-  );
-}
-
-// ── FlawlessWall ───────────────────────────────────────────────────────────
-
-function FlawlessWall({ items }: { items: LeaderboardItem[] }) {
-  const flawless = items.filter(i => i.vibeScore >= 95 && i.securityScore >= 95);
-  if (flawless.length === 0) return null;
-
-  return (
-    <div
-      className="mt-4 rounded-xl border px-4 py-4"
-      style={{ background: 'rgba(255,255,255,0.01)', borderColor: 'rgba(255,255,255,0.06)' }}
-    >
-      <p className="text-[10px] font-bold tracking-widest text-white/25 uppercase mb-3">
-        Sites that hit the ceiling
-      </p>
-      <div className="flex items-center gap-4 flex-wrap">
-        {flawless.map(i => {
-          const site = hostname(i.url);
-          return (
-            <button
-              key={i.id}
-              className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/65 transition-colors"
-              onClick={() => { /* handled by parent via prop if needed */ }}
-              title={`Vibe ${i.vibeScore} · Sec ${i.securityScore}`}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`/api/favicon?domain=${encodeURIComponent(site)}`}
-                alt=""
-                width={14}
-                height={14}
-                className="rounded shrink-0 opacity-60"
-                onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-              />
-              {site}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── LiveTicker ─────────────────────────────────────────────────────────────
-
-function buildTickerEvents(items: LeaderboardItem[]): string[] {
-  return items.map((item, i) => {
-    const domain = hostname(item.url);
-    const rank = i + 1;
-    const age = Date.now() - item.createdAt;
-    if (item.rankDelta !== null && item.rankDelta >= 5) return `${domain} jumped ↑${item.rankDelta} spots`;
-    if (item.rankDelta !== null && item.rankDelta <= -3) return `${domain} dropped ↓${Math.abs(item.rankDelta)} spots`;
-    if (age < 600_000) return `${domain} just entered the leaderboard`;
-    if (item.vibeScore >= 99 && item.securityScore >= 99) return `${domain} hit a perfect score`;
-    if (rank <= 5) return `${domain} is holding #${rank}`;
-    return `${domain} scanned — vibe ${item.vibeScore}`;
-  });
-}
-
-function LiveTicker({ items }: { items: LeaderboardItem[] }) {
-  if (items.length === 0) return null;
-
-  const events = buildTickerEvents(items);
-  const all = [...events, ...events];
-  const duration = Math.max(30, events.length * 6);
-
-  return (
-    <div
-      className="border-b border-white/6 overflow-hidden"
-      style={{ background: 'rgba(139,92,246,0.03)', height: '34px' }}
-    >
-      <style>{`
-        @keyframes ticker-scroll {
-          0%   { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
-        }
-        .ticker-track { animation: ticker-scroll ${duration}s linear infinite; }
-        .ticker-track:hover { animation-play-state: paused; }
-      `}</style>
-      <div className="ticker-track flex items-center h-full gap-0 whitespace-nowrap">
-        {all.map((event, i) => (
-          <span key={i} className="flex items-center gap-2 px-5 text-[11px]">
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-400/40 shrink-0" aria-hidden="true" />
-            <span className="text-white/45">{event}</span>
-            <span className="text-white/10 ml-3">│</span>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ── MomentToasts ───────────────────────────────────────────────────────────
 
@@ -554,26 +419,7 @@ function MomentToasts({ moments }: { moments: Moment[] }) {
 
 // ── PersonalRankStrip ──────────────────────────────────────────────────────
 
-const RANK_BADGES = [
-  {
-    id: 'top10',
-    icon: '🏆',
-    label: 'Top 10 Builder',
-    color: '#fbbf24',
-    bg: 'rgba(251,191,36,0.1)',
-    border: 'rgba(251,191,36,0.28)',
-  },
-  {
-    id: 'flawless',
-    icon: '💯',
-    label: 'Flawless',
-    color: '#a78bfa',
-    bg: 'rgba(167,139,250,0.1)',
-    border: 'rgba(167,139,250,0.28)',
-  },
-];
-
-function PersonalRankStrip({ items, category }: { items: LeaderboardItem[]; category: Category }) {
+function PersonalRankStrip({ items }: { items: LeaderboardItem[] }) {
   const { user } = useAuth();
   if (!user) return null;
 
@@ -582,117 +428,53 @@ function PersonalRankStrip({ items, category }: { items: LeaderboardItem[]; cate
 
   const item = items[myRankIdx];
   const rank = myRankIdx + 1;
-
   const rivalAbove = myRankIdx > 0 ? items[myRankIdx - 1] : null;
-  const rivalBelow = myRankIdx < items.length - 1 ? items[myRankIdx + 1] : null;
 
   let nearMiss: string | null = null;
-  if (rank === 1)        nearMiss = "You're sitting at #1. Something feels different up here.";
-  else if (rank <= 3)    nearMiss = `You're on the podium at #${rank}. Don't slip.`;
-  else if (rank <= 10)   nearMiss = `You're in the Top 10. ${rivalAbove ? `${hostname(rivalAbove.url)} is just ahead.` : "Don't give up the spot."}`;
-  else if (rank === 11)  nearMiss = 'One more scan could push you into Top 10.';
-  else if (rank <= 14)   nearMiss = `${rank - 10} spot${rank - 10 > 1 ? 's' : ''} from Top 10.`;
+  if (rank === 1)        nearMiss = "You hold #1.";
+  else if (rank <= 3)    nearMiss = `You're on the podium at #${rank}.`;
+  else if (rank <= 10)   nearMiss = `Top 10. ${rivalAbove ? `${hostname(rivalAbove.url)} is just ahead.` : ''}`;
+  else if (rank === 11)  nearMiss = 'One spot from Top 10.';
+  else if (rank <= 14)   nearMiss = `${rank - 10} spots from Top 10.`;
   else if (rank <= 20)   nearMiss = 'Top 10 is within reach.';
-
-  const top10Unlocked = rank <= 10;
-  const flawlessUnlocked = item.vibeScore >= 95 && item.securityScore >= 95;
 
   return (
     <div
-      className="fixed bottom-0 left-0 right-0 z-40 border-t border-violet-500/12"
-      style={{ background: 'rgba(9,9,18,0.97)', backdropFilter: 'blur(20px)' }}
+      className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/[0.06]"
+      style={{ background: 'rgba(9,9,18,0.97)', backdropFilter: 'blur(24px)' }}
     >
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-3 space-y-2">
-
-        {/* Main rank row */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div
-              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-              style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.25)' }}
-            >
-              {user.name[0]?.toUpperCase()}
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-xs text-white/70">
-                  <span className="font-semibold text-white/90">@{user.name}</span>
-                  {' · '}
-                  <span
-                    className="font-black tabular-nums text-sm"
-                    style={{ color: rank === 1 ? '#fbbf24' : rank <= 3 ? '#cd7f32' : rank <= 10 ? '#a78bfa' : 'rgba(255,255,255,0.45)' }}
-                  >
-                    #{rank}
-                  </span>
-                  {' on '}
-                  <span className="text-white/45 font-mono text-[11px]">{hostname(item.url)}</span>
-                </p>
-                {item.rankDelta !== null && item.rankDelta !== 0 && (
-                  <RankDeltaChip delta={item.rankDelta} />
-                )}
-                {item.rankDelta === null && item.previousRank === null && (
-                  <RankDeltaChip delta={null} isNew />
-                )}
-              </div>
-              {nearMiss && (
-                <p
-                  className="text-[10px] mt-0.5 truncate"
-                  style={{ color: rank <= 3 ? 'rgba(251,191,36,0.65)' : 'rgba(167,139,250,0.55)' }}
-                >
-                  {nearMiss}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <Link
-            href="/"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all shrink-0 hover:scale-[1.02]"
-            style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.3)' }}
+      <div className="max-w-3xl mx-auto px-5 sm:px-6 py-3 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+            style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.25)' }}
           >
-            <IconScan />
-            Scan again
-          </Link>
+            {user.name[0]?.toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-bold tabular-nums" style={{ color: rank === 1 ? '#fbbf24' : rank <= 3 ? '#cd7f32' : rank <= 10 ? '#a78bfa' : 'rgba(255,255,255,0.6)' }}>
+                #{rank}
+              </span>
+              <span className="text-xs text-white/40 font-mono truncate">{hostname(item.url)}</span>
+              {item.rankDelta !== null && item.rankDelta !== 0 && <RankDeltaChip delta={item.rankDelta} />}
+            </div>
+            {nearMiss && (
+              <p className="text-[10px] mt-0.5 truncate" style={{ color: rank <= 3 ? 'rgba(251,191,36,0.55)' : 'rgba(167,139,250,0.45)' }}>
+                {nearMiss}
+              </p>
+            )}
+          </div>
         </div>
 
-        {/* Badges + rivals row */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-none">
-          {RANK_BADGES.map(b => {
-            const unlocked = b.id === 'top10' ? top10Unlocked : flawlessUnlocked;
-            const progress = b.id === 'top10'
-              ? `${rank} → Top 10`
-              : `vibe ${item.vibeScore}/95 · sec ${item.securityScore}/95`;
-            return (
-              <div
-                key={b.id}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-lg border whitespace-nowrap shrink-0"
-                style={unlocked
-                  ? { color: b.color, background: b.bg, borderColor: b.border }
-                  : { color: 'rgba(255,255,255,0.18)', background: 'rgba(255,255,255,0.03)', borderColor: 'rgba(255,255,255,0.07)' }
-                }
-              >
-                <span className="text-[11px]">{unlocked ? b.icon : '🔒'}</span>
-                <span className="text-[10px] font-semibold">{b.label}</span>
-                {!unlocked && (
-                  <span className="text-[9px] font-mono opacity-50">{progress}</span>
-                )}
-              </div>
-            );
-          })}
-
-          {rivalBelow && (
-            <span className="text-[10px] text-white/20 shrink-0 ml-1">
-              <span className="text-white/30">{hostname(rivalBelow.url)}</span> is right behind you
-            </span>
-          )}
-
-          {category === 'vibe' || category === 'secure' ? (
-            <span className="text-[10px] text-white/18 shrink-0 ml-auto">
-              Today&apos;s rank locks in {timeUntilReset()}
-            </span>
-          ) : null}
-        </div>
-
+        <Link
+          href="/"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white shrink-0 transition-opacity hover:opacity-80"
+          style={{ background: 'rgba(139,92,246,0.75)', border: '1px solid rgba(139,92,246,0.4)' }}
+        >
+          <IconScan />
+          Rescan
+        </Link>
       </div>
     </div>
   );
@@ -1390,36 +1172,36 @@ function LeaderboardRow({
   const sc = getSecColor(item.securityScore);
   const site = hostname(item.url);
   const podium = rank !== undefined && rank <= 3 ? PODIUM[rank] : null;
-  const badges = rank !== undefined ? getBadges(item, rank) : [];
+  const badge = rank !== undefined ? getBadges(item, rank)[0] : undefined;
   const isNewEntry = item.previousRank === null && Date.now() - item.createdAt < 86_400_000;
 
   return (
     <div
-      className="relative flex items-center gap-3 sm:gap-4 px-4 py-3.5 border-b border-white/4 last:border-0 transition-colors group"
-      style={podium
-        ? { background: podium.bg, boxShadow: rank === 1 ? `inset 0 0 40px ${podium.glow}` : 'none' }
-        : { background: 'transparent' }
-      }
+      className="relative flex items-center gap-4 px-5 py-4 border-b border-white/[0.05] last:border-0 hover:bg-white/[0.025] transition-colors group"
+      style={podium ? { background: podium.bg } : undefined}
     >
-      {/* Top shimmer line */}
       {rank === 1 && (
         <div
           className="absolute inset-x-0 top-0 h-px"
-          style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(251,191,36,0.6) 50%, transparent 100%)' }}
+          style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(251,191,36,0.55) 50%, transparent 100%)' }}
         />
       )}
 
-      {/* Rank column */}
+      {/* Rank */}
       {rank !== undefined && (
-        <div className="flex flex-col items-center justify-center w-8 shrink-0 gap-0.5">
-          {rank === 1 && <span className="text-[10px] leading-none" aria-hidden="true">👑</span>}
+        <div className="w-9 shrink-0 flex flex-col items-end gap-0.5">
           <span
-            className={`font-black font-mono leading-none tabular-nums ${rank <= 3 ? 'text-base' : 'text-sm'}`}
-            style={{ color: podium?.rank ?? 'rgba(255,255,255,0.2)' }}
+            className="font-black tabular-nums leading-none"
+            style={{
+              fontSize: rank <= 3 ? '18px' : '14px',
+              color: podium?.rank ?? 'rgba(255,255,255,0.18)',
+            }}
           >
             {rank}
           </span>
-          <RankDeltaChip delta={item.rankDelta} isNew={isNewEntry} />
+          {(item.rankDelta !== null && item.rankDelta !== 0) || isNewEntry ? (
+            <RankDeltaChip delta={item.rankDelta} isNew={isNewEntry} />
+          ) : null}
         </div>
       )}
 
@@ -1428,68 +1210,62 @@ function LeaderboardRow({
       <img
         src={`/api/favicon?domain=${encodeURIComponent(site)}`}
         alt=""
-        className="w-5 h-5 rounded shrink-0"
-        style={{ opacity: podium ? 0.9 : 0.65 }}
+        className="w-6 h-6 rounded-md shrink-0"
+        style={{ opacity: podium ? 1 : 0.6 }}
         loading="lazy"
         onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
       />
 
-      {/* Site info */}
+      {/* Site + meta */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
           <p
             className="text-sm font-semibold truncate"
-            style={{ color: rank === 1 ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.8)' }}
+            style={{ color: podium ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.82)' }}
           >
             {site}
           </p>
-          {badges.map(b => (
+          {badge && (
             <span
-              key={b.label}
-              className="hidden sm:inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full border whitespace-nowrap"
-              style={{ color: b.color, background: b.bg, borderColor: b.border }}
+              className="hidden sm:inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap"
+              style={{ color: badge.color, background: badge.bg, borderColor: badge.border }}
             >
-              {b.emoji} {b.label}
+              {badge.label}
             </span>
-          ))}
+          )}
         </div>
-        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-          {item.techStack.slice(0, 2).map(t => (
-            <span key={t} className="text-[10px] text-white/30 bg-white/4 px-1.5 py-0.5 rounded">{t}</span>
-          ))}
+        <div className="flex items-center gap-2 mt-0.5">
           {item.scannedBy && item.scannedBy !== 'Anonymous' ? (
             <Link
               href={`/u/${encodeURIComponent(item.scannedBy)}`}
-              className="text-[10px] text-white/30 hover:text-violet-300 transition-colors"
+              className="text-[11px] text-white/25 hover:text-violet-300 transition-colors"
               onClick={e => e.stopPropagation()}
             >
               @{item.scannedBy}
             </Link>
           ) : null}
-          <span className="text-[10px] text-white/20">{timeAgo(item.createdAt)}</span>
+          <span className="text-[11px] text-white/20">{timeAgo(item.createdAt)}</span>
         </div>
       </div>
 
-      {/* Scores + CTA */}
-      <div className="flex items-center gap-3 sm:gap-4 shrink-0">
-        <div className="text-center hidden sm:block">
-          <p className="text-sm font-bold tabular-nums leading-none" style={{ color: vc }}>{item.vibeScore}</p>
-          <p className="text-[10px] text-white/25 mt-0.5">vibe</p>
+      {/* Scores + action */}
+      <div className="flex items-center gap-5 shrink-0">
+        <div className="text-right hidden sm:block">
+          <p className="text-base font-black tabular-nums leading-none" style={{ color: vc }}>{item.vibeScore}</p>
+          <p className="text-[9px] uppercase tracking-wider text-white/25 mt-0.5">vibe</p>
         </div>
-        <div className="text-center">
-          <p className="text-sm font-bold tabular-nums leading-none" style={{ color: sc }}>{item.securityScore}</p>
-          <p className="text-[10px] text-white/25 mt-0.5">sec</p>
+        <div className="text-right">
+          <p className="text-base font-black tabular-nums leading-none" style={{ color: sc }}>{item.securityScore}</p>
+          <p className="text-[9px] uppercase tracking-wider text-white/25 mt-0.5">sec</p>
         </div>
         <button
           onClick={onMoreInfo}
-          aria-label="More Info"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all hover:border-violet-500/40 hover:text-violet-300"
-          style={{ background: 'rgba(139,92,246,0.06)', borderColor: 'rgba(139,92,246,0.2)', color: 'rgba(167,139,250,0.7)' }}
+          aria-label="View details"
+          className="w-8 h-8 rounded-lg flex items-center justify-center border border-white/8 text-white/25 hover:text-white/65 hover:bg-white/6 hover:border-white/15 transition-all"
         >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="m9 18 6-6-6-6"/>
           </svg>
-          <span className="hidden sm:inline">More Info</span>
         </button>
       </div>
     </div>
@@ -1498,11 +1274,11 @@ function LeaderboardRow({
 
 // ── Main page ──────────────────────────────────────────────────────────────
 
-const CATEGORIES: { id: Category; emoji: string; label: string }[] = [
-  { id: 'vibe',    emoji: '🔥', label: 'Top Vibe Score' },
-  { id: 'secure',  emoji: '🔒', label: 'Security Leaders' },
-  { id: 'recent',  emoji: '⚡', label: 'Just Scanned' },
-  { id: 'popular', emoji: '📊', label: 'Proving Themselves' },
+const CATEGORIES: { id: Category; label: string }[] = [
+  { id: 'vibe',    label: 'Vibe' },
+  { id: 'secure',  label: 'Security' },
+  { id: 'recent',  label: 'Recent' },
+  { id: 'popular', label: 'Popular' },
 ];
 
 export default function LeaderboardPage() {
@@ -1513,7 +1289,6 @@ export default function LeaderboardPage() {
   const [popular, setPopular] = useState<PopularItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<LeaderboardItem | null>(null);
-  const [tickerItems, setTickerItems] = useState<LeaderboardItem[]>([]);
   const [moments, setMoments] = useState<Moment[]>([]);
   const [activityCount, setActivityCount] = useState(0);
   const [newEntryToast, setNewEntryToast] = useState<string | null>(null);
@@ -1540,19 +1315,6 @@ export default function LeaderboardPage() {
         .then(d => { if (typeof d.count === 'number') setActivityCount(d.count); })
         .catch(() => {});
     }, 60_000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Fetch ticker items
-  useEffect(() => {
-    const fetchTicker = () => {
-      fetch('/api/scans?type=recent&limit=15')
-        .then(r => r.json())
-        .then(d => { if (Array.isArray(d)) setTickerItems(d); })
-        .catch(() => {});
-    };
-    fetchTicker();
-    const interval = setInterval(fetchTicker, 30_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -1628,11 +1390,9 @@ export default function LeaderboardPage() {
   const hasPersonalRank = !loading && items.length > 0 && (category === 'vibe' || category === 'secure');
 
   const myItem = user ? items.find(i => i.scannedBy === user.name) : null;
-  const topItem = items[0] ?? null;
-  const showSpotlight = !loading && topItem && (category === 'vibe' || category === 'secure');
 
   const TIME_FILTERS: { id: TimeFilter; label: string }[] = [
-    { id: 'today', label: `Today  ${resetLabel}` },
+    { id: 'today', label: 'Today' },
     { id: 'week',  label: 'This Week' },
     { id: 'all',   label: 'All Time' },
   ];
@@ -1641,11 +1401,11 @@ export default function LeaderboardPage() {
     <main className="min-h-screen" style={{ background: '#0a0a0f' }}>
       <style>{`
         @keyframes fade-up {
-          from { opacity: 0; transform: translateY(6px); }
+          from { opacity: 0; transform: translateY(8px); }
           to   { opacity: 1; transform: translateY(0); }
         }
         @keyframes entry-in {
-          from { opacity: 0; transform: translateY(8px) scale(0.97); }
+          from { opacity: 0; transform: translateY(10px) scale(0.97); }
           to   { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
@@ -1653,11 +1413,8 @@ export default function LeaderboardPage() {
       {/* Ambient gradient */}
       <div
         className="fixed inset-0 pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse 70% 45% at 50% 0%, rgba(139,92,246,0.08) 0%, transparent 70%)' }}
+        style={{ background: 'radial-gradient(ellipse 60% 40% at 50% 0%, rgba(139,92,246,0.07) 0%, transparent 65%)' }}
       />
-
-      {/* Live ticker */}
-      <LiveTicker items={tickerItems} />
 
       {/* Moment toasts */}
       <MomentToasts moments={moments} />
@@ -1678,105 +1435,79 @@ export default function LeaderboardPage() {
         </div>
       )}
 
-      <div className="relative max-w-3xl mx-auto px-6 py-12" style={{ paddingBottom: hasPersonalRank ? '120px' : undefined }}>
+      <div className="relative max-w-3xl mx-auto px-6 py-14" style={{ paddingBottom: hasPersonalRank ? '120px' : undefined }}>
 
         {/* ── Hero ── */}
-        <div className="mb-10 text-center" style={{ animation: 'fade-up 0.5s ease' }}>
-          <div className="flex items-center justify-center gap-3 mb-4">
+        <div className="mb-12" style={{ animation: 'fade-up 0.45s ease' }}>
+          <div className="flex items-center gap-2 mb-5">
             <ActivityPulse count={activityCount} />
           </div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-white mb-3 tracking-tight">
-            The Leaderboard
-          </h1>
-          <p className="text-white/40 text-sm mb-6">
-            Every site ranked by what actually matters.
-          </p>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+          <div className="flex items-end justify-between gap-4 flex-wrap">
+            <div>
+              <h1 className="text-4xl sm:text-5xl font-bold text-white tracking-tight leading-none mb-2">
+                Leaderboard
+              </h1>
+              <p className="text-white/35 text-sm">
+                Every site ranked by what actually matters.
+              </p>
+            </div>
             <Link
               href="/"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all hover:scale-[1.02]"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white shrink-0 transition-all hover:opacity-90"
               style={{
-                background: 'linear-gradient(135deg, rgba(139,92,246,0.8) 0%, rgba(109,40,217,0.8) 100%)',
-                border: '1px solid rgba(139,92,246,0.4)',
-                boxShadow: '0 4px 20px rgba(139,92,246,0.25)',
+                background: 'rgba(139,92,246,0.85)',
+                border: '1px solid rgba(139,92,246,0.5)',
               }}
             >
               <IconScan />
-              {myItem ? 'Scan again to recalculate' : 'See where you rank'}
+              {myItem ? 'Rescan' : 'Scan your site'}
             </Link>
-            {!user && (
-              <p className="text-xs text-white/25">
-                Your competitors are already ranked.
-              </p>
-            )}
           </div>
         </div>
 
-        {/* ── Category tabs ── */}
-        <div className="flex gap-1 p-1 rounded-xl bg-white/3 border border-white/6 mb-2 overflow-x-auto">
-          {CATEGORIES.map(c => (
-            <button
-              key={c.id}
-              onClick={() => setCategory(c.id)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap flex-1 justify-center"
-              style={{
-                background: category === c.id ? 'rgba(139,92,246,0.15)' : 'transparent',
-                color: category === c.id ? 'rgba(167,139,250,0.9)' : 'rgba(255,255,255,0.4)',
-              }}
-            >
-              <span>{c.emoji}</span>
-              <span className="hidden sm:inline">{c.label}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* ── Time filter ── */}
-        {showTimeFilter && (
-          <div className="flex gap-1 mb-5">
-            {TIME_FILTERS.map(t => (
+        {/* ── Category tabs + time filter ── */}
+        <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
+          <div className="flex gap-0.5 p-1 rounded-lg border border-white/6" style={{ background: 'rgba(255,255,255,0.02)' }}>
+            {CATEGORIES.map(c => (
               <button
-                key={t.id}
-                onClick={() => setTime(t.id)}
-                className="px-3 py-1 rounded-lg text-[11px] font-medium transition-colors"
+                key={c.id}
+                onClick={() => setCategory(c.id)}
+                className="px-4 py-1.5 rounded-md text-xs font-semibold transition-all whitespace-nowrap"
                 style={{
-                  background: time === t.id ? 'rgba(255,255,255,0.08)' : 'transparent',
-                  color: time === t.id ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)',
+                  background: category === c.id ? 'rgba(255,255,255,0.08)' : 'transparent',
+                  color: category === c.id ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.35)',
                 }}
               >
-                {t.label}
+                {c.label}
               </button>
             ))}
           </div>
-        )}
 
-        {/* ── #1 Spotlight ── */}
-        {showSpotlight && (
-          <SpotlightBanner
-            item={topItem}
-            isOwn={myItem?.id === topItem.id}
-          />
-        )}
-
-        {/* ── Column headers ── */}
-        {(category === 'vibe' || category === 'secure') && !loading && items.length > 0 && (
-          <div className="flex items-center gap-3 sm:gap-4 px-4 pb-2 text-[10px] text-white/25 uppercase tracking-wider">
-            <span className="w-8 shrink-0">#</span>
-            <span className="w-5 shrink-0" />
-            <span className="flex-1">Site</span>
-            <div className="flex items-center gap-3 sm:gap-4 shrink-0">
-              <span className="text-center hidden sm:block w-8">Vibe</span>
-              <span className="text-center w-8">Sec</span>
-              <span className="w-20 sm:w-24" />
+          {showTimeFilter && (
+            <div className="flex gap-0.5">
+              {TIME_FILTERS.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setTime(t.id)}
+                  className="px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors"
+                  style={{
+                    color: time === t.id ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.25)',
+                    background: time === t.id ? 'rgba(255,255,255,0.06)' : 'transparent',
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* ── Board ── */}
-        <div className="rounded-xl border border-white/6 overflow-hidden" style={{ background: 'rgba(255,255,255,0.015)' }}>
+        <div className="rounded-xl border border-white/[0.07] overflow-hidden" style={{ background: 'rgba(255,255,255,0.018)' }}>
           {loading ? (
-            <div className="py-16 flex items-center justify-center gap-3 text-white/25 text-sm">
-              <div className="w-4 h-4 border-2 border-white/20 border-t-violet-400 rounded-full animate-spin" />
-              Loading…
+            <div className="py-20 flex items-center justify-center gap-3 text-white/20 text-sm">
+              <div className="w-4 h-4 border-2 border-white/15 border-t-violet-400 rounded-full animate-spin" />
+              Loading
             </div>
           ) : category === 'popular' ? (
             popular.length === 0 ? (
@@ -1790,32 +1521,36 @@ export default function LeaderboardPage() {
                 return (
                   <div
                     key={item.domain}
-                    className="relative flex items-center gap-3 sm:gap-4 px-4 py-3.5 border-b border-white/4 last:border-0 transition-colors group"
+                    className="relative flex items-center gap-4 px-5 py-4 border-b border-white/[0.05] last:border-0 hover:bg-white/[0.025] transition-colors"
                     style={podium ? { background: podium.bg } : undefined}
                   >
                     {rank === 1 && (
                       <div className="absolute inset-x-0 top-0 h-px" style={{ background: 'linear-gradient(90deg, transparent, rgba(251,191,36,0.5), transparent)' }} />
                     )}
-                    <div className="flex flex-col items-center justify-center w-8 shrink-0">
-                      {rank === 1 && <span className="text-[10px] leading-none mb-0.5" aria-hidden="true">👑</span>}
-                      <span className={`font-black font-mono leading-none ${rank <= 3 ? 'text-base' : 'text-sm'}`} style={{ color: podium?.rank ?? 'rgba(255,255,255,0.2)' }}>{rank}</span>
+                    <div className="w-9 shrink-0 text-right">
+                      <span
+                        className="font-black tabular-nums leading-none"
+                        style={{ fontSize: rank <= 3 ? '18px' : '14px', color: podium?.rank ?? 'rgba(255,255,255,0.18)' }}
+                      >
+                        {rank}
+                      </span>
                     </div>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={`/api/favicon?domain=${encodeURIComponent(item.domain)}`} alt="" className="w-5 h-5 rounded shrink-0" style={{ opacity: podium ? 0.9 : 0.65 }} loading="lazy" />
+                    <img src={`/api/favicon?domain=${encodeURIComponent(item.domain)}`} alt="" className="w-6 h-6 rounded-md shrink-0" style={{ opacity: podium ? 1 : 0.6 }} loading="lazy" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold truncate" style={{ color: rank === 1 ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.8)' }}>{item.domain}</p>
-                      <p className="text-[10px] text-white/30 mt-0.5">
-                        scanned <span className="font-semibold text-white/45">{item.count}</span> time{item.count !== 1 ? 's' : ''}
+                      <p className="text-sm font-semibold truncate" style={{ color: podium ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.82)' }}>{item.domain}</p>
+                      <p className="text-[11px] text-white/25 mt-0.5">
+                        scanned <span className="font-semibold text-white/40">{item.count}</span>×
                       </p>
                     </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <div className="text-center hidden sm:block">
-                        <p className="text-sm font-bold tabular-nums leading-none" style={{ color: vc }}>{item.latestScan.result?.vibe?.score ?? '—'}</p>
-                        <p className="text-[10px] text-white/25 mt-0.5">vibe</p>
+                    <div className="flex items-center gap-5 shrink-0">
+                      <div className="text-right hidden sm:block">
+                        <p className="text-base font-black tabular-nums leading-none" style={{ color: vc }}>{item.latestScan.result?.vibe?.score ?? '—'}</p>
+                        <p className="text-[9px] uppercase tracking-wider text-white/25 mt-0.5">vibe</p>
                       </div>
-                      <div className="text-center">
-                        <p className="text-sm font-bold tabular-nums leading-none" style={{ color: sc }}>{item.latestScan.result?.security?.score ?? '—'}</p>
-                        <p className="text-[10px] text-white/25 mt-0.5">sec</p>
+                      <div className="text-right">
+                        <p className="text-base font-black tabular-nums leading-none" style={{ color: sc }}>{item.latestScan.result?.security?.score ?? '—'}</p>
+                        <p className="text-[9px] uppercase tracking-wider text-white/25 mt-0.5">sec</p>
                       </div>
                       <button
                         onClick={() => setSelected({
@@ -1833,13 +1568,12 @@ export default function LeaderboardPage() {
                           rankDelta: null,
                           previousRank: null,
                         })}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all hover:border-violet-500/40 hover:text-violet-300"
-                        style={{ background: 'rgba(139,92,246,0.06)', borderColor: 'rgba(139,92,246,0.2)', color: 'rgba(167,139,250,0.7)' }}
+                        className="w-8 h-8 rounded-lg flex items-center justify-center border border-white/8 text-white/25 hover:text-white/65 hover:bg-white/6 hover:border-white/15 transition-all"
+                        aria-label="View details"
                       >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="m9 18 6-6-6-6"/>
                         </svg>
-                        <span className="hidden sm:inline">More Info</span>
                       </button>
                     </div>
                   </div>
@@ -1860,20 +1594,15 @@ export default function LeaderboardPage() {
           )}
         </div>
 
-        {/* ── Flawless Wall ── */}
-        {(category === 'vibe' || category === 'secure') && !loading && (
-          <FlawlessWall items={items} />
-        )}
-
         {/* ── Footer notes ── */}
         {category === 'recent' && (
-          <p className="text-center text-xs text-white/20 mt-4">
-            Auto-refreshes every 15 seconds · New entries appear automatically
+          <p className="text-[11px] text-white/20 mt-4 text-center">
+            Auto-refreshes every 15 seconds
           </p>
         )}
-        {time === 'today' && (category === 'vibe' || category === 'secure') && (
-          <p className="text-center text-xs text-white/20 mt-4">
-            Today&apos;s leaderboard resets in {resetLabel}
+        {time === 'today' && showTimeFilter && (
+          <p className="text-[11px] text-white/20 mt-4 text-center">
+            Resets in {resetLabel}
           </p>
         )}
         {time === 'week' && (category === 'vibe' || category === 'secure') && (
@@ -1905,7 +1634,7 @@ export default function LeaderboardPage() {
       </div>
 
       {/* Personal rank strip */}
-      {hasPersonalRank && <PersonalRankStrip items={items} category={category} />}
+      {hasPersonalRank && <PersonalRankStrip items={items} />}
 
       {/* Detail modal */}
       {selected && <MoreInfoModal item={selected} onClose={() => setSelected(null)} />}
