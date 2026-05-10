@@ -50,9 +50,9 @@ const SENSITIVE_PATHS: Array<{
   {
     path: '/wp-admin',
     note: 'WordPress admin (if applicable)',
-    verify: (body, ct, finalUrl) => {
+    verify: (body, ct) => {
       if (!ct.includes('text/html')) return { accessible: false };
-      if (/\/wp-login\.php|wp-admin|wordpress|user_login|loginform/i.test(body) || /\/wp-(admin|login\.php)/i.test(finalUrl)) {
+      if (/\/wp-login\.php|\/wp-content\/|\/wp-includes\/|name=["']log["']|id=["']user_login["']|id=["']loginform["']/i.test(body)) {
         return { accessible: true, evidence: 'WordPress admin/login markers detected' };
       }
       return { accessible: false };
@@ -70,11 +70,11 @@ const SENSITIVE_PATHS: Array<{
       const hasAuthForm =
         /<form[\s\S]{0,2500}(password|username|email|login|sign in)/i.test(body);
       const hasFrameworkCatchAll =
-        /__NEXT_DATA__|id="root"|id="__next"/i.test(body) && !hasAdminSurface && !hasAuthForm;
+        /__NEXT_DATA__|id="root"|id="__next"/i.test(body) && !hasAdminSurface;
 
       if (hasFrameworkCatchAll) return { accessible: false };
-      if (hasAdminSurface || hasAuthForm) {
-        return { accessible: true, evidence: hasAdminSurface ? 'Admin UI text detected' : 'Login form detected on /admin' };
+      if (hasAdminSurface || (hasAuthForm && /admin/i.test(body.slice(0, 5000)))) {
+        return { accessible: true, evidence: hasAdminSurface ? 'Admin UI text detected' : 'Admin login form detected on /admin' };
       }
 
       return { accessible: false };
@@ -109,7 +109,7 @@ export async function checkPublicFiles(baseUrl: string): Promise<PublicFile[]> {
         headers: { 'User-Agent': UA },
       });
 
-      if (res.status < 200 || res.status >= 400) {
+      if (res.status < 200 || res.status >= 300) {
         return { path, accessible: false, status: res.status } as PublicFile;
       }
 

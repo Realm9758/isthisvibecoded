@@ -30,7 +30,6 @@ export default function Home() {
   const [loadStep, setLoadStep]   = useState(0);
   const [confetti, setConfetti]   = useState(false);
   const [roastMode, setRoastMode] = useState(false);
-  const [hasPermission, setHasPermission] = useState(false);
   const stepRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -56,10 +55,6 @@ export default function Home() {
       setErrorMsg('Please enter a valid URL — e.g. example.com');
       return;
     }
-    if (!hasPermission) {
-      setErrorMsg('Confirm you own this site or have explicit permission to scan it.');
-      return;
-    }
     setErrorMsg('');
     setStatus('loading');
     setResult(null);
@@ -69,7 +64,7 @@ export default function Home() {
       const res  = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: target, authorized: true }),
+        body: JSON.stringify({ url: target }),
       });
       const data = await res.json();
 
@@ -175,18 +170,6 @@ export default function Home() {
                     {status === 'loading' ? 'Analyzing…' : 'Analyze'}
                   </button>
                 </div>
-
-                <label className="mt-3 flex items-start gap-2.5 text-left cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={hasPermission}
-                    onChange={e => setHasPermission(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-white/15 bg-white/5 accent-violet-500"
-                  />
-                  <span className="text-[11px] text-white/35 leading-relaxed">
-                    I own this site or have explicit permission to run a passive read-only scan.
-                  </span>
-                </label>
 
                 {(errorMsg || status === 'error') && (
                   <div className="mt-2 flex items-center justify-between gap-3">

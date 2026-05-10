@@ -16,19 +16,14 @@ function getClientIp(request: Request): string {
 
 export async function POST(request: Request) {
   let url: string;
-  let authorized = false;
   try {
     const body = await request.json();
     url = (body?.url ?? '').trim();
-    authorized = body?.authorized === true;
   } catch {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
   if (!url) return Response.json({ error: 'URL is required' }, { status: 400 });
-  if (!authorized) {
-    return Response.json({ error: 'Confirm you own this site or have permission to scan it.' }, { status: 403 });
-  }
 
   let parsed: URL;
   try {
