@@ -10,7 +10,7 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/sharecard/[id]'
 
   const vibeColor = vibe.score >= 70 ? '#8b5cf6' : vibe.score >= 30 ? '#f59e0b' : '#22c55e';
   const secColor  = security.score >= 70 ? '#22c55e' : security.score >= 40 ? '#f59e0b' : '#ef4444';
-  const vibeLabel = vibe.score >= 70 ? 'Heavily Vibe-Coded' : vibe.score >= 30 ? 'Possibly Vibe-Coded' : 'Hand-Crafted';
+  const vibeLabel = vibe.label;
   const topTech   = techStack.slice(0, 3).map(t => t.name).join('  ·  ');
   const host      = hosting.provider ?? '';
 
@@ -65,15 +65,15 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/sharecard/[id]'
   <!-- Divider -->
   <line x1="28" y1="144" x2="${W - 28}" y2="144" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
 
-  <!-- Vibe score box -->
+  <!-- AI signal score box -->
   <rect x="28" y="162" width="130" height="72" rx="10"
     fill="rgba(255,255,255,0.04)" stroke="${vibeColor}" stroke-width="1" stroke-opacity="0.3"/>
   <text x="93" y="191"
     font-family="system-ui,-apple-system,sans-serif"
-    font-size="11" fill="rgba(255,255,255,0.4)" text-anchor="middle" letter-spacing="1">VIBE SCORE</text>
+    font-size="11" fill="rgba(255,255,255,0.4)" text-anchor="middle" letter-spacing="1">AI SIGNALS</text>
   <text x="93" y="222"
     font-family="system-ui,-apple-system,sans-serif"
-    font-size="28" font-weight="800" fill="${vibeColor}" text-anchor="middle">${vibe.score}%</text>
+    font-size="28" font-weight="800" fill="${vibeColor}" text-anchor="middle">${vibe.score}</text>
 
   <!-- Security score box -->
   <rect x="174" y="162" width="130" height="72" rx="10"

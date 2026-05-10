@@ -49,144 +49,58 @@ function detectLikelyTool(result: AnalysisResult): AiTool {
   return 'cursor';
 }
 
-function inferSiteType(result: AnalysisResult): string {
-  const names = result.techStack.map(t => t.name.toLowerCase());
-  const hasAuth     = names.some(n => n.includes('supabase') || n.includes('firebase') || n.includes('auth'));
-  const hasPayments = names.some(n => n.includes('stripe'));
-  const hasDB       = names.some(n => n.includes('supabase') || n.includes('firebase') || n.includes('postgres') || n.includes('mongo'));
-  const hasCMS      = names.some(n => n.includes('wordpress') || n.includes('contentful') || n.includes('sanity'));
-
-  if (hasCMS) return 'content/blog site';
-  if (hasPayments && hasAuth) return 'SaaS application with payments and user accounts';
-  if (hasAuth && hasDB) return 'web application with user authentication and database';
-  if (hasPayments) return 'e-commerce or subscription site';
-  if (hasDB) return 'data-driven web application';
-  return 'web application or landing page';
-}
-
 function buildPrompt(tool: AiTool, result: AnalysisResult): string {
   const techNames = result.techStack.map(t => t.name);
   const hosting = result.hosting.provider;
-  const siteType = inferSiteType(result);
   const domain = (() => { try { return new URL(result.url).hostname; } catch { return result.url; } })();
   const stack = [...techNames, hosting].filter(Boolean).join(', ');
+  const missingHeaders = result.security.headers.filter(h => !h.present).map(h => `- Add ${h.name}: ${h.recommendation}`);
+  const exposedPaths = result.publicFiles
+    .filter(f => f.accessible && ['/.env', '/config.json', '/wp-admin', '/admin'].includes(f.path))
+    .map(f => `- Review ${f.path} (${f.status})${f.evidence ? `: ${f.evidence}` : ''}`);
+  const exposedKeys = result.publicKeys
+    .filter(k => k.risk === 'high' || k.risk === 'medium')
+    .map(k => `- Move ${k.type} out of public client code unless it is intentionally publishable`);
+  const findings = [...missingHeaders, ...exposedPaths, ...exposedKeys];
+  const findingText = findings.length > 0 ? findings.join('\n') : '- No major passive findings; review headers and deployment defaults anyway.';
 
-  const prompts: Record<AiTool, string> = {
-    lovable: `Build a ${siteType} similar to ${domain}.
+  const toolFocus: Record<AiTool, string> = {
+    lovable: 'Supabase auth/RLS, environment variables, deployment headers, and protected routes.',
+    v0: 'Next.js App Router headers, middleware, shadcn/ui-safe defaults, and deployment config.',
+    bolt: 'React/Vite deployment config, backend route protection, and environment variable handling.',
+    cursor: 'Make a small, production-quality patch with tests or verification steps.',
+    claude: 'Reason carefully through the security implications before editing files.',
+    replit: 'Keep the deployment simple and document required environment variables.',
+  };
 
-Tech stack to use:
-- Frontend: React + TypeScript + Tailwind CSS
-- Backend: Supabase (auth, database, storage)
-- UI components: shadcn/ui
-${hosting ? `- Deploy to: ${hosting}\n` : ''}
-Detected stack from the reference site: ${stack}
+  function buildFixPrompt(toolName: string, focus: string) {
+    return `I own ${domain}. Please help me fix these passive VibeScan findings in my existing codebase.
+
+Detected stack: ${stack || 'Unknown from public HTML'}
+Target agent: ${toolName}
+Focus areas: ${focus}
+
+Findings to fix:
+${findingText}
 
 Requirements:
-1. Implement user authentication (sign up, sign in, sign out)
-2. Create a clean, modern dark-mode UI matching the style of ${domain}
-3. Set up Supabase tables for the core data model
-4. Add responsive layout that works on mobile and desktop
-5. Include proper loading states and error handling
+1. Make the smallest safe code/config changes needed.
+2. Do not remove authentication or weaken existing protections.
+3. Add secure HTTP headers at the app or hosting layer.
+4. If an exposed path is intentional, protect it with authentication or explain why it is safe.
+5. Keep secrets server-side only and rotate any leaked secret.
+6. Show the exact files changed and verification steps.
 
-Start by scaffolding the project structure and the main page layout.`,
+Before editing, inspect the current framework and deployment setup. After editing, run lint/build or give manual verification commands if those are not available.`;
+  }
 
-    v0: `Create a ${siteType} inspired by ${domain}.
-
-Use this exact stack:
-- Next.js 14 App Router + TypeScript
-- shadcn/ui for all components
-- Tailwind CSS for styling
-- Lucide React for icons
-${techNames.includes('Supabase') ? '- Supabase for auth and database\n' : ''}
-Reference site tech: ${stack}
-
-Build the following:
-1. Main landing/dashboard page with clean layout
-2. Responsive navigation with mobile menu
-3. Core feature sections matching ${domain}'s structure
-4. Proper TypeScript types for all data
-5. Dark mode support using next-themes
-
-Use shadcn/ui Card, Button, Badge, and Dialog components throughout. Keep the design minimal and professional.`,
-
-    bolt: `Build a full-stack ${siteType} like ${domain}.
-
-Stack:
-- React + TypeScript + Vite
-- Tailwind CSS + shadcn/ui
-${techNames.includes('Firebase') ? '- Firebase (Firestore, Auth, Storage)\n' : '- Supabase (auth + database)\n'}
-- React Router for navigation
-
-Tech detected on reference site: ${stack}
-
-Implement:
-1. User authentication flow (register, login, protected routes)
-2. Main dashboard/app layout
-3. Core CRUD operations for the primary data model
-4. Real-time updates where applicable
-5. Mobile-responsive design
-
-Start with the project setup, routing, and auth. Then build the main feature screens.`,
-
-    cursor: `I want to build a ${siteType} similar to ${domain}.
-
-The reference site uses: ${stack}
-
-Please scaffold a production-ready Next.js 14 project with:
-- TypeScript strict mode
-- Tailwind CSS + shadcn/ui
-${techNames.includes('Supabase') ? '- Supabase client setup (auth + database)\n' : ''}
-${techNames.includes('Stripe') ? '- Stripe integration for payments\n' : ''}
-- ESLint + Prettier configured
-- Proper folder structure (app/, components/, lib/, types/)
-
-Then implement:
-1. Authentication with protected routes
-2. Main layout with navbar and sidebar
-3. Primary feature from ${domain} — replicate the core value proposition
-4. Database schema and API routes
-5. Responsive design
-
-Write clean, well-typed TypeScript throughout. No shortcuts.`,
-
-    claude: `Help me build a ${siteType} inspired by ${domain}.
-
-The site I'm replicating uses: ${stack}
-
-I want a clean, production-quality implementation using:
-- Next.js 14 (App Router) + TypeScript
-- Tailwind CSS for styling
-- shadcn/ui for components
-${techNames.includes('Supabase') ? '- Supabase for auth and Postgres database\n' : ''}
-${techNames.includes('Stripe') ? '- Stripe for billing\n' : ''}
-
-Please:
-1. Design the database schema first
-2. Set up the Next.js project structure
-3. Implement authentication (email/password)
-4. Build the core pages: home, dashboard, settings
-5. Add proper error boundaries and loading states
-
-Focus on correctness and security. Use server components where possible. Validate all inputs server-side.`,
-
-    replit: `Build a ${siteType} similar to ${domain} that I can deploy directly on Replit.
-
-Reference stack: ${stack}
-
-Use:
-- Node.js backend (Express or Next.js)
-- React frontend with Tailwind CSS
-- PostgreSQL (Replit DB) or Supabase
-- Simple session-based auth
-
-Make it work out of the box on Replit with:
-1. Single-command startup (npm run dev)
-2. Environment variable setup for secrets
-3. Basic auth (register / login)
-4. Core feature that matches ${domain}
-5. Simple, readable code — avoid complex abstractions
-
-Keep dependencies minimal. It should run immediately after clone.`,
+  const prompts: Record<AiTool, string> = {
+    lovable: buildFixPrompt('Lovable', toolFocus.lovable),
+    v0: buildFixPrompt('v0', toolFocus.v0),
+    bolt: buildFixPrompt('Bolt', toolFocus.bolt),
+    cursor: buildFixPrompt('Cursor', toolFocus.cursor),
+    claude: buildFixPrompt('Claude', toolFocus.claude),
+    replit: buildFixPrompt('Replit', toolFocus.replit),
   };
 
   return prompts[tool];
@@ -216,12 +130,14 @@ function PromptSection({ result }: { result: AnalysisResult }) {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgba(167,139,250,0.8)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
             </svg>
-            <p className="text-xs font-semibold text-white/60 uppercase tracking-wider">Recreate Prompt</p>
+            <p className="text-xs font-semibold text-white/60 uppercase tracking-wider">Fix Prompt</p>
           </div>
           <p className="text-xs text-white/30">
-            Likely built with{' '}
-            <span className="font-semibold" style={{ color: detectedDef.accent }}>{detectedDef.name}</span>
-            {' '}· paste into your AI of choice to rebuild it
+            {result.vibe.score >= 45 ? (
+              <>Best fit: <span className="font-semibold" style={{ color: detectedDef.accent }}>{detectedDef.name}</span> · review before applying</>
+            ) : (
+              <>Generic remediation prompt based on visible stack · review before applying</>
+            )}
           </p>
         </div>
         <button
@@ -673,7 +589,7 @@ function PassiveFindingRow({ f, site }: { f: PassiveFinding; site: string }) {
   const s = SEV_STYLE[f.severity];
 
   return (
-    <div className="rounded-xl border overflow-hidden transition-all" style={{ background: s.bg, borderColor: s.border }}>
+    <div className="rounded-xl border overflow-hidden transition-all" style={{ background: s.bg, borderColor: s.border, borderLeftWidth: 3, borderLeftColor: s.color }}>
       <button onClick={() => setOpen(o => !o)} className="w-full flex items-center gap-3 px-4 py-3 text-left">
         <span className="text-sm shrink-0">{s.icon}</span>
         <span
@@ -859,9 +775,9 @@ function OnboardingNote() {
         <p className="text-[11px] font-semibold text-white/55">How to read these results</p>
         <ul className="space-y-0.5">
           {[
-            ['Vibe Score', '0–100 likelihood this site was AI-generated. 70+ = strong signals detected.'],
+            ['AI Signal Score', '0 means few public AI-generation signals; 100 means strong public evidence. It does not prove authorship.'],
             ['Security Score', '0–100 based on HTTP headers and exposed files. 80+ = well-configured.'],
-            ['Key Risks', 'Issues visible without authentication. Expand each to see fix instructions.'],
+            ['Key Risks', 'Issues visible without authentication. Expand each to see fix instructions and code examples.'],
             ['Next step', 'Sign up and verify ownership to run a full active vulnerability scan.'],
           ].map(([term, desc]) => (
             <li key={term} className="text-[11px] text-white/40">
@@ -1048,12 +964,16 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             color={vibeColor}
             label={result.vibe.label}
             sublabel={`${result.vibe.confidence} confidence`}
+            caption="AI signals"
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 mb-2 flex-wrap">
               <span className="font-mono text-xs text-white/50 bg-black/20 px-2 py-0.5 rounded border border-white/10 truncate max-w-[200px]">{displayUrl}</span>
             </div>
             <h2 className="text-xl font-black leading-tight mb-2.5" style={{ color: vibeColor }}>{result.vibe.label}</h2>
+            <p className="text-xs text-white/40 leading-relaxed mb-3 max-w-md">
+              {result.vibe.score}/100 is an AI-signal score: higher means more public evidence of AI-assisted scaffolding, not a definitive authorship claim.
+            </p>
             <div className="flex gap-2 flex-wrap">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border" style={{ color: riskLevel.color, background: riskLevel.bg, borderColor: riskLevel.border }}>
                 <span className="w-1.5 h-1.5 rounded-full" style={{ background: riskLevel.color }} />
@@ -1118,7 +1038,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
         {/* Vibe signals */}
         {result.vibe.reasons.length > 0 && (
           <div className="border-t px-5 py-4 space-y-2" style={{ borderColor: vibeBorder }}>
-            <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wider mb-2">Why we think this</p>
+            <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wider mb-2">Public AI signals found</p>
             {topVibeReasons.map((r, i) => (
               <div key={i} className="flex items-start gap-2 text-sm text-white/65">
                 <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ background: vibeColor }} />
@@ -1225,7 +1145,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             </div>
             <div>
               <p className="text-sm font-bold text-white/80">Technical Breakdown</p>
-              <p className="text-[10px] text-white/35">Tech stack, all signals, rebuild prompt</p>
+              <p className="text-[10px] text-white/35">Tech stack, all signals, remediation prompt</p>
             </div>
           </div>
           <svg

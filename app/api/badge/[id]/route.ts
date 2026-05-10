@@ -10,7 +10,7 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/badge/[id]'>) {
 
   const vibeColor = vibe.score >= 70 ? '#8b5cf6' : vibe.score >= 30 ? '#f59e0b' : '#22c55e';
   const secColor = security.score >= 70 ? '#22c55e' : security.score >= 40 ? '#f59e0b' : '#ef4444';
-  const label = vibe.score >= 70 ? 'Likely Vibe-Coded' : vibe.score >= 30 ? 'Possibly Vibe-Coded' : 'Hand-Crafted';
+  const label = vibe.label;
 
   const w = 260;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="72" viewBox="0 0 ${w} 72">
@@ -25,7 +25,7 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/badge/[id]'>) {
   <text x="18" y="20" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="${vibeColor}" font-weight="700" letter-spacing="1">VIBESCAN</text>
   <text x="18" y="38" font-family="system-ui,-apple-system,sans-serif" font-size="13" fill="#ffffff" font-weight="600">${hostname.slice(0, 28)}${hostname.length > 28 ? '…' : ''}</text>
   <text x="18" y="55" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="${vibeColor}">${label}</text>
-  <text x="${w - 12}" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="#ffffff" font-weight="700" text-anchor="end">V: ${vibe.score}</text>
+  <text x="${w - 12}" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="#ffffff" font-weight="700" text-anchor="end">AI: ${vibe.score}</text>
   <text x="${w - 12}" y="48" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="${secColor}" font-weight="700" text-anchor="end">S: ${security.score}</text>
   <text x="${w - 12}" y="64" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#444466" text-anchor="end">isthisvibecoded.com</text>
 </svg>`;

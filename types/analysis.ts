@@ -1,6 +1,6 @@
 export type ConfidenceLevel = 'Low' | 'Medium' | 'High';
 export type RiskLevel = 'Low Risk' | 'Medium Risk' | 'High Risk';
-export type VibeLabel = 'Likely Hand-Coded' | 'Possibly Vibe-Coded' | 'Likely Vibe-Coded';
+export type VibeLabel = 'Few AI Signals' | 'Some AI Signals' | 'Strong AI Signals';
 export type HeaderSeverity = 'critical' | 'high' | 'medium' | 'low';
 export type TechCategory = 'framework' | 'library' | 'hosting' | 'cdn' | 'analytics' | 'backend' | 'database';
 export type KeyRisk = 'info' | 'low' | 'medium' | 'high';
@@ -23,6 +23,8 @@ export interface PublicFile {
   path: string;
   accessible: boolean;
   status: number;
+  confidence?: ConfidenceLevel;
+  evidence?: string;
 }
 
 export interface PublicKey {

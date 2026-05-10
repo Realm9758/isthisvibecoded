@@ -3,6 +3,7 @@ import { analyzeUrl } from '@/lib/analyzer';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { getUserById, getDailyCount, incrementUsage, saveScan, getRemainingScans } from '@/lib/store';
 import { generateRoasts } from '@/lib/roast';
+import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -15,24 +16,26 @@ function getClientIp(request: Request): string {
 
 export async function POST(request: Request) {
   let url: string;
+  let authorized = false;
   try {
     const body = await request.json();
     url = (body?.url ?? '').trim();
+    authorized = body?.authorized === true;
   } catch {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
   if (!url) return Response.json({ error: 'URL is required' }, { status: 400 });
+  if (!authorized) {
+    return Response.json({ error: 'Confirm you own this site or have permission to scan it.' }, { status: 403 });
+  }
 
-  // Validate URL and block private IPs
+  let parsed: URL;
   try {
-    const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
-    const h = parsed.hostname;
-    if (h === 'localhost' || h === '127.0.0.1' || h.startsWith('192.168.') || h.startsWith('10.') || h.endsWith('.local')) {
-      return Response.json({ error: 'Private/local URLs are not allowed' }, { status: 400 });
-    }
-  } catch {
-    return Response.json({ error: 'Invalid URL format' }, { status: 400 });
+    parsed = normalizePublicUrl(url);
+    await assertPublicTarget(parsed);
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : 'Invalid URL format' }, { status: 400 });
   }
 
   // Auth check (optional — anonymous users get free tier limits)
@@ -60,7 +63,7 @@ export async function POST(request: Request) {
   await incrementUsage(limitKey);
 
   try {
-    const result = await analyzeUrl(url);
+    const result = await analyzeUrl(parsed.href);
     const roasts = generateRoasts(result);
 
     const scan = await saveScan({

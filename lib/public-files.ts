@@ -14,9 +14,7 @@ const HEAD_PATHS: Array<{ path: string; note?: string }> = [
   { path: '/api',                      note: 'API endpoint' },
   { path: '/api/health',               note: 'Health check endpoint' },
   { path: '/auth',                     note: 'Auth endpoint' },
-  { path: '/admin',                    note: 'Admin panel' },
   { path: '/login',                    note: 'Login page' },
-  { path: '/wp-admin',                 note: 'WordPress admin (if applicable)' },
 ];
 
 // Sensitive paths that need content verification — a 200 with HTML is NOT a real hit.
@@ -24,22 +22,62 @@ const HEAD_PATHS: Array<{ path: string; note?: string }> = [
 const SENSITIVE_PATHS: Array<{
   path: string;
   note: string;
-  verify: (body: string, contentType: string) => boolean;
+  verify: (body: string, contentType: string, finalUrl: string) => { accessible: boolean; evidence?: string };
 }> = [
   {
     path: '/.env',
     note: 'Environment file (should NOT be public)',
-    verify: (body, ct) =>
-      !ct.includes('text/html') &&
-      // Must contain at least one KEY=VALUE line typical of .env files
-      /^[A-Z_][A-Z0-9_]*\s*=/m.test(body),
+    verify: (body, ct) => {
+      const accessible = !ct.includes('text/html') &&
+        // Must contain at least one KEY=VALUE line typical of .env files
+        /^[A-Z_][A-Z0-9_]*\s*=/m.test(body);
+      return accessible ? { accessible, evidence: 'KEY=VALUE environment syntax detected' } : { accessible };
+    },
   },
   {
     path: '/config.json',
     note: 'Config file',
     verify: (body, ct) => {
-      if (ct.includes('text/html')) return false;
-      try { JSON.parse(body); return true; } catch { return false; }
+      if (ct.includes('text/html')) return { accessible: false };
+      try {
+        JSON.parse(body);
+        return { accessible: true, evidence: 'Valid JSON file returned' };
+      } catch {
+        return { accessible: false };
+      }
+    },
+  },
+  {
+    path: '/wp-admin',
+    note: 'WordPress admin (if applicable)',
+    verify: (body, ct, finalUrl) => {
+      if (!ct.includes('text/html')) return { accessible: false };
+      if (/\/wp-login\.php|wp-admin|wordpress|user_login|loginform/i.test(body) || /\/wp-(admin|login\.php)/i.test(finalUrl)) {
+        return { accessible: true, evidence: 'WordPress admin/login markers detected' };
+      }
+      return { accessible: false };
+    },
+  },
+  {
+    path: '/admin',
+    note: 'Admin panel',
+    verify: (body, ct, finalUrl) => {
+      if (!ct.includes('text/html')) return { accessible: false };
+      if (!/\/admin(?:\/|$|\?)/i.test(new URL(finalUrl).pathname)) return { accessible: false };
+
+      const hasAdminSurface =
+        /admin\s+(panel|portal|dashboard|console|login)|administrator\s+login|sign\s+in\s+to\s+admin/i.test(body);
+      const hasAuthForm =
+        /<form[\s\S]{0,2500}(password|username|email|login|sign in)/i.test(body);
+      const hasFrameworkCatchAll =
+        /__NEXT_DATA__|id="root"|id="__next"/i.test(body) && !hasAdminSurface && !hasAuthForm;
+
+      if (hasFrameworkCatchAll) return { accessible: false };
+      if (hasAdminSurface || hasAuthForm) {
+        return { accessible: true, evidence: hasAdminSurface ? 'Admin UI text detected' : 'Login form detected on /admin' };
+      }
+
+      return { accessible: false };
     },
   },
 ];
@@ -77,9 +115,15 @@ export async function checkPublicFiles(baseUrl: string): Promise<PublicFile[]> {
 
       const ct = res.headers.get('content-type') ?? '';
       const body = await res.text();
-      const reallyAccessible = verify(body, ct);
+      const verified = verify(body, ct, res.url || `${origin}${path}`);
 
-      return { path, accessible: reallyAccessible, status: res.status } as PublicFile;
+      return {
+        path,
+        accessible: verified.accessible,
+        status: res.status,
+        confidence: verified.accessible ? 'Medium' : undefined,
+        evidence: verified.evidence,
+      } as PublicFile;
     } catch {
       return { path, accessible: false, status: 0 } as PublicFile;
     }

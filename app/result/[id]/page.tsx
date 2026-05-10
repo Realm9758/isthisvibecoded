@@ -18,9 +18,9 @@ export async function generateMetadata(
   const cardUrl = `${appUrl}/api/sharecard/${id}`;
   const pageUrl = `${appUrl}/result/${id}`;
 
-  const title = `${domain} is ${scan.result.vibe.score}% Vibe-Coded`;
+  const title = `${domain} AI signal score: ${scan.result.vibe.score}/100`;
   const description =
-    `Security: ${scan.result.security.score}/100 · ${scan.result.security.riskLevel} risk · ` +
+    `${scan.result.vibe.label} · Security: ${scan.result.security.score}/100 · ${scan.result.security.riskLevel} · ` +
     `${scan.result.techStack.slice(0, 3).map(t => t.name).join(', ') || 'Unknown stack'}`;
 
   return {

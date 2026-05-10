@@ -973,8 +973,8 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             <SectionHeader label="Overview" />
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-xl border p-4" style={{ background: `${vc}0d`, borderColor: `${vc}30` }}>
-                <p className="text-[10px] text-white/35 uppercase tracking-wider mb-2">Vibe-Coded Score</p>
-                <p className="text-3xl font-black tabular-nums mb-1" style={{ color: vc }}>{item.vibeScore}<span className="text-sm font-medium text-white/30">%</span></p>
+                <p className="text-[10px] text-white/35 uppercase tracking-wider mb-2">AI Signal Score</p>
+                <p className="text-3xl font-black tabular-nums mb-1" style={{ color: vc }}>{item.vibeScore}<span className="text-sm font-medium text-white/30">/100</span></p>
                 <p className="text-xs mb-2.5" style={{ color: `${vc}cc` }}>{item.vibeLabel}</p>
                 <ProgressBar value={item.vibeScore} color={vc} />
               </div>
@@ -1013,9 +1013,9 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)' }}>
               <div className="divide-y divide-white/5">
                 <div className="px-4 py-3 flex items-center gap-4">
-                  <p className="text-xs text-white/45 w-36 shrink-0">Vibe-coded likelihood</p>
+                  <p className="text-xs text-white/45 w-36 shrink-0">AI signal score</p>
                   <div className="flex-1"><ProgressBar value={item.vibeScore} color={vc} /></div>
-                  <span className="text-xs font-bold tabular-nums w-10 text-right shrink-0" style={{ color: vc }}>{item.vibeScore}%</span>
+                  <span className="text-xs font-bold tabular-nums w-10 text-right shrink-0" style={{ color: vc }}>{item.vibeScore}</span>
                 </div>
                 <div className="px-4 py-3 flex items-center gap-4">
                   <p className="text-xs text-white/45 w-36 shrink-0">Security posture</p>

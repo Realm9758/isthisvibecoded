@@ -17,14 +17,14 @@ export function SharingButtons({ scanId, vibeScore, vibeLabel, securityScore, do
 
   const tweetText = encodeURIComponent(
     `I just scanned ${domain} with @VibeScan!\n\n` +
-    `Vibe Score: ${vibeScore}/100 (${vibeLabel})\n` +
+    `AI Signal Score: ${vibeScore}/100 (${vibeLabel})\n` +
     `Security Score: ${securityScore}/100\n\n` +
-    `Is your site vibe-coded? →`
+    `Check your own site →`
   );
   const tweetUrl = `https://x.com/intent/tweet?text=${tweetText}&url=${encodeURIComponent(resultUrl)}`;
 
   const linkedinUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(resultUrl)}`;
-  const redditUrl = `https://reddit.com/submit?url=${encodeURIComponent(resultUrl)}&title=${encodeURIComponent(`Is ${domain} vibe-coded? ${vibeScore}/100 — VibeScan`)}`;
+  const redditUrl = `https://reddit.com/submit?url=${encodeURIComponent(resultUrl)}&title=${encodeURIComponent(`${domain} AI signal score: ${vibeScore}/100 — VibeScan`)}`;
 
   const embedCode = `<a href="${resultUrl}" target="_blank" rel="noopener">
   <img src="${appUrl}/api/badge/${scanId}" alt="VibeScan badge for ${domain}" height="72" />

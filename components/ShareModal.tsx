@@ -12,10 +12,9 @@ interface Props {
 function buildSummary(result: AnalysisResult, domain: string): string {
   const tech = result.techStack.slice(0, 3).map(t => t.name).join(' + ');
   const techPart = tech ? ` Built with ${tech}.` : '';
-  const vibeWord = result.vibe.score >= 70 ? 'heavily' : result.vibe.score >= 30 ? 'possibly' : 'barely';
   return (
-    `${domain} is ${vibeWord} vibe-coded (${result.vibe.score}%). ` +
-    `Security: ${result.security.score}/100 — ${result.security.riskLevel} risk.` +
+    `${domain} scored ${result.vibe.score}/100 for public AI-generation signals (${result.vibe.label}). ` +
+    `Security: ${result.security.score}/100 — ${result.security.riskLevel}.` +
     `${techPart} Check yours at isthisvibecoded.com`
   );
 }
@@ -72,7 +71,7 @@ export function ShareModal({ result, onClose }: Props) {
   const shareLink = encodeURIComponent(resultUrl);
   const twitterUrl = `https://x.com/intent/tweet?text=${tweetText}&url=${shareLink}`;
   const linkedinUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${shareLink}`;
-  const redditUrl = `https://reddit.com/submit?url=${shareLink}&title=${encodeURIComponent(`Is ${domain} vibe-coded? ${result.vibe.score}% — VibeScan Results`)}`;
+  const redditUrl = `https://reddit.com/submit?url=${shareLink}&title=${encodeURIComponent(`${domain} AI signal score: ${result.vibe.score}/100 — VibeScan Results`)}`;
 
   const tech = result.techStack.slice(0, 3).map(t => t.name);
 
@@ -131,9 +130,9 @@ export function ShareModal({ result, onClose }: Props) {
                 </div>
                 <div className="text-right shrink-0">
                   <p className="text-4xl font-black leading-none" style={{ color: vibeColor }}>
-                    {result.vibe.score}%
+                    {result.vibe.score}
                   </p>
-                  <p className="text-[9px] text-white/35 mt-0.5 uppercase tracking-wide">vibe-coded</p>
+                  <p className="text-[9px] text-white/35 mt-0.5 uppercase tracking-wide">AI signals</p>
                 </div>
               </div>
 

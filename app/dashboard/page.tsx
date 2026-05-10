@@ -978,8 +978,8 @@ function ScanCard({ scan }: { scan: ScanSummary }) {
 
         <div className="flex items-center gap-3 shrink-0">
           <div className="text-right">
-            <p className="text-xs text-white/25 uppercase tracking-wider text-[9px]">Vibe</p>
-            <p className="text-sm font-bold" style={{ color: vc }}>{scan.result.vibe.score}%</p>
+            <p className="text-xs text-white/25 uppercase tracking-wider text-[9px]">AI</p>
+            <p className="text-sm font-bold" style={{ color: vc }}>{scan.result.vibe.score}</p>
           </div>
           <div className="text-right">
             <p className="text-xs text-white/25 uppercase tracking-wider text-[9px]">Security</p>

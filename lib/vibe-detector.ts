@@ -12,7 +12,7 @@ import type { VibeLabel, ConfidenceLevel } from '@/types/analysis';
 //
 //   negativeMultiplier (0.15–1.0) — suppresses legacy/hand-coded patterns
 //
-// Score → label:  ≥42 Likely Vibe-Coded  |  ≥22 Possibly  |  <22 Likely Hand-Coded
+// Score → label:  ≥45 Strong AI Signals  |  ≥18 Some AI Signals  |  <18 Few AI Signals
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AI_COPY_PATTERNS: RegExp[] = [
@@ -284,6 +284,11 @@ export function detectVibe(
     stackReasons.push('Partial AI stack (framework or host + BaaS/UI kit)');
   }
 
+  if (hasFramework && hasDenseTailwind && !hasCloudHost && !hasBaaS && stackScore < 18) {
+    stackScore = 18;
+    stackReasons.push('Modern JS framework with dense Tailwind utility styling');
+  }
+
   // Clerk auth — near-exclusive to AI-scaffolded apps (standalone bonus)
   if (hasClerk) {
     stackScore = Math.min(stackScore + 8, CAPS.stackPatterns);
@@ -501,7 +506,7 @@ export function detectVibe(
 }
 
 export function getVibeLabel(score: number): VibeLabel {
-  if (score >= 42) return 'Likely Vibe-Coded';
-  if (score >= 22) return 'Possibly Vibe-Coded';
-  return 'Likely Hand-Coded';
+  if (score >= 45) return 'Strong AI Signals';
+  if (score >= 18) return 'Some AI Signals';
+  return 'Few AI Signals';
 }

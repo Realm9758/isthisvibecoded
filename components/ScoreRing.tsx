@@ -7,9 +7,10 @@ interface ScoreRingProps {
   color: string;
   label: string;
   sublabel?: string;
+  caption?: string;
 }
 
-export function ScoreRing({ score, size = 140, strokeWidth = 10, color, label, sublabel }: ScoreRingProps) {
+export function ScoreRing({ score, size = 140, strokeWidth = 10, color, label, sublabel, caption = '/ 100' }: ScoreRingProps) {
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (score / 100) * circumference;
@@ -46,7 +47,7 @@ export function ScoreRing({ score, size = 140, strokeWidth = 10, color, label, s
           <span className="text-3xl font-bold tabular-nums" style={{ color }}>
             {score}
           </span>
-          <span className="text-xs text-white/40 uppercase tracking-widest">/ 100</span>
+          <span className="text-xs text-white/40 uppercase tracking-widest">{caption}</span>
         </div>
       </div>
       <div className="text-center">

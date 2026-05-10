@@ -8,11 +8,8 @@ import { Confetti } from '@/components/Confetti';
 import { useAuth } from '@/contexts/AuthContext';
 
 const EXAMPLE_SITES = [
-  { label: 'google.com',   url: 'https://google.com',   hint: 'Highly hand-crafted' },
-  { label: 'vercel.com',   url: 'https://vercel.com',   hint: 'Polished SaaS' },
-  { label: 'notion.so',    url: 'https://notion.so',    hint: 'Custom-built' },
-  { label: 'supabase.com', url: 'https://supabase.com', hint: 'Modern stack' },
-  { label: 'github.com',   url: 'https://github.com',   hint: 'Enterprise built' },
+  { label: 'example.com',  url: 'https://example.com',  hint: 'Reserved demo domain' },
+  { label: 'your-site.com', url: 'https://your-site.com', hint: 'Replace with a site you control' },
 ];
 
 type FullResult = AnalysisResult & { scanId?: string; roasts?: string[]; scansRemaining?: number | null };
@@ -33,6 +30,7 @@ export default function Home() {
   const [loadStep, setLoadStep]   = useState(0);
   const [confetti, setConfetti]   = useState(false);
   const [roastMode, setRoastMode] = useState(false);
+  const [hasPermission, setHasPermission] = useState(false);
   const stepRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
 
@@ -58,6 +56,10 @@ export default function Home() {
       setErrorMsg('Please enter a valid URL — e.g. example.com');
       return;
     }
+    if (!hasPermission) {
+      setErrorMsg('Confirm you own this site or have explicit permission to scan it.');
+      return;
+    }
     setErrorMsg('');
     setStatus('loading');
     setResult(null);
@@ -67,7 +69,7 @@ export default function Home() {
       const res  = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: target }),
+        body: JSON.stringify({ url: target, authorized: true }),
       });
       const data = await res.json();
 
@@ -174,6 +176,18 @@ export default function Home() {
                   </button>
                 </div>
 
+                <label className="mt-3 flex items-start gap-2.5 text-left cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={hasPermission}
+                    onChange={e => setHasPermission(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-white/15 bg-white/5 accent-violet-500"
+                  />
+                  <span className="text-[11px] text-white/35 leading-relaxed">
+                    I own this site or have explicit permission to run a passive read-only scan.
+                  </span>
+                </label>
+
                 {(errorMsg || status === 'error') && (
                   <div className="mt-2 flex items-center justify-between gap-3">
                     <p className="text-sm text-red-400 text-left px-1">{errorMsg || 'Analysis failed.'}</p>
@@ -188,7 +202,7 @@ export default function Home() {
 
               {/* Safety notice */}
               <p className="mt-3 text-[11px] text-white/20 text-center">
-                Only scan sites you own or have explicit permission to test.{' '}
+                We block local/private network targets and require ownership verification before active deep scans.{' '}
                 <a href="/privacy" className="underline underline-offset-2 hover:text-white/40 transition-colors">Privacy policy</a>
               </p>
 
@@ -209,11 +223,11 @@ export default function Home() {
 
               {/* Example sites */}
               <div className="mt-5 flex flex-wrap justify-center gap-2">
-                <span className="text-xs text-white/25 self-center">Try:</span>
+                <span className="text-xs text-white/25 self-center">Fill:</span>
                 {EXAMPLE_SITES.map(site => (
                   <button
                     key={site.url}
-                    onClick={() => { setUrl(site.url); analyze(site.url); }}
+                    onClick={() => setUrl(site.url)}
                     disabled={status === 'loading'}
                     title={site.hint}
                     className="px-3 py-1 rounded-full text-xs border border-white/10 text-white/50 hover:border-white/20 hover:text-white/80 transition-colors disabled:opacity-40"
