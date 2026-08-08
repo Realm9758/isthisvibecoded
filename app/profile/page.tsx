@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { isValidDisplayHandle } from '@/lib/policy';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -21,15 +22,6 @@ const PLAN_BADGE: Record<string, { cls: string; label: string }> = {
 type Tab = 'overview' | 'settings';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-function timeAgo(ms: number) {
-  const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
 
 // Compress image to base64 via canvas (max 120×120, JPEG 0.82)
 function compressImage(file: File): Promise<string> {
@@ -73,10 +65,6 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
-function Skeleton({ className }: { className?: string }) {
-  return <div className={`rounded-lg bg-white/5 animate-pulse ${className ?? ''}`} />;
-}
-
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <h3 className="text-[10px] font-bold text-white/30 uppercase tracking-widest mb-3">{children}</h3>
@@ -92,6 +80,8 @@ function AvatarDisplay({
 }) {
   if (url) {
     return (
+      // User avatars are compressed data URLs; serving them directly avoids an optimizer round trip.
+      // eslint-disable-next-line @next/next/no-img-element
       <img
         src={url}
         alt={name}
@@ -238,7 +228,7 @@ function OverviewTab({
               <span className="font-semibold text-white/65">{user.scansRemaining ?? 0}</span> passive scans left today
               · <span className="font-semibold text-white/65">{Math.max(0, 2 - (deepCount ?? 0))}</span> deep scans remaining
             </p>
-            <p className="text-[11px] text-white/25">Upgrade for unlimited scans, deep analysis, and PDF export.</p>
+            <p className="text-[11px] text-white/25">Upgrade for unlimited passive and experimental deep scans.</p>
           </div>
           <Link
             href="/pricing"
@@ -296,8 +286,10 @@ function EditProfileModal({
 
   async function handleSave() {
     const trimmed = name.trim();
-    if (!trimmed) { setError('Name cannot be empty'); return; }
-    if (trimmed.length > 40) { setError('Name must be 40 characters or less'); return; }
+    if (!isValidDisplayHandle(trimmed)) {
+      setError('Use 1–40 letters, numbers, dots, underscores, or hyphens; start with a letter or number.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -365,6 +357,8 @@ function EditProfileModal({
               {/* Preview */}
               <div className="relative shrink-0">
                 {previewUrl ? (
+                  // Preview is a local data URL and is never a network image.
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img src={previewUrl} alt="Avatar" className="w-16 h-16 rounded-2xl object-cover" style={{ border: `2px solid ${selectedColor}40` }} />
                 ) : (
                   <div
@@ -431,19 +425,24 @@ function EditProfileModal({
           {/* Name */}
           <div>
             <label className="block text-[11px] font-bold text-white/30 uppercase tracking-widest mb-2">
-              Display name
+              Public display handle
             </label>
             <input
               value={name}
               onChange={e => setName(e.target.value)}
               maxLength={40}
-              placeholder="Your name"
+              pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
+              title="Use letters, numbers, dots, underscores, or hyphens; start with a letter or number."
+              placeholder="your-handle"
               className="w-full px-4 py-2.5 rounded-xl text-sm text-white placeholder-white/20 outline-none transition-all"
               style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}
               onFocus={e => (e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)')}
               onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
             />
-            <p className="text-[10px] text-white/20 mt-1 text-right">{name.length}/40</p>
+            <div className="flex justify-between gap-3 mt-1">
+              <p className="text-[10px] text-white/20">Shown publicly with comments and replies.</p>
+              <p className="text-[10px] text-white/20 shrink-0">{name.length}/40</p>
+            </div>
           </div>
 
           {/* Bio */}
@@ -506,17 +505,29 @@ function SettingsTab({
   const [notifInApp, setNotifInApp] = useState(user.notifInApp);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   async function saveNotifs() {
     setSaving(true);
-    await fetch('/api/user/profile', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ notifEmail, notifInApp }),
-    });
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setSaved(false);
+    setSaveError('');
+    try {
+      const response = await fetch('/api/user/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notifEmail, notifInApp }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error ?? 'Could not save notification preferences');
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save notification preferences');
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -581,6 +592,7 @@ function SettingsTab({
             <Toggle checked={notifEmail} onChange={v => { setNotifEmail(v); }} />
           </div>
           <div className="px-4 py-3">
+            {saveError && <p role="alert" className="text-xs text-red-400 mb-2">{saveError}</p>}
             <button
               onClick={saveNotifs}
               disabled={saving}

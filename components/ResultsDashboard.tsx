@@ -5,6 +5,7 @@ import type { AnalysisResult } from '@/types/analysis';
 import { ScoreRing } from './ScoreRing';
 import { ShareModal } from './ShareModal';
 import { useAuth } from '@/contexts/AuthContext';
+import { getVibeColor, VIBE_SCORE_BANDS } from '@/lib/vibe-constants';
 
 // ── AI Prompt Section ─────────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ const TOOLS: ToolDef[] = [
   { id: 'replit',   name: 'Replit',   tagline: 'Deploy-first, fast',       accent: '#e879f9', bg: 'rgba(232,121,249,0.08)', border: 'rgba(232,121,249,0.2)' },
 ];
 
-function detectLikelyTool(result: AnalysisResult): AiTool {
+function suggestFixTool(result: AnalysisResult): AiTool {
   const names = result.techStack.map(t => t.name.toLowerCase());
   const hosting = (result.hosting.provider ?? '').toLowerCase();
   const hasSupabase  = names.some(n => n.includes('supabase'));
@@ -54,7 +55,9 @@ function buildPrompt(tool: AiTool, result: AnalysisResult): string {
   const hosting = result.hosting.provider;
   const domain = (() => { try { return new URL(result.url).hostname; } catch { return result.url; } })();
   const stack = [...techNames, hosting].filter(Boolean).join(', ');
-  const missingHeaders = result.security.headers.filter(h => !h.present).map(h => `- Add ${h.name}: ${h.recommendation}`);
+  const missingHeaders = result.security.headers
+    .filter(h => !h.present || h.valid === false)
+    .map(h => `- ${h.present ? 'Strengthen' : 'Add'} ${h.name}: ${h.details ?? h.recommendation}`);
   const exposedPaths = result.publicFiles
     .filter(f => f.accessible && ['/.env', '/config.json', '/wp-admin', '/admin'].includes(f.path))
     .map(f => `- Review ${f.path} (${f.status})${f.evidence ? `: ${f.evidence}` : ''}`);
@@ -107,13 +110,12 @@ Before editing, inspect the current framework and deployment setup. After editin
 }
 
 function PromptSection({ result }: { result: AnalysisResult }) {
-  const detected = detectLikelyTool(result);
-  const [activeTool, setActiveTool] = useState<AiTool>(detected);
+  const suggested = suggestFixTool(result);
+  const [activeTool, setActiveTool] = useState<AiTool>(suggested);
   const [copied, setCopied] = useState(false);
 
   const prompt = buildPrompt(activeTool, result);
   const toolDef = TOOLS.find(t => t.id === activeTool)!;
-  const detectedDef = TOOLS.find(t => t.id === detected)!;
 
   function copyPrompt() {
     navigator.clipboard.writeText(prompt).then(() => {
@@ -133,11 +135,7 @@ function PromptSection({ result }: { result: AnalysisResult }) {
             <p className="text-xs font-semibold text-white/60 uppercase tracking-wider">Fix Prompt</p>
           </div>
           <p className="text-xs text-white/30">
-            {result.vibe.score >= 45 ? (
-              <>Best fit: <span className="font-semibold" style={{ color: detectedDef.accent }}>{detectedDef.name}</span> · review before applying</>
-            ) : (
-              <>Generic remediation prompt based on visible stack · review before applying</>
-            )}
+            Suggested fix workflow based on the visible stack · not an authorship or generator guess
           </p>
         </div>
         <button
@@ -168,8 +166,8 @@ function PromptSection({ result }: { result: AnalysisResult }) {
             }
           >
             {t.name}
-            {t.id === detected && (
-              <span className="text-[9px] px-1 rounded" style={{ background: t.bg, color: t.accent }}>detected</span>
+            {t.id === suggested && (
+              <span className="text-[9px] px-1 rounded" style={{ background: t.bg, color: t.accent }}>suggested</span>
             )}
           </button>
         ))}
@@ -204,16 +202,19 @@ const CATEGORY_LABELS: Record<string, string> = {
   cdn: 'CDN', analytics: 'Analytics', backend: 'Backend', database: 'Database',
 };
 
-function getVibeColor(s: number) { return s >= 70 ? '#8b5cf6' : s >= 30 ? '#f59e0b' : '#22c55e'; }
 function getVibeGradient(s: number) {
-  return s >= 70
+  return s >= VIBE_SCORE_BANDS.strong
     ? 'linear-gradient(135deg, rgba(139,92,246,0.15), rgba(99,102,241,0.08))'
-    : s >= 30
+    : s >= VIBE_SCORE_BANDS.limited
     ? 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(234,179,8,0.05))'
-    : 'linear-gradient(135deg, rgba(34,197,94,0.12), rgba(16,185,129,0.05))';
+    : 'linear-gradient(135deg, rgba(148,163,184,0.10), rgba(71,85,105,0.05))';
 }
 function getVibeBorder(s: number) {
-  return s >= 70 ? 'rgba(139,92,246,0.25)' : s >= 30 ? 'rgba(245,158,11,0.25)' : 'rgba(34,197,94,0.25)';
+  return s >= VIBE_SCORE_BANDS.strong
+    ? 'rgba(139,92,246,0.25)'
+    : s >= VIBE_SCORE_BANDS.limited
+      ? 'rgba(245,158,11,0.25)'
+      : 'rgba(148,163,184,0.22)';
 }
 
 // ── Fix code examples ─────────────────────────────────────────────────────
@@ -236,19 +237,29 @@ const HEADER_PENALTIES: Record<string, number> = {
 const HEADER_FIX_CODES: Record<string, FixCodeExample[]> = {
   'Content-Security-Policy': [
     {
-      label: 'Next.js',
-      code: `// next.config.js
-module.exports = {
-  async headers() {
-    return [{
-      source: '/(.*)',
-      headers: [{
-        key: 'Content-Security-Policy',
-        value: "default-src 'self'; script-src 'self' 'unsafe-inline'",
-      }],
-    }];
-  },
-};`,
+      label: 'Next.js (nonce)',
+      code: `// proxy.ts — nonce must be unpredictable and new on every request.
+import { NextRequest, NextResponse } from 'next/server';
+
+export function proxy(request: NextRequest) {
+  const nonce = Buffer.from(crypto.randomUUID()).toString('base64');
+  const csp = [
+    "default-src 'self'",
+    \`script-src 'self' 'nonce-\${nonce}' 'strict-dynamic'\`,
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+  ].join('; ');
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-nonce', nonce);
+  requestHeaders.set('Content-Security-Policy', csp);
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set('Content-Security-Policy', csp);
+  return response;
+}
+
+// Nonces require dynamic rendering. Test every external script/style and follow
+// the current Next.js Content Security Policy guide before deploying.`,
     },
     { label: 'Nginx',  code: `add_header Content-Security-Policy "default-src 'self'" always;` },
     { label: 'Apache', code: `Header always set Content-Security-Policy "default-src 'self'"` },
@@ -366,8 +377,8 @@ function buildPassiveFindings(result: AnalysisResult): PassiveFinding[] {
     'Strict-Transport-Security': 'Without HSTS, browsers may access the site over HTTP on first visit, opening a window for SSL-stripping attacks. An attacker between the user and server can downgrade the connection.',
     'X-Frame-Options': "The page can be embedded invisibly inside an iframe on an attacker's site. Users can be tricked into clicking hidden buttons — submitting forms, making purchases, or changing account settings.",
     'X-Content-Type-Options': 'Browsers may MIME-sniff response content. In edge cases this allows a text file uploaded by a user to be executed as JavaScript.',
-    'Referrer-Policy': 'Full page URLs (including query params with tokens or IDs) are sent in the Referer header to every third-party resource loaded on the page — analytics, fonts, CDNs.',
-    'Permissions-Policy': "No restrictions on which browser APIs embedded scripts can access. Good defence-in-depth to explicitly disable camera, microphone, and geolocation for scripts that don't need them.",
+    'Referrer-Policy': 'No explicit referrer policy was detected. Modern browsers apply a protective default, but an explicit policy makes the intended cross-origin URL disclosure consistent and auditable, including for older clients.',
+    'Permissions-Policy': "No explicit browser-feature policy was detected. Browser defaults and iframe origin rules still apply; an explicit policy adds defence in depth by disabling camera, microphone, geolocation, and other features the site does not need.",
   };
   const headerFix: Record<string, string> = {
     'Content-Security-Policy': "Add a Content-Security-Policy header. Start with: default-src 'self'; adjust based on your external resource needs.",
@@ -379,30 +390,33 @@ function buildPassiveFindings(result: AnalysisResult): PassiveFinding[] {
   };
 
   for (const h of result.security.headers) {
-    if (!h.present) {
+    if (!h.present || h.valid === false) {
+      const invalid = h.present && h.valid === false;
       findings.push({
         id: `header-${h.name}`,
         severity: headerSeverityMap[h.name] ?? 'info',
-        title: `Missing header: ${h.name}`,
-        detail: headerDetail[h.name] ?? h.recommendation,
+        title: `${invalid ? 'Weak or invalid' : 'Missing'} header: ${h.name}`,
+        detail: invalid && h.details ? `${h.details} ${headerDetail[h.name] ?? ''}`.trim() : (headerDetail[h.name] ?? h.recommendation),
         fix: headerFix[h.name] ?? h.recommendation,
         fixCodes: HEADER_FIX_CODES[h.name],
       });
     }
   }
 
-  const dangerousFiles: Record<string, { severity: PassiveFinding['severity']; detail: string; fix: string; fixCodes?: FixCodeExample[] }> = {
+  const dangerousFiles: Record<string, { title: string; severity: PassiveFinding['severity']; detail: string; fix: string; fixCodes?: FixCodeExample[] }> = {
     '/.env': {
+      title: 'Environment configuration exposed',
       severity: 'critical',
       detail: 'Your .env file is publicly accessible. It likely contains database passwords, API secrets, JWT signing keys, and third-party service credentials — everything an attacker needs for full system compromise.',
       fix: 'Block access immediately via your web server config. Rotate every secret in the file. Add .env to .gitignore and never commit it.',
       fixCodes: [
         { label: 'Nginx',  code: `location ~ /\\.env { deny all; return 403; }` },
         { label: 'Apache', code: `<Files ".env">\n  Order allow,deny\n  Deny from all\n</Files>` },
-        { label: 'Vercel', code: `# vercel.json\n{\n  "headers": [{\n    "source": "/.env",\n    "headers": [{ "key": "x-robots-tag", "value": "noindex" }]\n  }]\n}\n# Also: move secrets to Vercel Environment Variables dashboard.` },
+        { label: 'Vercel', code: `# Remove .env files from public/ and any generated static output.\n# .vercelignore\n.env\n.env.*\n!.env.example\n\n# Rotate exposed values, store replacements in Vercel Environment Variables,\n# redeploy, and verify that /.env returns 404 (not merely noindex).` },
       ],
     },
     '/config.json': {
+      title: 'Sensitive configuration keys exposed',
       severity: 'high',
       detail: 'A config.json file is publicly accessible and may contain database connection strings, API keys, or application secrets.',
       fix: 'Move config files outside the webroot or restrict access via server configuration.',
@@ -411,17 +425,19 @@ function buildPassiveFindings(result: AnalysisResult): PassiveFinding[] {
       ],
     },
     '/wp-admin': {
-      severity: 'medium',
-      detail: "WordPress admin panel is publicly reachable. It's a common target for brute-force attacks and authenticated WordPress exploits.",
-      fix: 'Restrict /wp-admin to trusted IPs, add two-factor authentication, and keep WordPress + plugins updated.',
+      title: 'WordPress login path detected',
+      severity: 'info',
+      detail: 'A WordPress admin or login page was detected. A public login page is not itself a vulnerability; review authentication controls, rate limiting, and patching as normal operational hygiene.',
+      fix: 'Keep WordPress and plugins updated, require strong authentication and rate limiting, and consider IP restrictions only when they fit your access needs.',
       fixCodes: [
         { label: 'Nginx', code: `location /wp-admin {\n  allow 203.0.113.0; # your IP\n  deny all;\n}` },
       ],
     },
     '/admin': {
-      severity: 'medium',
-      detail: "An admin panel is publicly accessible. If not protected by strong authentication it's a direct path to system compromise.",
-      fix: 'Ensure strong authentication is required. Consider IP allowlisting for admin paths.',
+      title: 'Admin login path detected',
+      severity: 'info',
+      detail: 'An admin-labelled page or login form was detected. Its presence is contextual information, not proof of missing authentication or a vulnerability.',
+      fix: 'Confirm strong authentication and rate limiting are enabled. Consider IP allowlisting only when it fits your operational requirements.',
       fixCodes: [
         { label: 'Nginx', code: `location /admin {\n  allow 203.0.113.0; # your IP\n  deny all;\n}` },
       ],
@@ -434,7 +450,7 @@ function buildPassiveFindings(result: AnalysisResult): PassiveFinding[] {
       findings.push({
         id: `file-${f.path}`,
         severity: d.severity,
-        title: `Sensitive path accessible: ${f.path}`,
+        title: d.title,
         detail: d.detail,
         fix: d.fix,
         fixCodes: d.fixCodes,
@@ -525,23 +541,32 @@ function FixCodeBlock({ examples }: { examples: FixCodeExample[] }) {
 // ── False positive button ─────────────────────────────────────────────────
 
 function FalsePositiveButton({ finding, site }: { finding: PassiveFinding; site: string }) {
-  const [state, setState] = useState<'idle' | 'open' | 'sent'>('idle');
+  const [state, setState] = useState<'idle' | 'open' | 'sending' | 'sent'>('idle');
   const [comment, setComment] = useState('');
+  const [error, setError] = useState('');
 
   async function submit() {
-    await fetch('/api/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ site, issueId: finding.id, issueTitle: finding.title, comment }),
-    });
-    setState('sent');
+    setState('sending');
+    setError('');
+    try {
+      const response = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site, issueId: finding.id, issueTitle: finding.title, comment }),
+      });
+      if (!response.ok) throw new Error('The report could not be saved. Please try again.');
+      setState('sent');
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'The report could not be saved.');
+      setState('open');
+    }
   }
 
   if (state === 'sent') {
     return <p className="text-[10px] text-emerald-400/70 mt-2">✓ Reported — thanks for the feedback.</p>;
   }
 
-  if (state === 'open') {
+  if (state === 'open' || state === 'sending') {
     return (
       <div className="mt-3 space-y-2">
         <textarea
@@ -552,13 +577,15 @@ function FalsePositiveButton({ finding, site }: { finding: PassiveFinding; site:
           className="w-full px-3 py-2 rounded-lg text-[11px] text-white/60 placeholder-white/20 resize-none outline-none"
           style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
         />
+        {error && <p role="alert" className="text-[10px] text-red-400">{error}</p>}
         <div className="flex gap-2">
           <button
             onClick={submit}
+            disabled={state === 'sending'}
             className="px-3 py-1 rounded-lg text-[11px] font-semibold text-white"
             style={{ background: 'rgba(139,92,246,0.8)', border: '1px solid rgba(139,92,246,0.4)' }}
           >
-            Submit
+            {state === 'sending' ? 'Submitting…' : 'Submit'}
           </button>
           <button
             onClick={() => setState('idle')}
@@ -654,11 +681,11 @@ function ScoreBreakdown({ result }: { result: AnalysisResult }) {
   }
 
   for (const h of result.security.headers) {
-    if (!h.present) {
-      const penalty = HEADER_PENALTIES[h.name] ?? 0;
+    if (!h.present || h.valid === false) {
+      const penalty = h.penaltyApplied ?? HEADER_PENALTIES[h.name] ?? 0;
       if (penalty > 0) {
         deductions.push({
-          label: `Missing ${h.name}`,
+          label: `${h.present ? 'Weak' : 'Missing'} ${h.name}`,
           penalty,
           color: penalty >= 20 ? '#f87171' : penalty >= 10 ? '#fb923c' : '#fbbf24',
         });
@@ -711,7 +738,7 @@ function ScoreBreakdown({ result }: { result: AnalysisResult }) {
 
           {/* Deductions */}
           {deductions.length === 0 ? (
-            <p className="text-[11px] text-emerald-400 py-1">No deductions — perfect security headers.</p>
+            <p className="text-[11px] text-emerald-400 py-1">No deductions in this limited header-presence check.</p>
           ) : (
             deductions.map(d => (
               <div key={d.label} className="flex items-center gap-3 py-0.5">
@@ -737,7 +764,7 @@ function ScoreBreakdown({ result }: { result: AnalysisResult }) {
 
           {/* Divider + final score */}
           <div className="border-t border-white/6 pt-2 flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-white/50">Security Score</span>
+            <span className="text-[11px] font-semibold text-white/50">Header Hardening Index</span>
             <div className="flex items-center gap-2">
               <div className="h-1.5 w-20 rounded-full bg-white/6 overflow-hidden">
                 <div
@@ -775,10 +802,10 @@ function OnboardingNote() {
         <p className="text-[11px] font-semibold text-white/55">How to read these results</p>
         <ul className="space-y-0.5">
           {[
-            ['AI Signal Score', '0 means few public AI-generation signals; 100 means strong public evidence. It does not prove authorship.'],
-            ['Security Score', '0–100 based on HTTP headers and exposed files. 80+ = well-configured.'],
+            ['Evidence Index', '0–100 summarizes allowlisted public provenance markers. It is not a probability or proof of authorship.'],
+            ['Header Hardening', '0–100 measures a limited set of HTTPS and response-header controls, not overall application security.'],
             ['Key Risks', 'Issues visible without authentication. Expand each to see fix instructions and code examples.'],
-            ['Next step', 'Sign up and verify ownership to run a full active vulnerability scan.'],
+            ['Next step', 'Sign up and verify domain control to run the experimental set of active checks.'],
           ].map(([term, desc]) => (
             <li key={term} className="text-[11px] text-white/40">
               <span className="text-white/60 font-medium">{term}:</span> {desc}
@@ -794,7 +821,13 @@ function OnboardingNote() {
 // ── Props ─────────────────────────────────────────────────────────────────
 
 interface Props {
-  result: AnalysisResult & { scanId?: string; roasts?: string[]; scansRemaining?: number | null };
+  result: AnalysisResult & {
+    scanId?: string;
+    roasts?: string[];
+    scansRemaining?: number | null;
+    isPublic?: boolean;
+    canPublish?: boolean;
+  };
   onReset: () => void;
   defaultRoastMode?: boolean;
 }
@@ -884,14 +917,14 @@ function PublishModal({ scanId, onClose, onPublished }: { scanId: string; onClos
   );
 }
 
-// ── Risk level helper ─────────────────────────────────────────────────────
+// ── Hardening-review priority helper ─────────────────────────────────────
 
 function getRiskLevel(findings: PassiveFinding[]): { label: string; color: string; bg: string; border: string } {
-  if (findings.some(f => f.severity === 'critical')) return { label: 'Critical Risk', color: '#f87171', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)' };
-  if (findings.some(f => f.severity === 'high'))     return { label: 'High Risk',     color: '#fb923c', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.3)' };
-  if (findings.some(f => f.severity === 'medium'))   return { label: 'Medium Risk',   color: '#fbbf24', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)' };
-  if (findings.some(f => f.severity === 'low'))      return { label: 'Low Risk',      color: '#6ee7b7', bg: 'rgba(110,231,183,0.08)', border: 'rgba(110,231,183,0.2)' };
-  return { label: 'Looks Clean', color: '#4ade80', bg: 'rgba(74,222,128,0.08)', border: 'rgba(74,222,128,0.2)' };
+  if (findings.some(f => f.severity === 'critical')) return { label: 'Critical review priority', color: '#f87171', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)' };
+  if (findings.some(f => f.severity === 'high'))     return { label: 'High review priority',     color: '#fb923c', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.3)' };
+  if (findings.some(f => f.severity === 'medium'))   return { label: 'Medium review priority',   color: '#fbbf24', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.2)' };
+  if (findings.some(f => f.severity === 'low'))      return { label: 'Low-priority observations', color: '#6ee7b7', bg: 'rgba(110,231,183,0.08)', border: 'rgba(110,231,183,0.2)' };
+  return { label: 'No review items detected', color: '#4ade80', bg: 'rgba(74,222,128,0.08)', border: 'rgba(74,222,128,0.2)' };
 }
 
 // ── Main component ────────────────────────────────────────────────────────
@@ -901,7 +934,9 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
   const [roastMode, setRoastMode] = useState(defaultRoastMode);
   const [shareOpen, setShareOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
-  const [published, setPublished] = useState(false);
+  const [published, setPublished] = useState(result.isPublic ?? false);
+  const [visibilityChanging, setVisibilityChanging] = useState(false);
+  const [visibilityError, setVisibilityError] = useState('');
   const [techOpen, setTechOpen] = useState(false);
   const [allRisksOpen, setAllRisksOpen] = useState(false);
   const [allVibeOpen, setAllVibeOpen] = useState(false);
@@ -926,8 +961,27 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
   const keyRiskFindings = passiveFindings.filter(f => f.severity === 'critical' || f.severity === 'high' || f.severity === 'medium');
   const lowerFindings   = passiveFindings.filter(f => f.severity === 'low' || f.severity === 'info');
 
-  const likelyTool    = detectLikelyTool(result);
-  const likelyToolDef = TOOLS.find(t => t.id === likelyTool)!;
+  const contextSignals = result.vibe.signals?.filter(signal => signal.direction !== 'supports') ?? [];
+
+  async function handleUnpublish() {
+    if (!result.scanId || !window.confirm('Make this result private? Public links, badges, and feed entries will stop working.')) return;
+    setVisibilityChanging(true);
+    setVisibilityError('');
+    try {
+      const response = await fetch(`/api/scans/${result.scanId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPublic: false }),
+      });
+      if (!response.ok) throw new Error('Could not make this result private');
+      setPublished(false);
+      setShareOpen(false);
+    } catch (error) {
+      setVisibilityError(error instanceof Error ? error.message : 'Could not make this result private');
+    } finally {
+      setVisibilityChanging(false);
+    }
+  }
 
   return (
     <div className="w-full max-w-2xl mx-auto space-y-3">
@@ -963,8 +1017,8 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             score={result.vibe.score}
             color={vibeColor}
             label={result.vibe.label}
-            sublabel={`${result.vibe.confidence} confidence`}
-            caption="AI signals"
+            sublabel={`${result.vibe.confidence} evidence quality`}
+            caption="evidence index"
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 mb-2 flex-wrap">
@@ -972,7 +1026,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             </div>
             <h2 className="text-xl font-black leading-tight mb-2.5" style={{ color: vibeColor }}>{result.vibe.label}</h2>
             <p className="text-xs text-white/40 leading-relaxed mb-3 max-w-md">
-              {result.vibe.score}/100 is an AI-signal score: higher means more public evidence of AI-assisted scaffolding, not a definitive authorship claim.
+              {result.vibe.score}/100 is a public provenance evidence index, not a probability. A URL scan cannot determine whether a developer understood or reviewed AI-written code.
             </p>
             <div className="flex gap-2 flex-wrap">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border" style={{ color: riskLevel.color, background: riskLevel.bg, borderColor: riskLevel.border }}>
@@ -981,12 +1035,12 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
               </span>
               {totalIssues > 0 && (
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border border-red-500/25 bg-red-500/8 text-red-400">
-                  {totalIssues} issue{totalIssues > 1 ? 's' : ''} found
+                  {totalIssues} review item{totalIssues > 1 ? 's' : ''}
                 </span>
               )}
-              {result.vibe.score >= 50 && (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border" style={{ color: likelyToolDef.accent, background: likelyToolDef.bg, borderColor: likelyToolDef.border }}>
-                  Likely {likelyToolDef.name}
+              {result.vibe.declaredGenerator && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border border-violet-500/25 bg-violet-500/8 text-violet-300">
+                  Declared generator: {result.vibe.declaredGenerator}
                 </span>
               )}
             </div>
@@ -999,12 +1053,21 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             >
               {roastMode ? '🔥 On' : '🔥 Roast'}
             </button>
-            {result.scanId && (
+            {result.scanId && published && (
               <button onClick={() => setShareOpen(true)} className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-violet-500/30 bg-violet-500/10 text-violet-400 hover:bg-violet-500/15 transition-colors">
                 Share
               </button>
             )}
-            {result.scanId && user && (
+            {result.scanId && user && result.canPublish && published && (
+              <button
+                onClick={handleUnpublish}
+                disabled={visibilityChanging}
+                className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-white/10 text-white/35 hover:text-white/60 hover:bg-white/5 transition-colors disabled:opacity-50"
+              >
+                {visibilityChanging ? 'Saving…' : 'Make private'}
+              </button>
+            )}
+            {result.scanId && user && result.canPublish && !published && (
               <button
                 onClick={() => setPublishOpen(true)}
                 disabled={published}
@@ -1020,6 +1083,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             <button onClick={onReset} className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-white/10 text-white/40 hover:bg-white/5 transition-colors">
               New Scan
             </button>
+            {visibilityError && <span className="max-w-28 text-[10px] leading-tight text-red-400">{visibilityError}</span>}
           </div>
         </div>
 
@@ -1038,7 +1102,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
         {/* Vibe signals */}
         {result.vibe.reasons.length > 0 && (
           <div className="border-t px-5 py-4 space-y-2" style={{ borderColor: vibeBorder }}>
-            <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wider mb-2">Public AI signals found</p>
+            <p className="text-[10px] font-semibold text-white/35 uppercase tracking-wider mb-2">Scored public provenance evidence</p>
             {topVibeReasons.map((r, i) => (
               <div key={i} className="flex items-start gap-2 text-sm text-white/65">
                 <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0" style={{ background: vibeColor }} />
@@ -1065,9 +1129,35 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
         )}
         {result.vibe.reasons.length === 0 && (
           <div className="border-t px-5 py-4" style={{ borderColor: vibeBorder }}>
-            <p className="text-sm text-white/40 italic">No vibe-coding signals detected.</p>
+            <p className="text-sm text-white/40 italic">No scored public provenance signal was detected. This is inconclusive, not evidence that the site was human-coded.</p>
           </div>
         )}
+
+        <div className="border-t px-5 py-4 space-y-2" style={{ borderColor: vibeBorder }}>
+          <div className="flex items-center justify-between gap-3 text-[10px] text-white/35">
+            <span>Model {result.vibe.breakdown?.modelVersion ?? 'legacy result'}</span>
+            <span>Evidence index · not probability</span>
+          </div>
+          <p className="text-[11px] leading-relaxed text-white/35">
+            Only explicit generator metadata, builder-specific project domains, declared “built with” links, and allowlisted builder assets add points. Frameworks, ordinary hosts, UI libraries, generic copy, and unfinished placeholders are context only.
+          </p>
+          <details className="text-[11px] text-white/35">
+            <summary className="cursor-pointer hover:text-white/55">Coverage, context, and limitations</summary>
+            <div className="mt-2 space-y-2 pl-3 border-l border-white/8">
+              {result.coverage && (
+                <p>
+                  Inspected HTTP {result.coverage.responseStatus}, {result.coverage.htmlBytes.toLocaleString()} HTML bytes, {result.coverage.redirectsFollowed} redirect{result.coverage.redirectsFollowed === 1 ? '' : 's'}, and completed {result.coverage.publicPathChecks.completed}/{result.coverage.publicPathChecks.attempted} public-path checks.
+                </p>
+              )}
+              {contextSignals.length > 0 && (
+                <p>Not scored: {contextSignals.map(signal => signal.description).join(' · ')}</p>
+              )}
+              {(result.vibe.limitations ?? result.coverage?.limitations ?? []).map(limitation => (
+                <p key={limitation}>• {limitation}</p>
+              ))}
+            </div>
+          </details>
+        </div>
       </div>
 
       {/* ══ SECTION 2: KEY RISKS ════════════════════════════════════════════ */}
@@ -1088,13 +1178,13 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
             {critCount > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-red-400 bg-red-500/10 border border-red-500/20">{critCount} critical</span>}
             {highCount > 0 && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-orange-400 bg-orange-500/10 border border-orange-500/20">{highCount} high</span>}
             {medCount > 0  && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full text-yellow-400 bg-yellow-500/10 border border-yellow-500/20">{medCount} med</span>}
-            {totalIssues === 0 && <span className="text-[10px] font-medium text-emerald-400">✓ Clean</span>}
+            {totalIssues === 0 && <span className="text-[10px] font-medium text-emerald-400">No findings</span>}
           </div>
         </div>
 
         <div className="p-4 space-y-2">
           {keyRiskFindings.length === 0 && lowerFindings.length === 0 && (
-            <p className="text-sm text-emerald-400 px-1 py-2">No security issues found in publicly visible data.</p>
+            <p className="text-sm text-emerald-400 px-1 py-2">No findings were detected by the completed public checks. This is not a full security assessment.</p>
           )}
 
           {keyRiskFindings.map(f => <PassiveFindingRow key={f.id} f={f} site={result.url} />)}
@@ -1118,7 +1208,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
           <div className="mt-2 rounded-xl border p-3.5 flex items-center justify-between gap-3" style={{ background: 'rgba(239,68,68,0.04)', borderColor: 'rgba(239,68,68,0.12)' }}>
             <div>
               <p className="text-xs font-bold text-white/70">Want active testing?</p>
-              <p className="text-[11px] text-white/35 mt-0.5">Deep Scan runs OWASP Top 10 tests on sites you own.</p>
+              <p className="text-[11px] text-white/35 mt-0.5">Deep Scan runs selected experimental checks on explicitly authorised sites.</p>
             </div>
             <a
               href={user ? '/dashboard' : '/signup'}
@@ -1195,12 +1285,14 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
                       className="flex items-center gap-3 px-4 py-2.5 text-xs"
                       style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}
                     >
-                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${h.present ? 'bg-emerald-400' : 'bg-red-400'}`} />
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${h.present && h.valid !== false ? 'bg-emerald-400' : 'bg-red-400'}`} />
                       <span className="font-mono text-white/55 flex-1">{h.name}</span>
-                      {!h.present && HEADER_PENALTIES[h.name] && (
-                        <span className="text-[10px] font-bold text-red-400/60">−{HEADER_PENALTIES[h.name]}</span>
+                      {h.penaltyApplied !== undefined && h.penaltyApplied > 0 && (
+                        <span className="text-[10px] font-bold text-red-400/60">−{h.penaltyApplied}</span>
                       )}
-                      <span className={h.present ? 'text-emerald-400' : 'text-red-400/70'}>{h.present ? 'Present' : 'Missing'}</span>
+                      <span className={h.present && h.valid !== false ? 'text-emerald-400' : 'text-red-400/70'}>
+                        {!h.present ? 'Missing' : h.valid === false ? 'Weak / invalid' : 'Validated'}
+                      </span>
                     </div>
                   ))}
                 </div>

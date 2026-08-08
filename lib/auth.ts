@@ -1,3 +1,4 @@
+import 'server-only';
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import { scrypt, randomBytes, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
@@ -43,10 +44,14 @@ export async function hashPassword(password: string): Promise<string> {
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [salt, hash] = stored.split(':');
-  if (!salt || !hash) return false;
-  const hashBuffer = Buffer.from(hash, 'hex');
-  const inputHash = (await scryptAsync(password, salt, 64)) as Buffer;
-  return timingSafeEqual(hashBuffer, inputHash);
+  if (!/^[0-9a-f]{32}$/i.test(salt ?? '') || !/^[0-9a-f]{128}$/i.test(hash ?? '')) return false;
+  try {
+    const hashBuffer = Buffer.from(hash, 'hex');
+    const inputHash = (await scryptAsync(password, salt, 64)) as Buffer;
+    return hashBuffer.length === inputHash.length && timingSafeEqual(hashBuffer, inputHash);
+  } catch {
+    return false;
+  }
 }
 
 export const AUTH_COOKIE = 'vc-auth';

@@ -1,89 +1,56 @@
 import type { AnalysisResult } from '@/types/analysis';
+import { VIBE_SCORE_BANDS } from './vibe-constants';
 
-const HIGH_VIBE: string[] = [
-  "This screams '3AM hackathon, Cursor tab-completed the entire thing'",
-  "ChatGPT architecture detected. The scaffolding is showing.",
-  "Classic vibe-coded SaaS: hero section, generic CTA, Supabase auth, zero custom logic.",
-  "If you ctrl+F 'Get started for free', you'll find it exactly where Claude put it.",
-  "This site was probably described to an AI as 'make it look professional'.",
-  "Every single component is from shadcn/ui. The human touch: changing the accent to purple.",
-  "The Tailwind classes are so generic they look copy-pasted from a tutorial.",
-  "There's more boilerplate here than actual product.",
-  "Built with love, ChatGPT, and zero design decisions.",
-  "This is what happens when 'ship fast' meets 'what's a content-security-policy'.",
-  "GPT-4 left its fingerprints everywhere. It's not even trying to hide.",
-  "The entire landing page is vibes — technically a product, spiritually a prompt.",
+const STRONG_EVIDENCE = [
+  'The page left a public builder nametag on its way to production.',
+  'Strong provenance markers: the source is doing more confessing than detecting.',
+  'This result has receipts, not just purple gradients and a hunch.',
 ];
 
-const MED_VIBE: string[] = [
-  "Half hand-crafted, half 'hey Claude, can you add a pricing section'.",
-  "Some parts were written by a human. The generic hero section wasn't.",
-  "AI-assisted, but at least someone tried to customize it.",
-  "Classic hybrid: human ideas, LLM execution, mixed results.",
-  "The bones are human. The flesh is AI-generated.",
-  "Someone touched this with a real keyboard at some point — probably.",
+const LIMITED_EVIDENCE = [
+  'There is some builder-specific context here, but the jury is still reading the source.',
+  'A provenance breadcrumb appeared. One breadcrumb is not the whole build history.',
+  'Interesting public marker detected; prompts, review quality, and source history remain off-screen.',
 ];
 
-const LOW_VIBE: string[] = [
-  "Impressively hand-crafted in a world of AI slop. Respect.",
-  "An actual human wrote this. Rare.",
-  "No significant AI fingerprints detected. Either very good at hiding it, or actually built it.",
-  "This looks like it took more than 30 minutes to build.",
-  "Custom code that makes AI-generated sites feel embarrassed.",
+const INCONCLUSIVE = [
+  'The public HTML kept its origin story to itself. Mystery preserved.',
+  'No scored provenance marker surfaced—human-built, AI-built, or simply well cleaned up remains unknown.',
+  'The detector abstained. That is less dramatic, but much more honest.',
 ];
 
-const SIGNAL_ROASTS: Partial<Record<string, string>> = {
-  'Full AI vibe-code stack: JS framework + BaaS + shadcn/UI kit + cloud host':
-    "The full starter-pack: Next.js, Supabase, shadcn, Vercel. Assembled by an AI in 11 seconds.",
-  'Strong AI stack combo (framework + BaaS + host)':
-    "Three out of four core AI stack components. Someone was *this* close to full vibe.",
-  'Clerk authentication (default auth layer in AI coding tools)':
-    "Clerk auth: because the AI needed to add login and didn't want to think about it.",
-  'Default framework template title (never customised)':
-    "They shipped without changing the page title. Living the 'Create Next App' life.",
-  'Verbatim framework template placeholder text found':
-    "This literally has the framework starter template text. It shipped. Unironically.",
-  'Textbook AI SaaS landing page structure (4/5 sections)':
-    "Hero → Features → Pricing → Testimonials. Every AI startup. Every time.",
-  'Textbook AI SaaS landing page structure (5/5 sections)':
-    "Hero → Features → Pricing → Testimonials → FAQ. The AI didn't leave a single section out.",
-  'Heavy AI marketing copy (5 buzzword patterns)':
-    "The copy reads like someone asked ChatGPT to 'make it sound more professional and inspiring'.",
-  'Lovable platform attribution found in source':
-    "Lovable.dev's fingerprints are everywhere. Vibe-coded and proud.",
-  'Hosted on Lovable platform (*.lovable.app)':
-    "Deployed straight to lovable.app. This is peak vibe-code infrastructure.",
-  'Hosted on Replit (*.replit.app)':
-    "Hosted on Replit — built and shipped from a chat window.",
-  'v0 by Vercel fingerprint found in source':
-    "v0.dev's DNA is all over this. Designed by prompt, deployed by Vercel.",
-  'Bolt / StackBlitz origin found in source':
-    "bolt.new strikes again. Born in a browser tab, died in production.",
-};
+function stableIndex(seed: string, length: number, offset = 0): number {
+  let hash = 2166136261;
+  for (const char of `${seed}:${offset}`) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % length;
+}
 
-function pick<T>(arr: T[], n: number): T[] {
-  return [...arr].sort(() => Math.random() - 0.5).slice(0, n);
+function pickStable(values: string[], seed: string, count: number): string[] {
+  const picked: string[] = [];
+  for (let offset = 0; picked.length < Math.min(count, values.length); offset++) {
+    const value = values[stableIndex(seed, values.length, offset)];
+    if (!picked.includes(value)) picked.push(value);
+  }
+  return picked;
 }
 
 export function generateRoasts(result: AnalysisResult): string[] {
-  const roasts: string[] = [];
+  const seed = `${result.url}:${result.vibe.score}:${result.vibe.breakdown?.modelVersion ?? 'legacy'}`;
+  const roasts = result.vibe.score >= VIBE_SCORE_BANDS.strong
+    ? pickStable(STRONG_EVIDENCE, seed, 2)
+    : result.vibe.score >= VIBE_SCORE_BANDS.limited
+      ? pickStable(LIMITED_EVIDENCE, seed, 1)
+      : pickStable(INCONCLUSIVE, seed, 1);
 
-  if (result.vibe.score >= 70) {
-    roasts.push(...pick(HIGH_VIBE, 2));
-  } else if (result.vibe.score >= 35) {
-    roasts.push(...pick(MED_VIBE, 1));
-  } else {
-    roasts.push(...pick(LOW_VIBE, 1));
+  if (result.vibe.declaredGenerator) {
+    roasts.push(`${result.vibe.declaredGenerator} is declared in the page metadata—at least this one signed its work.`);
   }
 
-  for (const reason of result.vibe.reasons) {
-    if (roasts.length >= 4) break;
-    const roast = SIGNAL_ROASTS[reason];
-    if (roast) roasts.push(roast);
-  }
-
-  if (result.security.score < 40 && roasts.length < 4) {
-    roasts.push("The security score is underground. The AI forgot that 'Content-Security-Policy' exists.");
+  if (result.security.score < 40) {
+    roasts.push('The response-header hardening needs attention; that says nothing about who wrote the app.');
   }
 
   return roasts.slice(0, 4);

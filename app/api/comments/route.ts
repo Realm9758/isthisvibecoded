@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { randomBytes } from 'crypto';
 import { createNotification } from '@/lib/notifications';
 import { sendEmail, commentEmailHtml, replyEmailHtml } from '@/lib/email';
+import { getVisibleScan } from '@/lib/scan-access';
 
 function genId() {
   return randomBytes(8).toString('base64url');
@@ -22,6 +23,9 @@ export async function GET(request: Request) {
   if (!scanId) return Response.json({ error: 'scanId required' }, { status: 400 });
 
   const currentUserId = await getCurrentUserId();
+  if (!await getVisibleScan(scanId)) {
+    return Response.json({ error: 'Scan not found' }, { status: 404 });
+  }
 
   const { data: rows, error } = await supabase
     .from('comments')
@@ -79,6 +83,18 @@ export async function POST(request: Request) {
   if (!scanId) return Response.json({ error: 'scanId required' }, { status: 400 });
   if (!body) return Response.json({ error: 'Comment cannot be empty' }, { status: 400 });
   if (body.length > 500) return Response.json({ error: 'Comment too long (max 500 chars)' }, { status: 400 });
+  if (!await getVisibleScan(scanId)) return Response.json({ error: 'Scan not found' }, { status: 404 });
+
+  if (parentId) {
+    const { data: parent } = await supabase
+      .from('comments')
+      .select('scan_id')
+      .eq('id', parentId)
+      .maybeSingle();
+    if (!parent || parent.scan_id !== scanId) {
+      return Response.json({ error: 'Invalid parent comment' }, { status: 400 });
+    }
+  }
 
   const { data: user } = await supabase.from('users').select('name').eq('id', currentUserId).maybeSingle();
   const userName = user?.name ?? 'Anonymous';
@@ -121,12 +137,12 @@ async function fireCommentNotifications(
   parentId: string | null,
 ) {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
-  const scanLink = `${appUrl}/scan/${scanId}`;
+  const scanLink = `${appUrl}/result/${scanId}`;
 
   // Fetch scan to get owner info and domain
   const { data: scanRow } = await supabase
     .from('scans')
-    .select('user_id, result')
+    .select('user_id, result, is_public')
     .eq('id', scanId)
     .maybeSingle();
 
@@ -167,7 +183,7 @@ async function fireCommentNotifications(
   }
 
   // If this is a reply, notify the parent comment's author
-  if (parentId) {
+  if (parentId && scanRow?.is_public === true) {
     const { data: parentComment } = await supabase
       .from('comments')
       .select('user_id, user_name')

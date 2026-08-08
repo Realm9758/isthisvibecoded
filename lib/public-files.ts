@@ -1,6 +1,32 @@
 import type { PublicFile } from '@/types/analysis';
+import { assertPublicTarget } from './url-safety';
 
 const UA = 'Mozilla/5.0 (compatible; VibeCheck/1.0; +https://github.com/vibecoded)';
+const MAX_PUBLIC_FILE_BYTES = 256_000;
+
+async function readLimitedText(response: Response): Promise<string> {
+  const declaredLength = Number(response.headers.get('content-length') ?? 0);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_PUBLIC_FILE_BYTES) {
+    throw new Error('Public-path response is too large');
+  }
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let result = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytesRead += value.byteLength;
+    if (bytesRead > MAX_PUBLIC_FILE_BYTES) {
+      await reader.cancel();
+      throw new Error('Public-path response is too large');
+    }
+    result += decoder.decode(value, { stream: true });
+  }
+  return result + decoder.decode();
+}
 
 // Paths checked with HEAD only — accessible = status 200-399
 const HEAD_PATHS: Array<{ path: string; note?: string }> = [
@@ -28,10 +54,15 @@ const SENSITIVE_PATHS: Array<{
     path: '/.env',
     note: 'Environment file (should NOT be public)',
     verify: (body, ct) => {
-      const accessible = !ct.includes('text/html') &&
-        // Must contain at least one KEY=VALUE line typical of .env files
-        /^[A-Z_][A-Z0-9_]*\s*=/m.test(body);
-      return accessible ? { accessible, evidence: 'KEY=VALUE environment syntax detected' } : { accessible };
+      const assignments = body.match(/^[A-Z_][A-Z0-9_]*\s*=.+$/gm) ?? [];
+      const hasSensitiveAssignment = /^(?:DATABASE_URL|JWT_SECRET|API_SECRET|SECRET_KEY|PRIVATE_KEY|STRIPE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY)\s*=.+$/m.test(body);
+      // A generic environment-shaped file can contain deliberately public
+      // build metadata. Only elevate it to a critical exposure when a
+      // sensitive variable name and value are actually present.
+      const accessible = !ct.includes('text/html') && hasSensitiveAssignment;
+      return accessible
+        ? { accessible, evidence: `${assignments.length} environment assignment${assignments.length === 1 ? '' : 's'} detected` }
+        : { accessible };
     },
   },
   {
@@ -40,8 +71,12 @@ const SENSITIVE_PATHS: Array<{
     verify: (body, ct) => {
       if (ct.includes('text/html')) return { accessible: false };
       try {
-        JSON.parse(body);
-        return { accessible: true, evidence: 'Valid JSON file returned' };
+        const parsed = JSON.parse(body) as unknown;
+        if (!parsed || typeof parsed !== 'object') return { accessible: false };
+        const hasSensitiveKey = /["'](?:password|passwd|secret|private[_-]?key|service[_-]?role|access[_-]?token|client[_-]?secret|database[_-]?(?:url|uri))["']\s*:/i.test(body);
+        return hasSensitiveKey
+          ? { accessible: true, evidence: 'Sensitive-looking configuration keys detected' }
+          : { accessible: false };
       } catch {
         return { accessible: false };
       }
@@ -88,7 +123,9 @@ export async function checkPublicFiles(baseUrl: string): Promise<PublicFile[]> {
 
   const headChecks = HEAD_PATHS.map(async ({ path }) => {
     try {
-      const res = await fetch(`${origin}${path}`, {
+      const target = new URL(`${origin}${path}`);
+      await assertPublicTarget(target);
+      const res = await fetch(target, {
         method: 'HEAD',
         redirect: 'manual',
         signal: AbortSignal.timeout(5000),
@@ -102,7 +139,9 @@ export async function checkPublicFiles(baseUrl: string): Promise<PublicFile[]> {
 
   const sensitiveChecks = SENSITIVE_PATHS.map(async ({ path, verify }) => {
     try {
-      const res = await fetch(`${origin}${path}`, {
+      const target = new URL(`${origin}${path}`);
+      await assertPublicTarget(target);
+      const res = await fetch(target, {
         method: 'GET',
         redirect: 'manual',
         signal: AbortSignal.timeout(5000),
@@ -114,7 +153,7 @@ export async function checkPublicFiles(baseUrl: string): Promise<PublicFile[]> {
       }
 
       const ct = res.headers.get('content-type') ?? '';
-      const body = await res.text();
+      const body = await readLimitedText(res);
       const verified = verify(body, ct, res.url || `${origin}${path}`);
 
       return {

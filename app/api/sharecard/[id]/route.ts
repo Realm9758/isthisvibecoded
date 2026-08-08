@@ -1,18 +1,34 @@
-import { getScan } from '@/lib/store';
+import { getPublicScan } from '@/lib/scan-access';
+import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 
-export async function GET(_req: Request, ctx: RouteContext<'/api/sharecard/[id]'>) {
+type SharecardRouteContext = { params: Promise<{ id: string }> };
+
+function escapeXml(value: unknown): string {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+export async function GET(_req: Request, ctx: SharecardRouteContext) {
   const { id } = await ctx.params;
-  const scan = await getScan(id);
+  const scan = await getPublicScan(id);
   if (!scan) return new Response('Not found', { status: 404 });
 
   const { vibe, security, techStack, hosting } = scan.result;
   const hostname = (() => { try { return new URL(scan.result.url).hostname; } catch { return scan.result.url; } })();
 
-  const vibeColor = vibe.score >= 70 ? '#8b5cf6' : vibe.score >= 30 ? '#f59e0b' : '#22c55e';
-  const secColor  = security.score >= 70 ? '#22c55e' : security.score >= 40 ? '#f59e0b' : '#ef4444';
-  const vibeLabel = vibe.label;
-  const topTech   = techStack.slice(0, 3).map(t => t.name).join('  ·  ');
-  const host      = hosting.provider ?? '';
+  const vibeColor = getVibeColor(vibe.score);
+  const secColor  = getSecurityColor(security.score);
+  const vibeLabel = escapeXml(vibe.label);
+  const topTech   = escapeXml(techStack.slice(0, 3).map(t => t.name).join('  ·  '));
+  const host      = escapeXml(hosting.provider ?? '');
+  const safeHostname = escapeXml(hostname.length > 30 ? `${hostname.slice(0, 30)}…` : hostname);
+  const vibeScore = escapeXml(vibe.score);
+  const securityScore = escapeXml(security.score);
+  const riskLevel = escapeXml(security.riskLevel.replace(/\s+risk$/i, ''));
 
   const W = 600;
   const H = 315;
@@ -54,7 +70,7 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/sharecard/[id]'
   <text x="28" y="92"
     font-family="system-ui,-apple-system,sans-serif"
     font-size="30" font-weight="700" fill="#ffffff">
-    ${hostname.length > 30 ? hostname.slice(0, 30) + '…' : hostname}
+    ${safeHostname}
   </text>
 
   <!-- Vibe label -->
@@ -65,36 +81,36 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/sharecard/[id]'
   <!-- Divider -->
   <line x1="28" y1="144" x2="${W - 28}" y2="144" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
 
-  <!-- AI signal score box -->
+  <!-- Provenance evidence box -->
   <rect x="28" y="162" width="130" height="72" rx="10"
     fill="rgba(255,255,255,0.04)" stroke="${vibeColor}" stroke-width="1" stroke-opacity="0.3"/>
   <text x="93" y="191"
     font-family="system-ui,-apple-system,sans-serif"
-    font-size="11" fill="rgba(255,255,255,0.4)" text-anchor="middle" letter-spacing="1">AI SIGNALS</text>
+    font-size="11" fill="rgba(255,255,255,0.4)" text-anchor="middle" letter-spacing="1">EVIDENCE</text>
   <text x="93" y="222"
     font-family="system-ui,-apple-system,sans-serif"
-    font-size="28" font-weight="800" fill="${vibeColor}" text-anchor="middle">${vibe.score}</text>
+    font-size="28" font-weight="800" fill="${vibeColor}" text-anchor="middle">${vibeScore}</text>
 
-  <!-- Security score box -->
+  <!-- Header hardening box -->
   <rect x="174" y="162" width="130" height="72" rx="10"
     fill="rgba(255,255,255,0.04)" stroke="${secColor}" stroke-width="1" stroke-opacity="0.3"/>
   <text x="239" y="191"
     font-family="system-ui,-apple-system,sans-serif"
-    font-size="11" fill="rgba(255,255,255,0.4)" text-anchor="middle" letter-spacing="1">SECURITY</text>
+    font-size="10" fill="rgba(255,255,255,0.4)" text-anchor="middle" letter-spacing="0.7">HEADER INDEX</text>
   <text x="239" y="222"
     font-family="system-ui,-apple-system,sans-serif"
-    font-size="28" font-weight="800" fill="${secColor}" text-anchor="middle">${security.score}</text>
+    font-size="28" font-weight="800" fill="${secColor}" text-anchor="middle">${securityScore}</text>
 
   <!-- Risk level box -->
   <rect x="320" y="162" width="130" height="72" rx="10"
     fill="rgba(255,255,255,0.04)" stroke="${secColor}" stroke-width="1" stroke-opacity="0.3"/>
   <text x="385" y="191"
     font-family="system-ui,-apple-system,sans-serif"
-    font-size="11" fill="rgba(255,255,255,0.4)" text-anchor="middle" letter-spacing="1">RISK LEVEL</text>
+    font-size="10" fill="rgba(255,255,255,0.4)" text-anchor="middle" letter-spacing="0.7">HEADER GAPS</text>
   <text x="385" y="222"
     font-family="system-ui,-apple-system,sans-serif"
     font-size="18" font-weight="700" fill="${secColor}" text-anchor="middle"
-    text-transform="capitalize">${security.riskLevel.charAt(0).toUpperCase() + security.riskLevel.slice(1)}</text>
+    text-transform="capitalize">${riskLevel}</text>
 
   ${topTech ? `<!-- Tech stack -->
   <text x="28" y="266"
@@ -117,7 +133,7 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/sharecard/[id]'
   return new Response(svg, {
     headers: {
       'Content-Type': 'image/svg+xml',
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': 'no-store',
       'Access-Control-Allow-Origin': '*',
     },
   });

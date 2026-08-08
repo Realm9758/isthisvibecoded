@@ -1,18 +1,17 @@
 'use client';
 
 const STEPS = [
-  { id: 'fetch',     label: 'Fetching page source',          detail: 'GET / HTTP/1.1 — following redirects' },
-  { id: 'vibe',      label: 'Analyzing vibe-code patterns',   detail: 'Checking AI fingerprints & stack signals' },
-  { id: 'headers',   label: 'Checking security headers',      detail: 'CSP · HSTS · X-Frame-Options · COOP' },
-  { id: 'tech',      label: 'Detecting tech stack',            detail: '40+ framework & library signatures' },
-  { id: 'keys',      label: 'Scanning for exposed keys',       detail: 'API tokens · secrets · credentials' },
-  { id: 'endpoints', label: 'Probing public endpoints',        detail: '.env · admin paths · config files' },
-  { id: 'hosting',   label: 'Identifying hosting provider',    detail: 'Vercel · Netlify · Cloudflare · AWS' },
-  { id: 'report',    label: 'Generating report',               detail: 'Scoring & ranking findings' },
+  { id: 'fetch',     label: 'Validating and fetching the page', detail: 'Public DNS · redirects · bounded HTML' },
+  { id: 'vibe',      label: 'Reviewing builder provenance',     detail: 'Generator metadata · project hosts · attribution' },
+  { id: 'headers',   label: 'Checking header hardening',        detail: 'CSP · HSTS · framing · MIME · referrer policy' },
+  { id: 'tech',      label: 'Identifying visible technology',   detail: 'Framework · library · hosting indicators' },
+  { id: 'keys',      label: 'Reviewing client-visible keys',    detail: 'Classifying public and secret-looking patterns' },
+  { id: 'endpoints', label: 'Checking fixed public paths',      detail: 'Bounded read-only HEAD/GET requests' },
+  { id: 'report',    label: 'Assembling evidence and coverage', detail: 'Versioned heuristic · limitations · completed checks' },
 ];
 
 export function LoadingAnimation({ step }: { step?: number }) {
-  const activeIdx = (step ?? 0) % STEPS.length;
+  const activeIdx = Math.min(Math.max(step ?? 0, 0), STEPS.length - 1);
 
   return (
     <div className="w-full max-w-lg animate-fade-in-up">
@@ -28,11 +27,11 @@ export function LoadingAnimation({ step }: { step?: number }) {
             <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/60" />
             <div className="w-2.5 h-2.5 rounded-full bg-green-500/60" />
           </div>
-          <span className="text-[11px] text-white/30 font-mono ml-2">vibe-check — passive scanner</span>
+          <span className="text-[11px] text-white/30 font-mono ml-2">vibe-check — public evidence scanner</span>
         </div>
 
         {/* Terminal body */}
-        <div className="px-5 py-4 space-y-1.5 font-mono text-xs min-h-[200px]">
+        <div aria-live="polite" className="px-5 py-4 space-y-1.5 font-mono text-xs min-h-[200px]">
           {STEPS.map((s, i) => {
             const done    = i < activeIdx;
             const current = i === activeIdx;
@@ -90,7 +89,7 @@ export function LoadingAnimation({ step }: { step?: number }) {
             <p className="text-[10px] text-white/25 font-mono">
               {activeIdx + 1}/{STEPS.length} checks
             </p>
-            <p className="text-[10px] text-white/20">passive · read-only · no exploitation</p>
+            <p className="text-[10px] text-white/20">illustrative status · final coverage comes from the server</p>
           </div>
         </div>
       </div>

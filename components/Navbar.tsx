@@ -109,6 +109,8 @@ export function Navbar() {
                 style={{ background: 'rgba(255,255,255,0.03)' }}
               >
                 {user.avatarUrl ? (
+                  // User avatars are stored as compressed data URLs.
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={user.avatarUrl}
                     alt={user.name}

@@ -37,12 +37,16 @@ export async function sendEmail(
 
 function baseTemplate(title: string, body: string, ctaLabel: string, ctaUrl: string): string {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://vibescan.io';
+  const safeTitle = escHtml(title);
+  const safeCtaLabel = escHtml(ctaLabel);
+  const safeCtaUrl = escHtml(ctaUrl);
+  const safeAppUrl = escHtml(appUrl);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>${title}</title>
+<title>${safeTitle}</title>
 <style>
   body { margin: 0; padding: 0; background: #0a0a0f; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   .wrap { max-width: 520px; margin: 40px auto; padding: 0 20px; }
@@ -60,17 +64,17 @@ function baseTemplate(title: string, body: string, ctaLabel: string, ctaUrl: str
 <body>
 <div class="wrap">
   <div class="card">
-    <a href="${appUrl}" class="logo">
+    <a href="${safeAppUrl}" class="logo">
       <div class="logo-badge">VS</div>
       <span class="logo-name">VibeScan</span>
     </a>
-    <h1>${title}</h1>
+    <h1>${safeTitle}</h1>
     ${body}
-    <a href="${ctaUrl}" class="cta">${ctaLabel}</a>
+    <a href="${safeCtaUrl}" class="cta">${safeCtaLabel}</a>
   </div>
   <div class="footer">
     <p style="margin:0">You're receiving this because you enabled email notifications on VibeScan.<br/>
-    <a href="${appUrl}/profile">Manage notification settings</a></p>
+    <a href="${safeAppUrl}/profile">Manage notification settings</a></p>
   </div>
 </div>
 </body>
@@ -113,3 +117,4 @@ function escHtml(str: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+import 'server-only';

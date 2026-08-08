@@ -1,18 +1,173 @@
 import type { DeepFinding, DeepScanResult } from '@/types/deep-scan';
+import { assertPublicTarget } from '@/lib/url-safety';
+import { analyzeSecurityHeaders } from '@/lib/security-headers';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const TIMEOUT = 8000;
+const SCAN_BUDGET_MS = 42_000;
+const MAX_REDIRECTS = 5;
+const MAX_PROBE_BODY_BYTES = 512_000;
 const UA = 'VibeScan-DeepScan/1.0 (Security Audit; Owner-Verified)';
 
-async function safeFetch(url: string, options?: RequestInit): Promise<Response | null> {
+type RequestCoverage = {
+  requestsAttempted: number;
+  requestsCompleted: number;
+  requestsFailed: number;
+  requestsBlocked: number;
+};
+
+const scanRequestContext = new AsyncLocalStorage<{
+  authorizedHostname: string;
+  coverage: RequestCoverage;
+  deadlineAt: number;
+  deadlineExceeded: boolean;
+}>();
+
+type SafeFetchOptions = RequestInit & {
+  /** A 429 is successful evidence only for the dedicated throttling probe. */
+  allowRateLimitResponse?: boolean;
+};
+
+function parseScanUrl(rawUrl: string): URL {
+  const url = new URL(rawUrl);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Only HTTP and HTTPS scan targets are allowed');
+  }
+  if (url.username || url.password) {
+    throw new Error('Scan targets cannot contain embedded credentials');
+  }
+  if (url.port && url.port !== '80' && url.port !== '443') {
+    throw new Error('Only standard web ports 80 and 443 are allowed');
+  }
+  return url;
+}
+
+async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Response | null> {
+  const context = scanRequestContext.getStore();
   try {
-    return await fetch(url, {
-      ...options,
-      signal: AbortSignal.timeout(TIMEOUT),
-      headers: { 'User-Agent': UA, ...options?.headers },
-    });
+    const { allowRateLimitResponse = false, ...requestOptions } = options ?? {};
+    const requestedRedirectMode = requestOptions.redirect ?? 'follow';
+    let currentUrl = parseScanUrl(url);
+    const verifiedHostname = context?.authorizedHostname ?? currentUrl.hostname.toLowerCase();
+    if (currentUrl.hostname.toLowerCase() !== verifiedHostname) {
+      if (context) context.coverage.requestsBlocked++;
+      return null;
+    }
+    let method = requestOptions.method?.toUpperCase() ?? 'GET';
+    let body = requestOptions.body;
+
+    const headers = new Headers(requestOptions.headers);
+    if (!headers.has('user-agent')) headers.set('user-agent', UA);
+
+    for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
+      if (context && Date.now() >= context.deadlineAt) {
+        context.deadlineExceeded = true;
+        context.coverage.requestsFailed++;
+        return null;
+      }
+      // Re-resolve and reject private/reserved addresses immediately before
+      // every request, including each redirect destination.
+      if (context) context.coverage.requestsAttempted++;
+      await assertPublicTarget(currentUrl);
+
+      const remainingBudget = context ? Math.max(1, context.deadlineAt - Date.now()) : TIMEOUT;
+      const res = await fetch(currentUrl, {
+        ...requestOptions,
+        method,
+        body,
+        headers,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(Math.min(TIMEOUT, remainingBudget)),
+      });
+      if (context) {
+        if (res.status >= 500 || (res.status === 429 && !allowRateLimitResponse)) {
+          context.coverage.requestsFailed++;
+        } else {
+          context.coverage.requestsCompleted++;
+        }
+      }
+
+      const isRedirect = res.status >= 300 && res.status < 400;
+      const location = res.headers.get('location');
+      if (!isRedirect || !location || requestedRedirectMode === 'manual') return res;
+      if (requestedRedirectMode === 'error') {
+        if (context) context.coverage.requestsFailed++;
+        return null;
+      }
+      if (redirectCount === MAX_REDIRECTS) {
+        if (context) context.coverage.requestsFailed++;
+        return null;
+      }
+
+      const redirectUrl = parseScanUrl(new URL(location, currentUrl).href);
+      // Domain-control verification applies to one exact host. Never forward
+      // active payloads to a different host merely because the verified site
+      // redirects there.
+      if (redirectUrl.hostname.toLowerCase() !== verifiedHostname) {
+        if (context) context.coverage.requestsBlocked++;
+        return null;
+      }
+      currentUrl = redirectUrl;
+
+      // Match fetch redirect semantics for POST responses. The deep scanner
+      // never sends replay-safe streaming bodies, so clearing the body here is
+      // both compatible and avoids forwarding it unexpectedly.
+      if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === 'POST')) {
+        method = 'GET';
+        body = undefined;
+        headers.delete('content-length');
+        headers.delete('content-type');
+      }
+    }
+
+    return null;
   } catch {
+    if (context) {
+      if (Date.now() >= context.deadlineAt) context.deadlineExceeded = true;
+      context.coverage.requestsFailed++;
+    }
     return null;
   }
+}
+
+function recordProbeBodyFailure(): void {
+  const context = scanRequestContext.getStore();
+  if (context) context.coverage.requestsFailed++;
+}
+
+async function readBoundedProbeText(response: Response, maxBytes: number): Promise<string | null> {
+  try {
+    const declaredLength = Number(response.headers.get('content-length') ?? 0);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      recordProbeBodyFailure();
+      return null;
+    }
+    if (!response.body) return '';
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let bytes = 0;
+    let value = '';
+    while (true) {
+      const { done, value: chunk } = await reader.read();
+      if (done) break;
+      bytes += chunk.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel();
+        recordProbeBodyFailure();
+        return null;
+      }
+      value += decoder.decode(chunk, { stream: true });
+    }
+    return value + decoder.decode();
+  } catch {
+    recordProbeBodyFailure();
+    return null;
+  }
+}
+
+async function readProbeText(response: Response): Promise<string> {
+  return await readBoundedProbeText(response, MAX_PROBE_BODY_BYTES) ?? '';
 }
 
 // ── Sensitive file exposure ────────────────────────────────────────────────
@@ -170,6 +325,74 @@ const SENSITIVE_FILES: {
   },
 ];
 
+const MAX_SENSITIVE_FILE_BYTES = 128_000;
+
+async function readBoundedBody(response: Response): Promise<string | null> {
+  return readBoundedProbeText(response, MAX_SENSITIVE_FILE_BYTES);
+}
+
+function validateSensitiveFile(path: string, body: string, contentType: string): string | null {
+  const trimmed = body.trim();
+  if (!trimmed) return null;
+  const looksHtml = contentType.toLowerCase().includes('text/html')
+    || /<!doctype\s+html|<html\b|<body\b/i.test(trimmed.slice(0, 4_000));
+
+  if (path === '/phpinfo.php' || path === '/info.php') {
+    return /phpinfo\(\)|<title>php\s*\d|PHP Version/i.test(trimmed)
+      ? 'phpinfo output markers detected'
+      : null;
+  }
+  if (looksHtml) return null;
+
+  if (path.startsWith('/.env')) {
+    const assignments = trimmed.match(/^[A-Z_][A-Z0-9_]*\s*=.+$/gm) ?? [];
+    return assignments.length >= 2 ? `${assignments.length} environment assignments detected` : null;
+  }
+  if (path === '/.git/config') {
+    return /^\s*\[core\]/m.test(trimmed) && /repositoryformatversion|\[remote\s+"origin"\]/i.test(trimmed)
+      ? 'Git configuration syntax detected'
+      : null;
+  }
+  if (path === '/.git/HEAD') {
+    return /^(?:ref:\s+refs\/(?:heads|tags)\/[^\s]+|[a-f0-9]{40})$/i.test(trimmed)
+      ? 'Git HEAD reference detected'
+      : null;
+  }
+  if (path === '/wp-config.php') {
+    return /<\?php/i.test(trimmed) && /DB_(?:NAME|USER|PASSWORD|HOST)|AUTH_KEY|SECURE_AUTH_KEY/i.test(trimmed)
+      ? 'WordPress configuration constants detected'
+      : null;
+  }
+  if (path.endsWith('.sql')) {
+    return /(?:--\s+(?:MySQL|PostgreSQL).*dump|CREATE\s+TABLE|INSERT\s+INTO|COPY\s+[^\s]+\s+FROM)/i.test(trimmed)
+      ? 'SQL dump syntax detected'
+      : null;
+  }
+  if (path === '/.htaccess') {
+    return /^(?:RewriteEngine|RewriteRule|Options|AuthType|Require|Deny\s+from)\b/im.test(trimmed)
+      ? 'Apache configuration directives detected'
+      : null;
+  }
+  if (path === '/config.json' || path === '/storage.json') {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!parsed || typeof parsed !== 'object') return null;
+      return /["'](?:password|passwd|secret|private[_-]?key|access[_-]?token|credential|database[_-]?(?:url|uri))["']\s*:/i.test(trimmed)
+        ? 'Sensitive-looking JSON configuration keys detected'
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  if (path === '/.DS_Store') return body.includes('Bud1') ? 'DS_Store binary signature detected' : null;
+  if (path === '/.npmrc') return /(?:_authToken|_auth|password)\s*=/i.test(trimmed) ? 'npm credential directive detected' : null;
+  if (path === '/docker-compose.yml') return /^\s*services\s*:/m.test(trimmed) && /^\s+(?:image|build)\s*:/m.test(trimmed) ? 'Docker Compose structure detected' : null;
+  if (path === '/Dockerfile') return /^\s*FROM\s+\S+/im.test(trimmed) ? 'Dockerfile FROM instruction detected' : null;
+  if (path === '/.travis.yml') return /^\s*(?:language|script|deploy)\s*:/m.test(trimmed) ? 'Travis CI configuration detected' : null;
+  if (path === '/config/database.yml') return /^\s*adapter\s*:/m.test(trimmed) && /^\s*(?:database|username|password)\s*:/m.test(trimmed) ? 'Rails database configuration detected' : null;
+  return null;
+}
+
 async function checkSensitiveFiles(baseUrl: string): Promise<DeepFinding[]> {
   const results = await Promise.allSettled(
     SENSITIVE_FILES.map(async (file) => {
@@ -184,13 +407,17 @@ async function checkSensitiveFiles(baseUrl: string): Promise<DeepFinding[]> {
     if (r.status !== 'fulfilled') continue;
     const { file, res, url } = r.value;
     if (res?.status === 200) {
+      const body = await readBoundedBody(res);
+      if (body === null) continue;
+      const validation = validateSensitiveFile(file.path, body, res.headers.get('content-type') ?? '');
+      if (!validation) continue;
       findings.push({
         id: `exposed-${file.path}`,
         category: 'exposed-files',
         severity: file.severity,
         title: file.title,
         description: file.description,
-        evidence: `GET ${url} → HTTP 200`,
+        evidence: `GET ${url} → HTTP 200; ${validation}`,
         remediation: file.remediation,
         url,
       });
@@ -208,15 +435,16 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
   const nullRes = await safeFetch(baseUrl, { headers: { Origin: 'null' } });
   if (nullRes) {
     const acao = nullRes.headers.get('access-control-allow-origin');
-    if (acao === 'null') {
+    const acac = nullRes.headers.get('access-control-allow-credentials');
+    if (acao === 'null' && acac === 'true') {
       findings.push({
         id: 'cors-null-origin',
         category: 'cors',
         severity: 'high',
-        title: 'CORS Accepts Null Origin',
-        description: 'The server reflects the null origin. Attackers can exploit this using sandboxed iframes to make authenticated cross-origin requests.',
-        evidence: 'Access-Control-Allow-Origin: null',
-        remediation: 'Never allow the null origin in your CORS policy.',
+        title: 'CORS Allows Credentialed Null Origin',
+        description: 'The server allows the null origin together with credentials. Sandboxed or local-document origins may be able to read this response with user credentials when the endpoint returns sensitive data.',
+        evidence: 'Access-Control-Allow-Origin: null\nAccess-Control-Allow-Credentials: true',
+        remediation: 'Do not allow credentialed null origins. Use an exact allowlist of trusted HTTPS origins.',
       });
     }
     // Wildcard on the HTML page itself is only a real issue if credentials are also allowed
@@ -237,23 +465,23 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
       findings.push({
         id: 'cors-wildcard-credentials',
         category: 'cors',
-        severity: 'critical',
-        title: 'API CORS: Wildcard + Credentials',
-        description: `${path} returns Access-Control-Allow-Origin: * with Allow-Credentials: true. Any site can make authenticated API requests on behalf of your users.`,
+        severity: 'info',
+        title: 'API CORS Has an Ineffective Wildcard/Credentials Combination',
+        description: `${path} returns Access-Control-Allow-Origin: * with Allow-Credentials: true. Browsers reject credentialed CORS with a wildcard origin, so this does not enable authenticated cross-origin reads; it is still a contradictory policy worth correcting.`,
         evidence: `GET ${baseUrl}${path}\nAccess-Control-Allow-Origin: *\nAccess-Control-Allow-Credentials: true`,
-        remediation: 'You cannot use * with credentials. Switch to an explicit origin allowlist.',
+        remediation: 'Remove Allow-Credentials if the resource is intentionally public, or replace * with a strict allowlist when credentialed cross-origin access is required.',
         url: `${baseUrl}${path}`,
       });
       break;
     }
 
-    if (acao === 'https://evil-attacker.com' && acac === 'true') {
+    if (apiRes.ok && acao === 'https://evil-attacker.com' && acac === 'true') {
       findings.push({
         id: 'cors-reflect-credentials',
         category: 'cors',
-        severity: 'critical',
+        severity: 'high',
         title: 'API CORS Reflects Arbitrary Origin with Credentials',
-        description: `${path} reflects any arbitrary Origin header back and allows credentials. Attackers can make authenticated API requests from any domain — full account takeover risk.`,
+        description: `${path} accepted the scanner's untrusted Origin value on a successful response and allowed credentials. If this endpoint returns user-specific or sensitive data, an attacker-controlled origin could read that response in a signed-in user's browser.`,
         evidence: `GET ${baseUrl}${path}\nOrigin: https://evil-attacker.com\n→ Access-Control-Allow-Origin: https://evil-attacker.com\n→ Access-Control-Allow-Credentials: true`,
         remediation: 'Use a strict origin allowlist. Never combine Allow-Credentials: true with dynamic origin reflection.',
         url: `${baseUrl}${path}`,
@@ -267,154 +495,35 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── Security headers ──────────────────────────────────────────────────────
 
-function detectFramework(res: Response | null): { isVercel: boolean; isNextJS: boolean; isCDN: boolean } {
-  if (!res) return { isVercel: false, isNextJS: false, isCDN: false };
-  const server = (res.headers.get('server') ?? '').toLowerCase();
-  const via = (res.headers.get('via') ?? '').toLowerCase();
-  const xVercel = res.headers.get('x-vercel-id') ?? res.headers.get('x-vercel-cache');
-  const powered = (res.headers.get('x-powered-by') ?? '').toLowerCase();
-  const isVercel = !!xVercel || server.includes('vercel');
-  const isNextJS = powered.includes('next') || server.includes('next');
-  const isCDN = isVercel || server.includes('cloudflare') || server.includes('fastly') || via.includes('cloudfront');
-  return { isVercel, isNextJS, isCDN };
-}
-
 async function checkSecurityHeaders(res: Response | null): Promise<DeepFinding[]> {
-  const findings: DeepFinding[] = [];
-  if (!res) return findings;
+  if (!res) return [];
 
-  const { isVercel, isNextJS, isCDN } = detectFramework(res);
-
-  const csp  = res.headers.get('content-security-policy');
-  const xfo  = res.headers.get('x-frame-options');
-  const xcto = res.headers.get('x-content-type-options');
-  const hsts = res.headers.get('strict-transport-security');
-  const rp   = res.headers.get('referrer-policy');
-  const pp   = res.headers.get('permissions-policy');
-
-  // CSP — always worth flagging, but tell Next.js users where to add it
-  if (!csp) {
-    const remediation = isNextJS
-      ? "Add to next.config.js headers():\n  { key: 'Content-Security-Policy', value: \"default-src 'self'; script-src 'self' 'unsafe-inline'\" }\nOr use the next-safe package."
-      : "Add response header: Content-Security-Policy: default-src 'self'; script-src 'self'";
-    findings.push({
-      id: 'header-csp-missing',
-      category: 'headers',
-      // Downgrade to medium for CDN/Vercel — they often enforce at edge but don't pass the header through
-      severity: isCDN ? 'medium' : 'high',
-      title: 'Missing Content-Security-Policy',
-      description: "No CSP header found on this response. Without CSP, any XSS vulnerability has no secondary defence — injected scripts can run freely, steal cookies, and exfiltrate data."
-        + (isCDN ? ' Note: if you set this at the CDN/edge layer, ensure it\'s also forwarded in the response.' : ''),
-      remediation,
-    });
-  } else {
-    if (csp.includes("'unsafe-inline'") && !csp.includes('nonce-') && !csp.includes('strict-dynamic')) {
-      findings.push({
-        id: 'header-csp-unsafe-inline',
-        category: 'headers',
-        severity: 'medium',
-        title: "CSP Uses 'unsafe-inline' Without Nonces",
-        description: "'unsafe-inline' allows arbitrary inline scripts, negating most XSS protection. Use nonces or hashes instead.",
-        evidence: `Content-Security-Policy: ${csp.substring(0, 200)}`,
-        remediation: "Replace 'unsafe-inline' with per-request nonces: script-src 'nonce-{random}'. Next.js supports this via middleware.",
-      });
-    }
-    if (csp.includes("'unsafe-eval'")) {
-      findings.push({
-        id: 'header-csp-unsafe-eval',
-        category: 'headers',
-        severity: 'medium',
-        title: "CSP Contains 'unsafe-eval'",
-        description: "'unsafe-eval' permits eval(), new Function(), and setTimeout(string) — common XSS escalation vectors.",
-        evidence: `CSP contains 'unsafe-eval'`,
-        remediation: "Remove 'unsafe-eval'. Refactor code using eval() or Function(). Some bundlers add this — check your build config.",
-      });
-    }
+  const responseHeaders: Record<string, string> = {};
+  res.headers.forEach((value, name) => {
+    responseHeaders[name.toLowerCase()] = value;
+  });
+  const assessment = analyzeSecurityHeaders(responseHeaders, true);
+  function headerSeverity(name: string, penalty: number): DeepFinding['severity'] {
+    if (name === 'Content-Security-Policy') return penalty >= 20 ? 'medium' : 'low';
+    if (
+      name === 'Strict-Transport-Security'
+      || name === 'X-Frame-Options'
+      || name === 'X-Content-Type-Options'
+    ) return 'low';
+    return 'info';
   }
 
-  // Clickjacking — only meaningful if the page has interactive content
-  if (!xfo && !csp?.includes('frame-ancestors')) {
-    findings.push({
-      id: 'header-xfo-missing',
+  return assessment.headers
+    .filter(header => (header.penaltyApplied ?? 0) > 0)
+    .map(header => ({
+      id: `header-${header.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
       category: 'headers',
-      severity: 'medium',
-      title: 'No Clickjacking Protection (X-Frame-Options / frame-ancestors)',
-      description: 'The page can be embedded in a hidden iframe on an attacker\'s site. Users can be tricked into clicking buttons invisibly overlaid on your UI — "likejacking", fake payments, or account actions.',
-      remediation: isNextJS
-        ? "In next.config.js headers(): { key: 'X-Frame-Options', value: 'DENY' }"
-        : "Add header: X-Frame-Options: DENY\nOr CSP: frame-ancestors 'none'",
-    });
-  }
-
-  // X-Content-Type-Options — low severity, informational
-  if (!xcto) {
-    findings.push({
-      id: 'header-xcto-missing',
-      category: 'headers',
-      severity: 'low',
-      title: 'Missing X-Content-Type-Options: nosniff',
-      description: 'Without nosniff, browsers may MIME-sniff responses and interpret a text file as JavaScript — useful in some upload-based XSS attacks.',
-      remediation: isNextJS
-        ? "next.config.js headers(): { key: 'X-Content-Type-Options', value: 'nosniff' }"
-        : 'Add header: X-Content-Type-Options: nosniff',
-    });
-  }
-
-  // HSTS — CDNs like Vercel inject HSTS at the edge. Downgrade if CDN detected.
-  if (!hsts) {
-    findings.push({
-      id: 'header-hsts-missing',
-      category: 'headers',
-      severity: isCDN ? 'low' : 'medium',
-      title: 'Missing HSTS Header' + (isCDN ? ' (may be set at CDN edge)' : ''),
-      description: 'No Strict-Transport-Security header in this response. '
-        + (isVercel
-          ? 'Vercel injects HSTS at the edge for custom domains, but not for *.vercel.app subdomains. If you\'re on a custom domain, verify it\'s enabled in Vercel project settings.'
-          : 'Without HSTS, browsers may access the site over HTTP on first visit, enabling MITM and cookie theft.'),
-      remediation: isNextJS
-        ? "next.config.js headers(): { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains; preload' }"
-        : 'Add header: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload',
-    });
-  } else {
-    const match = hsts.match(/max-age=(\d+)/);
-    if (match && parseInt(match[1]) < 31536000) {
-      findings.push({
-        id: 'header-hsts-short',
-        category: 'headers',
-        severity: 'low',
-        title: 'HSTS max-age Below 1 Year',
-        description: `HSTS max-age is ${parseInt(match[1]) / 86400} days. Short durations reduce protection — browsers re-check over HTTP sooner.`,
-        evidence: `Strict-Transport-Security: ${hsts}`,
-        remediation: 'Set max-age=31536000 (1 year minimum for preload eligibility).',
-      });
-    }
-  }
-
-  // Referrer-Policy — low severity, informational
-  if (!rp) {
-    findings.push({
-      id: 'header-rp-missing',
-      category: 'headers',
-      severity: 'low',
-      title: 'Missing Referrer-Policy',
-      description: 'Without Referrer-Policy, full URLs (including sensitive query params like tokens or IDs) are sent in the Referer header to third-party sites loaded on the page.',
-      remediation: "Add: Referrer-Policy: strict-origin-when-cross-origin",
-    });
-  }
-
-  // Permissions-Policy — info only, not truly a vulnerability for most sites
-  if (!pp) {
-    findings.push({
-      id: 'header-pp-missing',
-      category: 'headers',
-      severity: 'info',
-      title: 'No Permissions-Policy',
-      description: 'Permissions-Policy is not set. This header restricts which browser APIs (camera, microphone, geolocation) embedded scripts and iframes can access. Good defence-in-depth.',
-      remediation: "Add: Permissions-Policy: camera=(), microphone=(), geolocation=()",
-    });
-  }
-
-  return findings;
+      severity: headerSeverity(header.name, header.penaltyApplied ?? 0),
+      title: `${header.present ? 'Weak or Invalid' : 'Missing'} ${header.name}`,
+      description: `${header.details ?? 'The intended browser hardening control was not observed.'} This is a defence-in-depth observation, not proof of an exploitable vulnerability.`,
+      evidence: header.value ? `${header.name}: ${header.value.slice(0, 240)}` : undefined,
+      remediation: header.recommendation,
+    }));
 }
 
 // ── Cookie security ───────────────────────────────────────────────────────
@@ -437,10 +546,16 @@ async function checkCookies(res: Response | null): Promise<DeepFinding[]> {
 
   for (const cookie of cookieHeaders) {
     const name = cookie.split('=')[0].trim();
-    const lower = cookie.toLowerCase();
+    const attributes = cookie
+      .split(';')
+      .slice(1)
+      .map(attribute => attribute.trim().toLowerCase());
     const isAuth = /session|auth|token|jwt|sid|user/i.test(name);
+    const hasHttpOnly = attributes.includes('httponly');
+    const hasSecure = attributes.includes('secure');
+    const hasSameSite = attributes.some(attribute => attribute.startsWith('samesite='));
 
-    if (isAuth && !lower.includes('httponly')) {
+    if (isAuth && !hasHttpOnly) {
       findings.push({
         id: `cookie-httponly-${name}`,
         category: 'cookies',
@@ -452,25 +567,27 @@ async function checkCookies(res: Response | null): Promise<DeepFinding[]> {
       });
     }
 
-    if (!lower.includes('secure')) {
+    if (!hasSecure) {
       findings.push({
         id: `cookie-secure-${name}`,
         category: 'cookies',
-        severity: 'medium',
+        severity: isAuth ? 'medium' : 'info',
         title: `Cookie Missing Secure Flag: ${name}`,
-        description: `"${name}" lacks the Secure flag and can be transmitted over plain HTTP.`,
+        description: isAuth
+          ? `"${name}" appears authentication-related and lacks the Secure flag, so it can be transmitted if the site is reached over plain HTTP.`
+          : `"${name}" lacks the Secure flag. Its impact depends on whether the cookie carries sensitive or security-relevant state.`,
         evidence: `Set-Cookie: ${cookie.split(';')[0]}`,
         remediation: 'Add the Secure flag to all cookies with sensitive data.',
       });
     }
 
-    if (!lower.includes('samesite')) {
+    if (!hasSameSite) {
       findings.push({
         id: `cookie-samesite-${name}`,
         category: 'cookies',
-        severity: 'medium',
+        severity: isAuth ? 'low' : 'info',
         title: `Cookie Missing SameSite: ${name}`,
-        description: `"${name}" has no SameSite attribute, making it vulnerable to CSRF attacks.`,
+        description: `"${name}" has no explicit SameSite attribute. Modern browsers commonly apply a Lax default, but an explicit setting makes intended cross-site behavior auditable; this observation alone does not prove CSRF exposure.`,
         evidence: `Set-Cookie: ${cookie.split(';')[0]}`,
         remediation: 'Add SameSite=Lax (or Strict) to cookies. Use SameSite=None only with Secure for cross-site cookies.',
       });
@@ -595,6 +712,16 @@ async function checkSSL(domain: string): Promise<DeepFinding[]> {
           remediation: 'Ensure HTTP redirects point to the HTTPS version.',
         });
       }
+    } else {
+      findings.push({
+        id: 'ssl-http-not-redirected',
+        category: 'ssl',
+        severity: 'info',
+        title: 'Plain HTTP Did Not Redirect to HTTPS',
+        description: `The plain-HTTP endpoint returned ${httpRes.status} instead of an HTTPS redirect. The response may be intentionally blocked and this does not prove content is exposed, but a blanket redirect gives clients a clearer upgrade path.`,
+        evidence: `http://${domain} → HTTP ${httpRes.status}`,
+        remediation: 'Prefer redirecting every plain-HTTP request to the equivalent HTTPS URL, or document and test an intentional hard rejection policy.',
+      });
     }
   }
 
@@ -607,7 +734,7 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
   const res = await safeFetch(`${baseUrl}/robots.txt`);
   if (!res || res.status !== 200) return [];
 
-  const text = await res.text();
+  const text = await readProbeText(res);
   // Only flag paths that are genuinely non-obvious and give attackers real info.
   // /admin, /login, /dashboard are universally guessed — listing them adds no signal
   // and Disallow: /admin is actually best practice. Focus on specific, unusual paths.
@@ -639,7 +766,7 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
 async function checkCrossdomain(baseUrl: string): Promise<DeepFinding[]> {
   const res = await safeFetch(`${baseUrl}/crossdomain.xml`);
   if (!res || res.status !== 200) return [];
-  const text = await res.text().catch(() => '');
+  const text = await readProbeText(res);
   // Only flag if the policy actually allows broad cross-domain access
   const isPermissive = /allow-access-from\s+domain=["']\*["']/i.test(text)
     || /allow-http-request-headers-from\s+domain=["']\*["']/i.test(text);
@@ -647,9 +774,9 @@ async function checkCrossdomain(baseUrl: string): Promise<DeepFinding[]> {
   return [{
     id: 'crossdomain-permissive',
     category: 'cors',
-    severity: 'high',
-    title: 'Permissive crossdomain.xml Policy',
-    description: 'crossdomain.xml allows all domains (`domain="*"`). Flash/PDF clients can make credentialed cross-origin requests from any attacker-controlled site.',
+    severity: 'info',
+    title: 'Permissive Legacy crossdomain.xml Policy',
+    description: 'crossdomain.xml allows all domains (`domain="*"`). This is a legacy client policy, not a browser CORS result; remove or restrict it if any supported client still honours the file.',
     evidence: `GET ${baseUrl}/crossdomain.xml → 200\n${text.substring(0, 200)}`,
     remediation: 'Replace `domain="*"` with a specific allowlist of trusted domains. If Flash/Silverlight is not used, remove the file entirely.',
     url: `${baseUrl}/crossdomain.xml`,
@@ -661,7 +788,7 @@ async function checkCrossdomain(baseUrl: string): Promise<DeepFinding[]> {
 async function checkServerStatus(baseUrl: string): Promise<DeepFinding[]> {
   const res = await safeFetch(`${baseUrl}/server-status`);
   if (!res || res.status !== 200) return [];
-  const text = await res.text().catch(() => '');
+  const text = await readProbeText(res);
   // Confirm this is actual Apache mod_status output — not just a 200 page
   const isRealStatus = /Apache\s+Server\s+Status|Current\s+Time.*Server\s+uptime|requests\s+currently\s+being\s+processed/i.test(text);
   if (!isRealStatus) return [];
@@ -690,13 +817,6 @@ const ADMIN_PATHS = [
   '/cms', '/cms/',
 ];
 
-// These specific software panels should always be flagged if reachable at all —
-// they are well-known attack targets and should never be publicly accessible.
-const ALWAYS_FLAG_PATHS = new Set([
-  '/wp-admin', '/wp-admin/', '/phpmyadmin', '/phpmyadmin/', '/pma', '/pma/',
-  '/cpanel', '/adminpanel', '/controlpanel', '/superadmin', '/manager/html',
-]);
-
 // Patterns that confirm the page is actually an admin panel with live content
 const ADMIN_CONTENT_INDICATORS = [
   /phpMyAdmin/i,
@@ -708,6 +828,8 @@ const ADMIN_CONTENT_INDICATORS = [
   /manage\s+users/i,
   /user\s+management/i,
   /site\s+administration/i,
+  /id=["']wpadminbar["']/i,
+  /id=["']wpwrap["']/i,
 ];
 
 // Patterns that indicate the page is merely a login gate (admin IS protected)
@@ -723,13 +845,10 @@ async function checkAdminPaths(baseUrl: string): Promise<DeepFinding[]> {
       const res = await safeFetch(`${baseUrl}${path}`, { redirect: 'follow' });
       if (!res || res.status !== 200) return { path, exposed: false };
 
-      // Always flag well-known software panels on 200 — login form or not,
-      // they should not be reachable without IP restriction.
-      if (ALWAYS_FLAG_PATHS.has(path)) return { path, exposed: true };
-
-      // For generic paths, read the body and check for actual admin content.
-      // A login form returning 200 is acceptable — it means auth is required.
-      const text = await res.text().catch(() => '');
+      // A reachable login form is not an exposure. Require body evidence of
+      // actual management functionality for every path, including well-known
+      // WordPress, cPanel, phpMyAdmin, and Tomcat locations.
+      const text = await readProbeText(res);
       const isLoginGate = LOGIN_GATE_PATTERNS.some(re => re.test(text));
       if (isLoginGate) return { path, exposed: false };
 
@@ -773,15 +892,15 @@ async function checkSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
       const url = `${baseUrl}${path}${encodeURIComponent(payload)}`;
       const res = await safeFetch(url);
       if (!res) continue;
-      const text = await res.text().catch(() => '');
+      const text = await readProbeText(res);
       const match = SQL_ERROR_PATTERNS.find(re => re.test(text));
       if (match) {
         return [{
           id: 'sqli-error-based',
-          category: 'exposed-files',
-          severity: 'critical',
-          title: 'SQL Injection — Error-Based',
-          description: 'A SQL error message was returned in response to a crafted input. This indicates unsanitised database queries and likely full database compromise.',
+          category: 'info-disclosure',
+          severity: 'medium',
+          title: 'Database Error Disclosed After Crafted Input',
+          description: 'A SQL-shaped error string appeared after crafted input. This may expose implementation details, but one error response does not prove injectable query execution or database compromise without a differential control and exploit confirmation.',
           evidence: `GET ${url}\n→ SQL error: ${text.match(match)?.[0] ?? 'pattern matched'}`,
           remediation: 'Use parameterised queries / prepared statements. Never concatenate user input into SQL strings. Enable generic error pages in production.',
           url,
@@ -815,7 +934,7 @@ async function checkErrorVerbosity(baseUrl: string): Promise<DeepFinding[]> {
   for (const url of testUrls) {
     const res = await safeFetch(url);
     if (!res) continue;
-    const text = await res.text().catch(() => '');
+    const text = await readProbeText(res);
     const match = STACK_PATTERNS.find(re => re.test(text));
     if (match) {
       const snippet = text.substring(text.search(match), text.search(match) + 120).replace(/<[^>]+>/g, '').trim();
@@ -872,7 +991,7 @@ async function checkDirectoryListing(baseUrl: string): Promise<DeepFinding[]> {
   for (const path of paths) {
     const res = await safeFetch(`${baseUrl}${path}`);
     if (!res || res.status !== 200) continue;
-    const text = await res.text().catch(() => '');
+    const text = await readProbeText(res);
     if (DIR_PATTERNS.some(re => re.test(text))) {
       return [{
         id: 'directory-listing',
@@ -891,11 +1010,9 @@ async function checkDirectoryListing(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── Vibe-code specific checks ─────────────────────────────────────────────
 
-async function checkVibeCodePatterns(baseUrl: string, mainRes: Response | null): Promise<DeepFinding[]> {
+async function checkVibeCodePatterns(baseUrl: string, html: string): Promise<DeepFinding[]> {
   const findings: DeepFinding[] = [];
-  if (!mainRes) return findings;
-
-  const html = await mainRes.clone().text().catch(() => '');
+  if (!html) return findings;
 
   // Exposed Supabase URL + anon key in client HTML
   const supabaseUrl = html.match(/https:\/\/[a-z0-9]+\.supabase\.co/);
@@ -964,12 +1081,12 @@ async function checkVibeCodePatterns(baseUrl: string, mainRes: Response | null):
   if (genericApiKey && !html.includes('REPLACE_ME') && !html.includes('your-api-key')) {
     findings.push({
       id: 'vibe-api-key-html',
-      category: 'exposed-files',
-      severity: 'high',
-      title: 'API Key Pattern Detected in HTML Source',
-      description: 'An API key or secret appears to be embedded in the page HTML. If this is a server-side secret, it should never appear in client-rendered HTML.',
+      category: 'info-disclosure',
+      severity: 'info',
+      title: 'Client-Visible API-Key-Shaped Value Needs Review',
+      description: 'A generic key-shaped value appears in the page HTML. Public client keys, documentation examples, and placeholders can match this pattern, so it is not treated as a leaked secret without a provider-specific secret signature.',
       evidence: genericApiKey[0].substring(0, 80),
-      remediation: 'Move secrets to environment variables and access them only in server-side code (API routes, getServerSideProps, server actions).',
+      remediation: 'Identify the provider and intended scope. Rotate and move the value server-side only if its documentation classifies it as a secret; otherwise apply the provider-recommended origin, API, and quota restrictions.',
     });
   }
 
@@ -981,7 +1098,7 @@ async function checkVibeCodePatterns(baseUrl: string, mainRes: Response | null):
       headers: { 'Accept': 'application/json' },
     });
     if (apiRes?.status === 200) {
-      const body = await apiRes.text().catch(() => '');
+      const body = await readProbeText(apiRes);
       if (body.includes('"email"') || body.includes('"userId"') || body.includes('"id"')) {
         findings.push({
           id: 'vibe-api-no-auth',
@@ -1010,42 +1127,31 @@ async function checkXSS(baseUrl: string): Promise<DeepFinding[]> {
     const url = `${baseUrl}${path}${encodeURIComponent(XSS_PAYLOAD)}`;
     const res = await safeFetch(url);
     if (!res) continue;
-    const text = await res.text().catch(() => '');
+    const text = await readProbeText(res);
     // Reflected unencoded — actual XSS
     if (text.includes('<script>alert(1)</script>')) {
       return [{
         id: 'xss-reflected',
         category: 'injection',
-        severity: 'critical',
-        title: 'Reflected XSS — Unencoded Script Tag',
-        description: `Input injected into ${path} is reflected back in the HTML without encoding. Any script tag sent by an attacker will execute in the victim's browser — enabling session theft, keylogging, or full account takeover.`,
+        severity: 'medium',
+        title: 'Unencoded Script-Tag Reflection Needs Browser Validation',
+        description: `The test string sent to ${path} reappeared unencoded in the response source. It may still be inside JSON, a comment, a template, or another inert context; confirm execution in a controlled browser before classifying it as XSS.`,
         evidence: `GET ${url}\n→ Response contains: <script>alert(1)</script> (unencoded)`,
         remediation: 'HTML-encode all user input before rendering. Use Content-Security-Policy to block inline scripts. Use a templating engine that escapes by default.',
         url,
       }];
     }
-    // Input reflected but partially encoded — warn
-    if (text.includes('alert(1)') && !text.includes('&lt;script&gt;')) {
-      return [{
-        id: 'xss-partial-reflection',
-        category: 'injection',
-        severity: 'high',
-        title: 'Potential XSS — Input Reflected in Response',
-        description: `Input from ${path} appears in the HTML response. Partial encoding was detected — may still be exploitable depending on context.`,
-        evidence: `GET ${url}\n→ Response contains reflected input`,
-        remediation: 'Ensure all user input is fully HTML-encoded. Use context-aware output encoding.',
-        url,
-      }];
-    }
+    // Reflection alone is not XSS: the value may be in text, JSON, an inert
+    // attribute, or an encoded script value. Only the executable-tag fixture
+    // above is reported until context-aware browser validation exists.
   }
   return [];
 }
 
 // ── Subresource Integrity ─────────────────────────────────────────────────
 
-async function checkSRI(baseUrl: string, mainRes: Response | null): Promise<DeepFinding[]> {
-  if (!mainRes) return [];
-  const html = await mainRes.clone().text().catch(() => '');
+async function checkSRI(baseUrl: string, html: string): Promise<DeepFinding[]> {
+  if (!html) return [];
 
   // Find external scripts/stylesheets without integrity attribute
   const externalScripts = [...html.matchAll(/<script[^>]+src=["']https?:\/\/(?!.*localhost)[^"']+["'][^>]*>/gi)];
@@ -1061,15 +1167,54 @@ async function checkSRI(baseUrl: string, mainRes: Response | null): Promise<Deep
   return [{
     id: 'sri-missing',
     category: 'headers',
-    severity: 'medium',
+    severity: 'low',
     title: `${noIntegrity.length} External Resource${noIntegrity.length > 1 ? 's' : ''} Without Subresource Integrity`,
-    description: `External scripts/stylesheets loaded from CDNs without integrity hashes. If the CDN is compromised, attackers can inject malicious code into your site.`,
+    description: 'External scripts or stylesheets are loaded without fixed integrity hashes. SRI can add supply-chain defence for immutable third-party assets, but it is not suitable for every dynamically versioned resource and its absence is not an exploit by itself.',
     evidence: noIntegrity.map(t => t.substring(0, 120)).join('\n'),
     remediation: 'Add integrity="sha384-..." and crossorigin="anonymous" to all external <script> and <link> tags. Use srihash.org to generate hashes.',
   }];
 }
 
 // ── Forced browsing / unauthenticated API access (A01) ───────────────────
+
+function classifyUnauthenticatedJson(body: string): 'high' | 'medium' | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const record = parsed as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length <= 4 && keys.some(key => /^(?:error|message|status|code)$/i.test(key))) return null;
+  }
+
+  let severity: 'high' | 'medium' | null = null;
+  const ignoredValue = /^(?:required|missing|invalid|unauthori[sz]ed|forbidden|redacted|null|none|false|true|\*+)$/i;
+  function visit(value: unknown, depth: number): void {
+    if (depth > 3 || value === null || typeof value !== 'object') return;
+    const entries = Array.isArray(value)
+      ? value.slice(0, 20).map((item, index) => [String(index), item] as const)
+      : Object.entries(value as Record<string, unknown>).slice(0, 50);
+    for (const [key, child] of entries) {
+      const hasMaterialValue = typeof child === 'string'
+        ? child.trim().length > 0 && !ignoredValue.test(child.trim())
+        : typeof child === 'number'
+          || (Array.isArray(child) && child.length > 0)
+          || (child !== null && typeof child === 'object' && Object.keys(child).length > 0);
+      if (hasMaterialValue && /(?:password|passwd|secret|private[_-]?key|access[_-]?token|service[_-]?role)/i.test(key)) {
+        severity = 'high';
+      } else if (hasMaterialValue && /^(?:email|user_?id|role|users|api_?key|token)$/i.test(key) && severity !== 'high') {
+        severity = 'medium';
+      }
+      visit(child, depth + 1);
+    }
+  }
+  visit(parsed, 0);
+  return severity;
+}
 
 async function checkForcedBrowsing(baseUrl: string): Promise<DeepFinding[]> {
   const PROTECTED_PATHS = [
@@ -1086,20 +1231,14 @@ async function checkForcedBrowsing(baseUrl: string): Promise<DeepFinding[]> {
     })
   );
 
-  const exposed: string[] = [];
+  const exposed: Array<{ path: string; severity: 'high' | 'medium' }> = [];
   for (const r of results) {
     if (r.status !== 'fulfilled') continue;
     const { path, res } = r.value;
     if (!res || res.status !== 200) continue;
-    const text = await res.text().catch(() => '');
-    // Require specific user/admin field names — not just any JSON with a "data" key,
-    // which would be a false positive for any standard API response envelope.
-    const looksLikeData =
-      (text.trimStart().startsWith('{') || text.trimStart().startsWith('[')) &&
-      (text.includes('"email"') || text.includes('"userId"') || text.includes('"role"') ||
-       text.includes('"users"') || text.includes('"password"') || text.includes('"apiKey"') ||
-       text.includes('"secret"') || text.includes('"token"'));
-    if (looksLikeData) exposed.push(path);
+    const text = await readProbeText(res);
+    const severity = classifyUnauthenticatedJson(text);
+    if (severity) exposed.push({ path, severity });
   }
 
   if (!exposed.length) return [];
@@ -1107,10 +1246,10 @@ async function checkForcedBrowsing(baseUrl: string): Promise<DeepFinding[]> {
   return [{
     id: 'auth-unprotected-api',
     category: 'authentication',
-    severity: 'high',
-    title: `Unauthenticated API Endpoint${exposed.length > 1 ? 's' : ''}: ${exposed.slice(0, 3).join(', ')}${exposed.length > 3 ? '…' : ''}`,
-    description: `${exposed.length} API endpoint${exposed.length > 1 ? 's' : ''} returned JSON data without requiring authentication. This may expose user data, admin functions, or internal configuration to any unauthenticated caller.`,
-    evidence: exposed.map(p => `GET ${baseUrl}${p} → 200 JSON`).join('\n'),
+    severity: exposed.some(item => item.severity === 'high') ? 'high' : 'medium',
+    title: `Unauthenticated JSON Response${exposed.length > 1 ? 's' : ''} Need Review: ${exposed.slice(0, 3).map(item => item.path).join(', ')}${exposed.length > 3 ? '…' : ''}`,
+    description: `${exposed.length} selected API path${exposed.length > 1 ? 's' : ''} returned non-empty sensitive-looking JSON fields without authentication. Public profile/configuration data can be intentional, so confirm field sensitivity and access expectations before classifying this as broken access control.`,
+    evidence: exposed.map(item => `GET ${baseUrl}${item.path} → 200 JSON with non-empty ${item.severity === 'high' ? 'secret-shaped' : 'account/configuration'} fields`).join('\n'),
     remediation: 'Add authentication middleware to all API routes. Return 401 for unauthenticated requests. Never rely on obscurity — assume all endpoint paths are known to attackers.',
   }];
 }
@@ -1129,7 +1268,7 @@ async function checkIDOR(baseUrl: string): Promise<DeepFinding[]> {
       safeFetch(`${baseUrl}${path}2`, { headers: { Accept: 'application/json' } }),
     ]);
     if (!res1 || !res2 || res1.status !== 200 || res2.status !== 200) continue;
-    const [t1, t2] = await Promise.all([res1.text().catch(() => ''), res2.text().catch(() => '')]);
+    const [t1, t2] = await Promise.all([readProbeText(res1), readProbeText(res2)]);
     const hasData = (t: string) =>
       (t.includes('"id"') || t.includes('"email"') || t.includes('"name"')) &&
       (t.trimStart().startsWith('{') || t.trimStart().startsWith('['));
@@ -1138,9 +1277,9 @@ async function checkIDOR(baseUrl: string): Promise<DeepFinding[]> {
     return [{
       id: 'idor-sequential-ids',
       category: 'authentication',
-      severity: 'high',
-      title: `Possible IDOR: ${path}{id} Returns Records Without Auth`,
-      description: `${path}1 and ${path}2 both return what appears to be object data without authentication. If records belong to specific users, any caller can enumerate all of them by incrementing the ID.`,
+      severity: 'info',
+      title: `Sequential Public Object Responses Need Authorization Review: ${path}{id}`,
+      description: `${path}1 and ${path}2 both return object-like data without authentication. This can be intentional public data and does not establish IDOR without authenticated users and ownership expectations; review whether either record should be access-controlled.`,
       evidence: `GET ${baseUrl}${path}1 → 200 JSON\nGET ${baseUrl}${path}2 → 200 JSON\nBoth return objects with id/email/name fields`,
       remediation: 'Check ownership on every resource request — verify the authenticated user owns the record before returning it. Return 403 for resources belonging to other users. Use non-sequential UUIDs as identifiers.',
       url: `${baseUrl}${path}1`,
@@ -1155,15 +1294,18 @@ async function checkIDOR(baseUrl: string): Promise<DeepFinding[]> {
 async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
   const SSRF_PARAMS = ['?url=', '?webhook=', '?callback=', '?proxy=', '?fetch=', '?link=', '?image=', '?src='];
   const METADATA_TARGET = 'http://169.254.169.254/latest/meta-data/';
-  const LOCALHOST_TARGET = 'http://127.0.0.1/';
 
   for (const param of SSRF_PARAMS) {
     // Cloud metadata probe
     const metaUrl = `${baseUrl}${param}${encodeURIComponent(METADATA_TARGET)}`;
     const metaRes = await safeFetch(metaUrl);
     if (metaRes?.status === 200) {
-      const text = await metaRes.text().catch(() => '');
+      const text = await readProbeText(metaRes);
       if (/ami-id|instance-id|security-credentials|iam\//.test(text)) {
+        const controlUrl = `${baseUrl}${param}${encodeURIComponent('vibescan-control-value')}`;
+        const controlRes = await safeFetch(controlUrl);
+        const controlText = controlRes?.status === 200 ? await readProbeText(controlRes) : '';
+        if (/ami-id|instance-id|security-credentials|iam\//.test(controlText)) continue;
         return [{
           id: 'ssrf-metadata',
           category: 'authentication',
@@ -1177,24 +1319,10 @@ async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
       }
     }
 
-    // Localhost probe
-    const localUrl = `${baseUrl}${param}${encodeURIComponent(LOCALHOST_TARGET)}`;
-    const localRes = await safeFetch(localUrl);
-    if (localRes?.status === 200) {
-      const text = await localRes.text().catch(() => '');
-      if (text.length > 50 && (text.includes('<html') || text.trimStart().startsWith('{'))) {
-        return [{
-          id: 'ssrf-localhost',
-          category: 'authentication',
-          severity: 'high',
-          title: 'Possible SSRF — Localhost Request Returned Content',
-          description: `The ${param.replace('?', '').replace('=', '')} parameter fetched 127.0.0.1 and received a non-empty response. This indicates the server makes outbound requests to user-supplied URLs, potentially exposing internal services.`,
-          evidence: `GET ${localUrl}\n→ HTTP 200 with ${text.length} bytes`,
-          remediation: 'Validate target URLs against an allowlist. Block private IP ranges (127.x, 10.x, 172.16–31.x, 192.168.x) before making any outbound fetch.',
-          url: localUrl,
-        }];
-      }
-    }
+    // A generic HTML/JSON response to a localhost value cannot distinguish a
+    // real server-side fetch from an application that simply ignored or echoed
+    // the query parameter. Keep this check to the metadata signature above
+    // until a consented out-of-band callback fixture can confirm egress.
   }
 
   return [];
@@ -1212,7 +1340,7 @@ async function checkPathTraversal(baseUrl: string): Promise<DeepFinding[]> {
       const url = `${baseUrl}${param}${encodeURIComponent(payload)}`;
       const res = await safeFetch(url);
       if (!res || res.status !== 200) continue;
-      const text = await res.text().catch(() => '');
+      const text = await readProbeText(res);
       if (UNIX_PASSWD.test(text)) {
         return [{
           id: 'path-traversal',
@@ -1233,9 +1361,8 @@ async function checkPathTraversal(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── Outdated / vulnerable libraries (A06) ────────────────────────────────
 
-async function checkOutdatedLibraries(mainRes: Response | null): Promise<DeepFinding[]> {
-  if (!mainRes) return [];
-  const html = await mainRes.clone().text().catch(() => '');
+async function checkOutdatedLibraries(html: string): Promise<DeepFinding[]> {
+  if (!html) return [];
   const findings: DeepFinding[] = [];
 
   const CHECKS: Array<{
@@ -1273,7 +1400,7 @@ async function checkOutdatedLibraries(mainRes: Response | null): Promise<DeepFin
       re: /angular(?:js)?[/\-v](1\.[0-6]\.\d+)/i,
       name: 'AngularJS',
       versionLabel: '1.x (EOL Dec 2021)',
-      severity: 'high',
+      severity: 'medium',
       remediation: 'AngularJS reached end-of-life in December 2021 and no longer receives security patches. Migrate to Angular 17+ or another supported framework.',
     },
     {
@@ -1302,7 +1429,7 @@ async function checkOutdatedLibraries(mainRes: Response | null): Promise<DeepFin
       category: 'headers',
       severity: lib.severity,
       title: `Outdated Library: ${lib.name} ${match[1]} (${lib.versionLabel})`,
-      description: `${lib.name} version ${match[1]} was detected in the page source.${lib.cve ? ` Known CVEs: ${lib.cve}.` : ''} Outdated client-side libraries are a common and easily exploitable attack vector.`,
+      description: `${lib.name} version ${match[1]} was detected in the page source.${lib.cve ? ` This version is associated with: ${lib.cve}.` : ''} A version string does not prove the affected code path is loaded or exploitable; confirm the shipped dependency and feature usage before assigning impact.`,
       evidence: `Detected "${match[0]}" in page HTML`,
       remediation: lib.remediation,
     });
@@ -1313,15 +1440,22 @@ async function checkOutdatedLibraries(mainRes: Response | null): Promise<DeepFin
 
 // ── Source map exposure ────────────────────────────────────────────────────
 
-async function checkSourceMaps(baseUrl: string, mainRes: Response | null): Promise<DeepFinding[]> {
-  if (!mainRes) return [];
-  const html = await mainRes.clone().text().catch(() => '');
+async function checkSourceMaps(baseUrl: string, html: string): Promise<DeepFinding[]> {
+  if (!html) return [];
 
   const scriptMatches = [...html.matchAll(/<script[^>]+src=["']([^"']+\.js)["'][^>]*>/gi)];
   const scriptUrls = scriptMatches
     .map(m => {
       const src = m[1];
-      if (src.startsWith('http')) return src;
+      if (src.startsWith('http')) {
+        try {
+          return new URL(src).hostname.toLowerCase() === new URL(baseUrl).hostname.toLowerCase()
+            ? src
+            : null;
+        } catch {
+          return null;
+        }
+      }
       if (src.startsWith('/')) return `${baseUrl}${src}`;
       return null;
     })
@@ -1334,7 +1468,21 @@ async function checkSourceMaps(baseUrl: string, mainRes: Response | null): Promi
     scriptUrls.map(async (url) => {
       const mapUrl = `${url}.map`;
       const res = await safeFetch(mapUrl);
-      return { url: mapUrl, exposed: res?.status === 200 };
+      if (!res || res.status !== 200) return { url: mapUrl, exposed: false };
+      const body = await readProbeText(res);
+      try {
+        const parsed = JSON.parse(body) as {
+          version?: unknown;
+          sources?: unknown;
+          mappings?: unknown;
+        };
+        const exposed = parsed?.version === 3
+          && Array.isArray(parsed.sources)
+          && typeof parsed.mappings === 'string';
+        return { url: mapUrl, exposed };
+      } catch {
+        return { url: mapUrl, exposed: false };
+      }
     })
   );
 
@@ -1367,14 +1515,21 @@ async function checkGraphQL(baseUrl: string): Promise<DeepFinding[]> {
       body: JSON.stringify({ query: '{__schema{queryType{name}}}' }),
     });
     if (!res || res.status !== 200) continue;
-    const text = await res.text().catch(() => '');
-    if (text.includes('__schema') || text.includes('queryType')) {
+    const text = await readProbeText(res);
+    let confirmed = false;
+    try {
+      const parsed = JSON.parse(text) as { data?: { __schema?: { queryType?: unknown } } };
+      confirmed = parsed?.data?.__schema?.queryType !== undefined;
+    } catch {
+      // A catch-all HTML page or unrelated JSON is not GraphQL evidence.
+    }
+    if (confirmed) {
       return [{
         id: 'graphql-introspection',
         category: 'info-disclosure',
-        severity: 'medium',
-        title: 'GraphQL Introspection Enabled in Production',
-        description: `GraphQL introspection is enabled at ${path}. This lets anyone enumerate your entire API schema — all types, queries, mutations, fields, and arguments — giving attackers a complete map of your backend.`,
+        severity: 'info',
+        title: 'Public GraphQL Introspection Detected',
+        description: `GraphQL introspection is enabled at ${path}. Public introspection can be intentional and is not a vulnerability by itself; review whether exposing the schema matches the API's threat model and documentation policy.`,
         evidence: `POST ${baseUrl}${path} with {__schema query}\n→ Introspection data returned`,
         remediation: 'Disable introspection in production. In Apollo Server: introspection: false. In graphql-yoga: disable introspection via plugins. Keep it enabled only in development environments.',
         url: `${baseUrl}${path}`,
@@ -1399,28 +1554,42 @@ const API_DOC_PATHS = [
   { path: '/docs', title: 'Docs' },
 ];
 
+function isApiDocumentationBody(body: string): boolean {
+  if (/\bswagger-ui\b|id=["']swagger-ui["']|\bredoc(?:\.standalone)?\b/i.test(body)) return true;
+  try {
+    const parsed = JSON.parse(body) as { openapi?: unknown; swagger?: unknown; paths?: unknown };
+    const versioned = typeof parsed?.openapi === 'string' || typeof parsed?.swagger === 'string';
+    return versioned && typeof parsed.paths === 'object' && parsed.paths !== null;
+  } catch {
+    return /^(?:openapi|swagger):\s*["']?[23](?:\.\d+){0,2}["']?\s*$/im.test(body)
+      && /^paths:\s*$/im.test(body);
+  }
+}
+
 async function checkAPIDocumentation(baseUrl: string): Promise<DeepFinding[]> {
   const results = await Promise.allSettled(
     API_DOC_PATHS.map(async ({ path, title }) => {
       const res = await safeFetch(`${baseUrl}${path}`, { redirect: 'follow' });
-      return { path, title, status: res?.status ?? 0 };
+      if (!res || res.status !== 200) return { path, title, exposed: false };
+      const body = await readProbeText(res);
+      return { path, title, exposed: isApiDocumentationBody(body) };
     })
   );
 
   const exposed = results
-    .filter(r => r.status === 'fulfilled' && r.value.status === 200)
-    .map(r => (r as PromiseFulfilledResult<{ path: string; title: string; status: number }>).value);
+    .filter(r => r.status === 'fulfilled' && r.value.exposed)
+    .map(r => (r as PromiseFulfilledResult<{ path: string; title: string; exposed: boolean }>).value);
 
   if (!exposed.length) return [];
 
   return [{
     id: 'api-docs-exposed',
     category: 'info-disclosure',
-    severity: 'medium',
-    title: `API Documentation Publicly Accessible: ${exposed[0].title}`,
-    description: `API documentation (${exposed.map(e => e.path).join(', ')}) is publicly accessible. This gives attackers a complete map of your endpoints, request formats, authentication requirements, and data models.`,
-    evidence: exposed.map(e => `GET ${baseUrl}${e.path} → 200`).join('\n'),
-    remediation: 'Restrict API documentation to authenticated users or internal network. Consider password-protecting the docs endpoint or serving it only on staging.',
+    severity: 'info',
+    title: `Public API Documentation Detected: ${exposed[0].title}`,
+    description: `Content signatures confirm API documentation at ${exposed.map(e => e.path).join(', ')}. Public documentation can be intentional and is not a vulnerability by itself; review whether it exposes internal-only operations or schemas.`,
+    evidence: exposed.map(e => `GET ${baseUrl}${e.path} → 200 with API-documentation markers`).join('\n'),
+    remediation: 'Keep intended public documentation accurate and free of secrets. Require authentication or move it to an internal environment only when the schema is not meant for public consumers.',
     url: `${baseUrl}${exposed[0].path}`,
   }];
 }
@@ -1436,6 +1605,7 @@ async function checkRateLimiting(baseUrl: string): Promise<DeepFinding[]> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: 'ratelimit-probe@vibescan.io', password: 'wrongpassword123' }),
+        allowRateLimitResponse: true,
       })
     );
 
@@ -1455,11 +1625,11 @@ async function checkRateLimiting(baseUrl: string): Promise<DeepFinding[]> {
       return [{
         id: 'rate-limit-missing',
         category: 'authentication',
-        severity: 'medium',
-        title: 'No Rate Limiting on Authentication Endpoint',
-        description: `${path} accepted 6 rapid login attempts without returning HTTP 429 Too Many Requests. Without rate limiting, attackers can brute-force passwords, enumerate valid accounts, or run credential stuffing attacks at scale.`,
+        severity: 'info',
+        title: 'No Early HTTP 429 Observed on Authentication Endpoint',
+        description: `${path} answered 6 rapid invalid login attempts without HTTP 429. This small black-box sample cannot establish that rate limiting is absent: controls may use a higher threshold, delayed responses, account/device signals, or edge enforcement.`,
         evidence: `POST ${baseUrl}${path} × 6 rapid requests\n→ Statuses: ${statuses.join(', ')} — no 429 Too Many Requests`,
-        remediation: 'Implement rate limiting on all authentication endpoints. Limit to 5-10 attempts per IP per minute with exponential backoff. Consider account lockout and CAPTCHA after repeated failures.',
+        remediation: 'Verify the documented abuse-control policy with an authorised test that covers IP, account, device, and time windows. Add throttling or step-up controls if the endpoint truly has none.',
         url: `${baseUrl}${path}`,
       }];
     }
@@ -1490,15 +1660,15 @@ async function checkNoSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
       const url = `${baseUrl}${path}?id${payload}`;
       const res = await safeFetch(url);
       if (!res) continue;
-      const text = await res.text().catch(() => '');
+      const text = await readProbeText(res);
       const match = NOSQL_ERROR_PATTERNS.find(re => re.test(text));
       if (match) {
         return [{
           id: 'nosql-injection',
-          category: 'injection',
-          severity: 'critical',
-          title: 'NoSQL Injection — MongoDB Error Detected',
-          description: 'A MongoDB operator injection payload triggered a database error in the response. Attackers can use this to bypass authentication, enumerate records, or extract data without credentials.',
+          category: 'info-disclosure',
+          severity: 'medium',
+          title: 'Database Error Disclosed After NoSQL-Shaped Input',
+          description: 'A MongoDB/Mongoose-shaped error string appeared after crafted input. This is useful error-disclosure evidence, but it does not prove operator injection, authentication bypass, or data extraction without a differential exploit.',
           evidence: `GET ${url}\n→ MongoDB/Mongoose error: ${text.match(match)?.[0] ?? 'pattern matched'}`,
           remediation: 'Sanitise all user input before using it in database queries. Reject keys starting with $. Use Mongoose with strict schemas and validate input shapes before querying.',
           url,
@@ -1520,19 +1690,21 @@ async function checkHostHeaderInjection(baseUrl: string): Promise<DeepFinding[]>
   });
   if (!res) return [];
 
-  const text = await res.text().catch(() => '');
+  const text = await readProbeText(res);
   const location = res.headers.get('location') ?? '';
 
-  if (text.includes(INJECTED_HOST) || location.includes(INJECTED_HOST)) {
-    const source = location.includes(INJECTED_HOST)
-      ? `Location: ${location}`
-      : 'Response body contains injected Host value';
+  const redirectsToInjectedHost = res.status >= 300 && res.status < 400 && location.includes(INJECTED_HOST);
+  const reflectsInSuccessfulBody = res.ok && text.includes(INJECTED_HOST);
+  if (redirectsToInjectedHost || reflectsInSuccessfulBody) {
+    const source = redirectsToInjectedHost ? `Location: ${location}` : 'Successful response body contains injected Host value';
     return [{
       id: 'host-header-injection',
       category: 'injection',
-      severity: 'high',
-      title: 'Host Header Injection',
-      description: "The application reflects the attacker-controlled Host header in its response. This enables password reset poisoning (reset emails linking to attacker's domain), cache poisoning, and open redirect attacks.",
+      severity: redirectsToInjectedHost ? 'high' : 'info',
+      title: redirectsToInjectedHost ? 'Host Header Controls an External Redirect' : 'Host Header Value Reflected in Response',
+      description: redirectsToInjectedHost
+        ? 'The attacker-controlled Host value appeared in a redirect destination. Confirm whether the same host derivation reaches password-reset links or shared caches before assigning broader impact.'
+        : 'The attacker-controlled Host value appeared in a successful response body. Reflection alone is not password-reset or cache poisoning; inspect the sink and cache behavior before treating it as exploitable.',
       evidence: `GET ${baseUrl} with Host: ${INJECTED_HOST}\n→ ${source}`,
       remediation: 'Validate the Host header against a strict allowlist of your own domains. Never use the Host header to construct URLs in emails, redirects, or links — use a hardcoded base URL from environment config.',
     }];
@@ -1566,7 +1738,7 @@ async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
     }
 
     // Also check if CRLF payload was reflected unencoded in body
-    const text = await res.text().catch(() => '');
+    const text = await readProbeText(res);
     if (text.includes('X-Injected: malicious')) {
       return [{
         id: 'crlf-injection',
@@ -1588,20 +1760,31 @@ async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
 function calculateScore(findings: DeepFinding[]): number {
   // Only count real vulnerabilities — info is never penalised
   const WEIGHTS: Record<string, number> = { critical: 30, high: 15, medium: 7, low: 2, info: 0 };
-  // Deduplicate by category — multiple low/medium in same category count once at that severity
+  // Correlated findings in one category contribute only their worst severity.
   const worstPerCategory = new Map<string, number>();
   for (const f of findings) {
     const w = WEIGHTS[f.severity] ?? 0;
-    const key = `${f.category}:${f.severity}`;
-    worstPerCategory.set(key, Math.max(worstPerCategory.get(key) ?? 0, w));
+    worstPerCategory.set(f.category, Math.max(worstPerCategory.get(f.category) ?? 0, w));
   }
   const deductions = Array.from(worstPerCategory.values()).reduce((sum, w) => sum + w, 0);
-  return Math.max(0, 100 - deductions);
+  let score = Math.max(0, 100 - deductions);
+
+  // A severe confirmed finding must constrain the grade even when it is the
+  // only category affected. These are severity guardrails, not probabilities.
+  if (findings.some(f => f.severity === 'critical')) score = Math.min(score, 35);
+  else if (findings.some(f => f.severity === 'high')) score = Math.min(score, 59);
+  else if (findings.some(f => f.severity === 'medium')) score = Math.min(score, 79);
+
+  return score;
 }
 
 // ── Build checked[] summary ───────────────────────────────────────────────
 
-function buildChecked(findings: DeepFinding[], mainRes: Response | null): import('@/types/deep-scan').CheckedItem[] {
+function buildChecked(
+  findings: DeepFinding[],
+  mainRes: Response | null,
+  coverageComplete: boolean,
+): import('@/types/deep-scan').CheckedItem[] {
   function findingsFor(...ids: string[]) {
     return findings.filter(f => ids.some(id => f.id.startsWith(id)));
   }
@@ -1611,7 +1794,20 @@ function buildChecked(findings: DeepFinding[], mainRes: Response | null): import
     relevant: DeepFinding[],
     passDetail: string,
   ): import('@/types/deep-scan').CheckedItem {
-    if (!relevant.length) return { id, label, description, status: 'pass', detail: passDetail };
+    // Retain the call-site description for now, but do not present it as proof
+    // that a broad vulnerability class is absent. These are bounded probes.
+    void passDetail;
+    if (!relevant.length) {
+      return coverageComplete
+        ? {
+            id,
+            label,
+            description,
+            status: 'pass',
+            detail: 'No matching evidence was observed in the selected probes. This does not prove the condition is absent.',
+          }
+        : { id, label, description, status: 'skip', detail: 'Inconclusive because one or more scan requests failed or were blocked.' };
+    }
     const worst = relevant.reduce((a, b) => {
       const order = ['critical','high','medium','low','info'];
       return order.indexOf(a.severity) < order.indexOf(b.severity) ? a : b;
@@ -1630,9 +1826,9 @@ function buildChecked(findings: DeepFinding[], mainRes: Response | null): import
       status: mainRes ? 'pass' : 'skip',
       detail: mainRes ? 'HTTPS connection successful — valid TLS certificate in use' : 'Could not reach site over HTTPS',
     },
-    item('https',      'HTTPS Enforcement',           'Does plain HTTP redirect to HTTPS?',                                     findingsFor('ssl-http'), httpsOk ? 'HTTP correctly redirects to HTTPS — no plain HTTP access' : 'HTTPS redirect in place'),
+    item('https',      'HTTPS Enforcement',           'Does plain HTTP redirect to HTTPS?',                                     findingsFor('ssl-'), httpsOk ? 'HTTP correctly redirects to HTTPS — no plain HTTP access' : 'HTTPS redirect in place'),
     item('headers',    'Security Headers',             'CSP, HSTS, X-Frame-Options, XCTO, Referrer-Policy',                     findingsFor('header-'), 'All critical security headers present and correctly configured'),
-    item('cors',       'CORS Policy',                  'No wildcard+credentials or arbitrary origin reflection on API routes',   findingsFor('cors-'), 'CORS policy is correctly restricted — no dangerous origin reflection found'),
+    item('cors',       'CORS Policy',                  'No wildcard+credentials or arbitrary origin reflection on API routes',   findingsFor('cors-', 'crossdomain-'), 'CORS policy is correctly restricted — no dangerous origin reflection found'),
     item('cookies',    'Cookie Security Flags',        'HttpOnly, Secure, SameSite on session/auth cookies',                    findingsFor('cookie-'), 'All cookies have correct HttpOnly, Secure, and SameSite flags'),
     item('sqli',       'SQL Injection',                "Error-based SQLi via ' OR 1=1, SQLSTATE payloads on query params",      findingsFor('sqli-'), 'No SQL errors returned — injection payloads did not trigger database errors'),
     item('xss',        'Reflected XSS',                'Script tag injection into search/query parameters',                     findingsFor('xss-'), 'Input correctly encoded — no unencoded script reflection found'),
@@ -1643,7 +1839,7 @@ function buildChecked(findings: DeepFinding[], mainRes: Response | null): import
     item('redirect',   'Open Redirect',                '?redirect=, ?url=, ?next=, ?return=, ?goto= hijacking',                 findingsFor('open-redirect'), 'No open redirect vectors found — redirect params are absent or validated'),
     item('methods',    'Dangerous HTTP Methods',       'TRACE (XST), unauthenticated PUT/DELETE',                               findingsFor('methods-'), 'No dangerous HTTP methods advertised via OPTIONS'),
     item('errors',     'Error Verbosity',              'Stack traces, file paths, framework versions in error pages',            findingsFor('error-'), 'Error responses use generic messages — no internals disclosed'),
-    item('info',       'Technology Disclosure',        'Server version, X-Powered-By, X-AspNet-Version in headers',             findingsFor('info-'), 'No detailed server/framework version info disclosed in response headers'),
+    item('info',       'Technology Disclosure',        'Server version, X-Powered-By, X-AspNet-Version in headers',             findingsFor('info-', 'server-status-'), 'No detailed server/framework version info disclosed in response headers'),
     item('sri',        'Subresource Integrity',        'External CDN scripts and stylesheets have integrity= hashes',           findingsFor('sri-'), 'External resources either have integrity hashes or are same-origin'),
     item('robots',      'robots.txt Path Disclosure',    'Sensitive admin/backup/config paths in Disallow entries',              findingsFor('robots-'),    'robots.txt does not reveal sensitive internal paths'),
     item('forced',      'Forced Browsing',               'Unauthenticated access to /api/admin, /api/users, /api/config, 12 more', findingsFor('auth-unprotected'), 'No unauthenticated API endpoints found — all tested paths require authentication'),
@@ -1668,8 +1864,6 @@ export type ScanPhase = {
   label: string;
   detail: string;
 };
-
-const MIN_PHASE_MS = 900;
 
 export const SCAN_PHASES: ScanPhase[] = [
   { id: 'init',      label: 'Connecting',             detail: 'Establishing HTTPS connection, reading response headers and framework fingerprint…' },
@@ -1708,29 +1902,63 @@ export const SCAN_PHASES: ScanPhase[] = [
 
 export async function deepScanDomain(
   domain: string,
-  onPhase?: (phase: ScanPhase, findings: DeepFinding[]) => void,
+  onPhase?: (phase: ScanPhase, findings: DeepFinding[], status: 'start' | 'complete') => void,
 ): Promise<DeepScanResult> {
+  const requestCoverage: RequestCoverage = {
+    requestsAttempted: 0,
+    requestsCompleted: 0,
+    requestsFailed: 0,
+    requestsBlocked: 0,
+  };
+  const requestContext = {
+    authorizedHostname: domain.toLowerCase(),
+    coverage: requestCoverage,
+    deadlineAt: Date.now() + SCAN_BUDGET_MS,
+    deadlineExceeded: false,
+  };
+
+  return scanRequestContext.run(requestContext, async () => {
   const start = Date.now();
   const baseUrl = `https://${domain}`;
   const allFindings: DeepFinding[] = [];
 
   async function run<T extends DeepFinding[]>(phaseId: string, fn: () => Promise<T>): Promise<T> {
     const phase = SCAN_PHASES.find(p => p.id === phaseId)!;
-    onPhase?.(phase, []);
-    const t0 = Date.now();
+    const failedBefore = requestCoverage.requestsFailed;
+    const blockedBefore = requestCoverage.requestsBlocked;
+    onPhase?.(phase, [], 'start');
     const results = await fn();
-    // Enforce minimum phase duration so the terminal is readable
-    const elapsed = Date.now() - t0;
-    if (elapsed < MIN_PHASE_MS) await new Promise(r => setTimeout(r, MIN_PHASE_MS - elapsed));
-    onPhase?.(phase, results);
+    onPhase?.(phase, results, 'complete');
+    if (
+      requestContext.deadlineExceeded
+      || requestCoverage.requestsFailed > failedBefore
+      || requestCoverage.requestsBlocked > blockedBefore
+    ) {
+      throw new Error(
+        requestContext.deadlineExceeded
+          ? 'The active scan exceeded its safe execution budget; no result was saved and the allowance will be restored.'
+          : 'A required probe failed or was blocked; no incomplete score was saved and the allowance will be restored.',
+      );
+    }
     allFindings.push(...results);
     return results;
   }
 
-  onPhase?.(SCAN_PHASES[0], []);
+  onPhase?.(SCAN_PHASES[0], [], 'start');
   const mainRes = await safeFetch(baseUrl, { redirect: 'follow' });
+  if (!mainRes) {
+    throw new Error('Could not reach the verified domain over public HTTP(S); no deep-scan score was produced.');
+  }
+  if (!mainRes.ok) {
+    throw new Error(`The verified domain returned HTTP ${mainRes.status}; no deep-scan score was produced.`);
+  }
+  const mainHtml = await readProbeText(mainRes);
+  if (requestCoverage.requestsFailed > 0 || requestCoverage.requestsBlocked > 0) {
+    throw new Error('The verified page could not be read completely; no deep-scan score was produced.');
+  }
+  onPhase?.(SCAN_PHASES[0], [], 'complete');
 
-  await run('vibe',     () => checkVibeCodePatterns(baseUrl, mainRes));
+  await run('vibe',     () => checkVibeCodePatterns(baseUrl, mainHtml));
   await run('files',    () => checkSensitiveFiles(baseUrl));
   await run('xss',      () => checkXSS(baseUrl));
   await run('sqli',     () => checkSQLInjection(baseUrl));
@@ -1746,14 +1974,14 @@ export async function deepScanDomain(
   await run('robots',   () => checkRobotsTxt(baseUrl));
   await run('cors',     () => checkCrossdomain(baseUrl));
   await run('info',     () => checkServerStatus(baseUrl));
-  await run('sri',        () => checkSRI(baseUrl, mainRes));
+  await run('sri',        () => checkSRI(baseUrl, mainHtml));
   await run('info',       () => checkInfoDisclosure(mainRes));
   await run('forced',     () => checkForcedBrowsing(baseUrl));
   await run('idor',       () => checkIDOR(baseUrl));
   await run('ssrf',       () => checkSSRF(baseUrl));
   await run('traversal',  () => checkPathTraversal(baseUrl));
-  await run('components',  () => checkOutdatedLibraries(mainRes));
-  await run('sourcemaps', () => checkSourceMaps(baseUrl, mainRes));
+  await run('components',  () => checkOutdatedLibraries(mainHtml));
+  await run('sourcemaps', () => checkSourceMaps(baseUrl, mainHtml));
   await run('graphql',    () => checkGraphQL(baseUrl));
   await run('apidocs',    () => checkAPIDocumentation(baseUrl));
   await run('ratelimit',  () => checkRateLimiting(baseUrl));
@@ -1761,10 +1989,11 @@ export async function deepScanDomain(
   await run('hostheader', () => checkHostHeaderInjection(baseUrl));
   await run('crlf',       () => checkCRLFInjection(baseUrl));
 
-  onPhase?.(SCAN_PHASES[SCAN_PHASES.length - 1], allFindings);
+  onPhase?.(SCAN_PHASES[SCAN_PHASES.length - 1], allFindings, 'complete');
 
   const findings = allFindings;
   const count = (sev: DeepFinding['severity']) => findings.filter(f => f.severity === sev).length;
+  const coverageComplete = requestCoverage.requestsFailed === 0 && requestCoverage.requestsBlocked === 0;
 
   return {
     domain,
@@ -1776,9 +2005,11 @@ export async function deepScanDomain(
       medium: count('medium'),
       low: count('low'),
       info: count('info'),
-      score: calculateScore(findings),
+      score: coverageComplete ? calculateScore(findings) : null,
     },
+    coverage: { ...requestCoverage, complete: coverageComplete },
     findings,
-    checked: buildChecked(findings, mainRes),
+    checked: buildChecked(findings, mainRes, coverageComplete),
   };
+  });
 }

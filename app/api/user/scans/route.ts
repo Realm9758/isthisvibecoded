@@ -1,7 +1,6 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
-import type { StoredScan } from '@/lib/store';
 import type { AnalysisResult } from '@/types/analysis';
 
 export async function GET() {

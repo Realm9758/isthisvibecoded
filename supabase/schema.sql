@@ -1,151 +1,900 @@
 -- ============================================================
---  Is This Vibe-Coded? — Supabase Schema
---  Run this in: Supabase Dashboard → SQL Editor → New query → Run
+-- VibeScan -- Supabase schema and in-place migration
+--
+-- Safe to run more than once from the Supabase SQL editor.  The app stores
+-- JavaScript Date.now() values, so application timestamps are BIGINT
+-- milliseconds rather than PostgreSQL timestamptz values.
 -- ============================================================
 
+begin;
 
--- ── Users ─────────────────────────────────────────────────────────────────
 
-create table if not exists users (
-  id                    text primary key,
-  email                 text unique not null,
-  name                  text not null,
-  password_hash         text not null,
-  plan                  text not null default 'free'
-                          check (plan in ('free', 'pro', 'team')),
-  stripe_customer_id    text,o
-  stripe_subscription_id text,
-  created_at            bigint not null
+-- Users -------------------------------------------------------------------
+
+create table if not exists public.users (
+  id                       text primary key,
+  email                    text not null,
+  name                     text not null,
+  password_hash            text not null,
+  plan                     text not null default 'free',
+  avatar_color             text,
+  avatar_url               text,
+  bio                      text,
+  notif_email              boolean not null default false,
+  notif_inapp              boolean not null default true,
+  policy_version           text,
+  policy_accepted_at       bigint,
+  stripe_customer_id       text,
+  stripe_subscription_id   text,
+  created_at               bigint not null,
+  constraint users_plan_check
+    check (plan in ('free', 'pro', 'team')),
+  constraint users_name_length_check
+    check (char_length(btrim(name)) between 1 and 40),
+  constraint users_email_normalized_check
+    check (email = lower(btrim(email)) and char_length(email) > 0),
+  constraint users_password_hash_check
+    check (char_length(password_hash) > 0),
+  constraint users_bio_length_check
+    check (bio is null or char_length(bio) <= 200),
+  constraint users_avatar_url_length_check
+    check (avatar_url is null or char_length(avatar_url) <= 600000),
+  constraint users_created_at_check
+    check (created_at >= 0)
 );
 
-create index if not exists users_email_idx on users (email);
-create index if not exists users_stripe_customer_idx on users (stripe_customer_id);
+-- Columns introduced after the first release.  CREATE TABLE IF NOT EXISTS
+-- does not add them to an existing installation.
+alter table public.users
+  add column if not exists avatar_color text,
+  add column if not exists avatar_url text,
+  add column if not exists bio text,
+  add column if not exists notif_email boolean not null default false,
+  add column if not exists notif_inapp boolean not null default true,
+  add column if not exists policy_version text,
+  add column if not exists policy_accepted_at bigint,
+  add column if not exists stripe_customer_id text,
+  add column if not exists stripe_subscription_id text;
+
+alter table public.users
+  alter column plan set default 'free',
+  alter column notif_email set default false,
+  alter column notif_inapp set default true;
+
+-- Login and public profile lookups both assume a single matching row.
+create unique index if not exists users_email_ci_key
+  on public.users (lower(email));
+create index if not exists users_email_idx
+  on public.users (email);
+create unique index if not exists users_name_ci_key
+  on public.users (lower(name));
+create unique index if not exists users_stripe_customer_id_key
+  on public.users (stripe_customer_id)
+  where stripe_customer_id is not null;
+create unique index if not exists users_stripe_subscription_id_key
+  on public.users (stripe_subscription_id)
+  where stripe_subscription_id is not null;
 
 
--- ── Scans ─────────────────────────────────────────────────────────────────
+-- Passive scans -----------------------------------------------------------
 
-create table if not exists scans (
+create table if not exists public.scans (
   id          text primary key,
   result      jsonb not null,
-  user_id     text references users(id) on delete set null,
-  is_public   boolean not null default true,
-  roasts      jsonb not null default '[]',
-  created_at  bigint not null
+  user_id     text,
+  is_public   boolean not null default false,
+  roasts      jsonb not null default '[]'::jsonb,
+  created_at  bigint not null,
+  constraint scans_user_id_fkey
+    foreign key (user_id) references public.users(id) on delete set null,
+  constraint scans_result_object_check
+    check (jsonb_typeof(result) = 'object'),
+  constraint scans_roasts_array_check
+    check (jsonb_typeof(roasts) = 'array'),
+  constraint scans_created_at_check
+    check (created_at >= 0)
 );
 
-create index if not exists scans_public_created_idx on scans (is_public, created_at desc);
-create index if not exists scans_user_idx on scans (user_id);
+alter table public.scans
+  add column if not exists user_id text,
+  add column if not exists is_public boolean not null default false,
+  add column if not exists roasts jsonb not null default '[]'::jsonb;
+
+alter table public.scans
+  alter column is_public set default false,
+  alter column roasts set default '[]'::jsonb;
+
+create index if not exists scans_public_created_idx
+  on public.scans (is_public, created_at desc);
+create index if not exists scans_user_created_idx
+  on public.scans (user_id, created_at desc);
+create index if not exists scans_created_at_idx
+  on public.scans (created_at desc);
 
 
--- ── Daily Usage (rate limiting) ────────────────────────────────────────────
+-- Daily usage / rate limiting --------------------------------------------
 
-create table if not exists daily_usage (
-  key    text primary key,   -- format: "<userId-or-ip>:YYYY-MM-DD"
-  count  integer not null default 0
+create table if not exists public.daily_usage (
+  key    text primary key,
+  count  integer not null default 0,
+  constraint daily_usage_key_check
+    check (char_length(btrim(key)) > 0),
+  constraint daily_usage_count_check
+    check (count >= 0)
 );
 
+alter table public.daily_usage
+  add column if not exists count integer not null default 0;
 
--- ── increment_usage function ───────────────────────────────────────────────
--- Atomically upserts a usage counter (avoids race conditions).
+alter table public.daily_usage
+  alter column count set default 0;
 
-create or replace function increment_usage(usage_key text)
+-- A single statement handles concurrent requests without a read/write race.
+create or replace function public.increment_usage(usage_key text)
 returns void
 language plpgsql
-as $$
+set search_path = ''
+as $function$
 begin
-  insert into daily_usage (key, count)
+  if usage_key is null or char_length(btrim(usage_key)) = 0 then
+    raise exception 'usage_key must not be empty';
+  end if;
+
+  insert into public.daily_usage as usage (key, count)
   values (usage_key, 1)
   on conflict (key) do update
-    set count = daily_usage.count + 1;
+    set count = usage.count + 1;
 end;
-$$;
+$function$;
+
+-- Atomically reserve one scan from a finite daily allowance.  The row lock
+-- taken by ON CONFLICT serializes concurrent requests for the same key.
+-- Returns scans remaining after the reservation, or -1 when no slot exists.
+create or replace function public.consume_usage(
+  usage_key text,
+  usage_limit integer
+)
+returns integer
+language plpgsql
+set search_path = ''
+as $function$
+declare
+  consumed_count integer;
+begin
+  if usage_key is null or char_length(btrim(usage_key)) = 0 then
+    raise exception 'usage_key must not be empty';
+  end if;
+  if usage_limit is null or usage_limit <= 0 then
+    raise exception 'usage_limit must be greater than zero';
+  end if;
+
+  insert into public.daily_usage as usage (key, count)
+  values (usage_key, 1)
+  on conflict (key) do update
+    set count = usage.count + 1
+    where usage.count < usage_limit
+  returning usage.count into consumed_count;
+
+  if consumed_count is null then
+    return -1;
+  end if;
+
+  return greatest(usage_limit - consumed_count, 0);
+end;
+$function$;
+
+-- Undo one successful reservation after a scan fails.  The count can never
+-- become negative, and refunding a missing/already-zero key is a safe no-op.
+-- Returns the counter value after the attempted refund.
+create or replace function public.refund_usage(usage_key text)
+returns integer
+language plpgsql
+set search_path = ''
+as $function$
+declare
+  refunded_count integer;
+begin
+  if usage_key is null or char_length(btrim(usage_key)) = 0 then
+    raise exception 'usage_key must not be empty';
+  end if;
+
+  update public.daily_usage as usage
+  set count = usage.count - 1
+  where usage.key = usage_key
+    and usage.count > 0
+  returning usage.count into refunded_count;
+
+  return coalesce(refunded_count, 0);
+end;
+$function$;
 
 
--- ── Verification Tokens (ownership proof) ────────────────────────────────
+-- Domain ownership verification -----------------------------------------
 
-create table if not exists verification_tokens (
-  domain      text primary key,
+create table if not exists public.verification_tokens (
+  id          bigint generated by default as identity primary key,
+  domain      text not null,
   token       text not null,
-  created_at  bigint not null
+  user_id     text,
+  verified    boolean not null default false,
+  verified_at bigint,
+  verification_method text,
+  created_at  bigint not null,
+  constraint verification_tokens_user_id_fkey
+    foreign key (user_id) references public.users(id) on delete cascade,
+  constraint verification_tokens_domain_check
+    check (
+      char_length(btrim(domain)) > 0
+      and domain = lower(btrim(domain))
+    ),
+  constraint verification_tokens_token_check
+    check (char_length(btrim(token)) > 0),
+  constraint verification_tokens_created_at_check
+    check (created_at >= 0)
 );
 
+-- The original schema used domain as its primary key.  That prevents the
+-- ownership-transfer flow, which intentionally issues one token per
+-- (domain, user).  Add a surrogate key before removing that legacy key.
+alter table public.verification_tokens
+  add column if not exists id bigint generated by default as identity,
+  add column if not exists user_id text,
+  add column if not exists verified boolean not null default false,
+  add column if not exists verified_at bigint,
+  add column if not exists verification_method text;
 
--- ── Deep Scans ───────────────────────────────────────────────────────────
+alter table public.verification_tokens
+  alter column verified set default false;
 
-create table if not exists deep_scans (
+do $migration$
+declare
+  legacy_primary_key text;
+begin
+  select c.conname
+    into legacy_primary_key
+  from pg_catalog.pg_constraint as c
+  join pg_catalog.pg_attribute as a
+    on a.attrelid = c.conrelid
+   and a.attnum = c.conkey[1]
+  where c.conrelid = 'public.verification_tokens'::regclass
+    and c.contype = 'p'
+    and array_length(c.conkey, 1) = 1
+    and a.attname = 'domain'
+  limit 1;
+
+  if legacy_primary_key is not null then
+    execute format(
+      'alter table public.verification_tokens drop constraint %I',
+      legacy_primary_key
+    );
+  end if;
+
+  if not exists (
+    select 1
+    from pg_catalog.pg_constraint
+    where conrelid = 'public.verification_tokens'::regclass
+      and contype = 'p'
+  ) then
+    alter table public.verification_tokens
+      add constraint verification_tokens_pkey primary key (id);
+  end if;
+end;
+$migration$;
+
+-- Pending legacy rows have user_id IS NULL.  Claimed rows are unique per
+-- account, and only one account may be the current verified owner.
+create unique index if not exists verification_tokens_domain_user_key
+  on public.verification_tokens (domain, user_id)
+  where user_id is not null;
+create unique index if not exists verification_tokens_legacy_domain_key
+  on public.verification_tokens (domain)
+  where user_id is null;
+create unique index if not exists verification_tokens_verified_domain_key
+  on public.verification_tokens (domain)
+  where verified = true;
+create unique index if not exists verification_tokens_token_key
+  on public.verification_tokens (token);
+
+-- Complete an ownership claim as one database statement. This prevents a
+-- failed second write from leaving a domain unclaimed during transfer.
+create or replace function public.complete_domain_verification(
+  claim_domain text,
+  claimant_user_id text,
+  claimant_token text,
+  verification_method text,
+  verified_timestamp bigint
+)
+returns boolean
+language plpgsql
+set search_path = ''
+as $function$
+begin
+  perform 1
+  from public.verification_tokens as candidate
+  where candidate.domain = $1
+  for update;
+
+  if not exists (
+    select 1
+    from public.verification_tokens as candidate
+    where candidate.domain = $1
+      and candidate.user_id = $2
+      and candidate.token = $3
+  ) then
+    return false;
+  end if;
+
+  update public.verification_tokens as previous_claim
+  set verified = false,
+      verified_at = null,
+      verification_method = null
+  where previous_claim.domain = $1
+    and previous_claim.user_id is distinct from $2
+    and previous_claim.verified = true;
+
+  update public.verification_tokens as current_claim
+  set verified = true,
+      verified_at = $5,
+      verification_method = $4
+  where current_claim.domain = $1
+    and current_claim.user_id = $2
+    and current_claim.token = $3;
+
+  return true;
+end;
+$function$;
+
+
+-- Active/deep scans -------------------------------------------------------
+
+create table if not exists public.deep_scans (
   id          text primary key,
   domain      text not null,
-  user_id     text not null references users(id) on delete cascade,
+  user_id     text not null,
   result      jsonb not null,
-  created_at  bigint not null
+  authorization_terms_version text,
+  authorization_accepted_at bigint,
+  created_at  bigint not null,
+  constraint deep_scans_user_id_fkey
+    foreign key (user_id) references public.users(id) on delete cascade,
+  constraint deep_scans_domain_check
+    check (char_length(btrim(domain)) > 0 and domain = lower(btrim(domain))),
+  constraint deep_scans_result_object_check
+    check (jsonb_typeof(result) = 'object'),
+  constraint deep_scans_created_at_check
+    check (created_at >= 0)
 );
 
-create index if not exists deep_scans_user_idx on deep_scans (user_id, created_at desc);
+alter table public.deep_scans
+  add column if not exists authorization_terms_version text,
+  add column if not exists authorization_accepted_at bigint;
+
+create index if not exists deep_scans_user_created_idx
+  on public.deep_scans (user_id, created_at desc);
+create index if not exists deep_scans_domain_created_idx
+  on public.deep_scans (domain, created_at desc);
+
+-- Seed the atomic lifetime allowance ledger from existing completed scans.
+-- Re-running this migration never reduces a counter that already includes a
+-- concurrent reservation or a scan recorded after the seed query.
+insert into public.daily_usage as usage (key, count)
+select
+  'deep:' || user_id || ':lifetime',
+  count(*)::integer
+from public.deep_scans
+group by user_id
+on conflict (key) do update
+set count = greatest(usage.count, excluded.count);
 
 
--- ── Community Posts ───────────────────────────────────────────────────────
--- Only deep scans where checked[] has no 'fail' items are sharable.
--- The summary snapshot is stored here so the full scan stays private.
+-- Comments and likes ------------------------------------------------------
 
-create table if not exists community_posts (
-  id            text primary key,
-  deep_scan_id  text not null references deep_scans(id) on delete cascade,
-  user_id       text not null references users(id) on delete cascade,
-  domain        text not null,
-  caption       text,
-  score         integer not null,
-  pass_count    integer not null default 0,
-  warn_count    integer not null default 0,
-  fail_count    integer not null default 0,
-  created_at    bigint not null
+create table if not exists public.comments (
+  id          text primary key,
+  scan_id     text not null,
+  user_id     text not null,
+  user_name   text not null,
+  body        text not null,
+  parent_id   text,
+  created_at  bigint not null,
+  edited_at   bigint,
+  constraint comments_id_scan_key unique (id, scan_id),
+  constraint comments_scan_id_fkey
+    foreign key (scan_id) references public.scans(id) on delete cascade,
+  constraint comments_user_id_fkey
+    foreign key (user_id) references public.users(id) on delete cascade,
+  constraint comments_parent_same_scan_fkey
+    foreign key (parent_id, scan_id)
+    references public.comments(id, scan_id) on delete cascade,
+  constraint comments_user_name_length_check
+    check (char_length(btrim(user_name)) between 1 and 40),
+  constraint comments_body_length_check
+    check (char_length(btrim(body)) between 1 and 500),
+  constraint comments_created_at_check
+    check (created_at >= 0),
+  constraint comments_edited_at_check
+    check (edited_at is null or edited_at >= created_at)
 );
 
-create index if not exists community_posts_created_idx on community_posts (created_at desc);
-create index if not exists community_posts_user_idx    on community_posts (user_id);
-create index if not exists community_posts_domain_idx  on community_posts (domain);
-create unique index if not exists community_posts_scan_uniq on community_posts (deep_scan_id);
+alter table public.comments
+  add column if not exists parent_id text,
+  add column if not exists edited_at bigint;
 
+create unique index if not exists comments_id_scan_key
+  on public.comments (id, scan_id);
+create index if not exists comments_scan_created_idx
+  on public.comments (scan_id, created_at);
+create index if not exists comments_user_created_idx
+  on public.comments (user_id, created_at desc);
+create index if not exists comments_parent_idx
+  on public.comments (parent_id)
+  where parent_id is not null;
 
--- ── Community Reactions ───────────────────────────────────────────────────
-
-create table if not exists community_reactions (
-  post_id   text not null references community_posts(id) on delete cascade,
-  user_id   text not null references users(id) on delete cascade,
-  type      text not null check (type in ('solid_build', 'interesting_stack', 'surprised')),
-  primary key (post_id, user_id, type)
+create table if not exists public.comment_likes (
+  comment_id  text not null,
+  user_id     text not null,
+  primary key (comment_id, user_id),
+  constraint comment_likes_comment_id_fkey
+    foreign key (comment_id) references public.comments(id) on delete cascade,
+  constraint comment_likes_user_id_fkey
+    foreign key (user_id) references public.users(id) on delete cascade
 );
 
-create index if not exists community_reactions_post_idx on community_reactions (post_id);
+create index if not exists comment_likes_user_idx
+  on public.comment_likes (user_id);
 
-
--- ── Row Level Security ─────────────────────────────────────────────────────
--- We use the service_role key server-side, so RLS is disabled.
--- Enable and add policies if you ever expose these tables to client-side code.
-
--- ── Rank Snapshots ───────────────────────────────────────────────────────
--- Stores one row per domain/category/time_filter per UTC day.
--- Used to compute rank delta (↑3, ↓2) shown on the leaderboard.
-
-create table if not exists rank_snapshots (
-  domain        text    not null,
-  category      text    not null check (category in ('vibe', 'secure')),
-  time_filter   text    not null check (time_filter in ('today', 'week', 'all')),
-  rank_position integer not null,
-  score         integer not null,
-  snapshot_date date    not null default current_date,
-  primary key (domain, category, time_filter, snapshot_date)
+create table if not exists public.scan_likes (
+  scan_id  text not null,
+  user_id  text not null,
+  primary key (scan_id, user_id),
+  constraint scan_likes_scan_id_fkey
+    foreign key (scan_id) references public.scans(id) on delete cascade,
+  constraint scan_likes_user_id_fkey
+    foreign key (user_id) references public.users(id) on delete cascade
 );
 
-create index if not exists rank_snapshots_date_idx on rank_snapshots (snapshot_date desc);
+create index if not exists scan_likes_user_idx
+  on public.scan_likes (user_id);
 
 
--- ── Row Level Security ─────────────────────────────────────────────────────
+-- In-app notifications ----------------------------------------------------
 
-alter table users                disable row level security;
-alter table scans                disable row level security;
-alter table daily_usage          disable row level security;
-alter table verification_tokens  disable row level security;
-alter table deep_scans           disable row level security;
-alter table community_posts      disable row level security;
-alter table community_reactions  disable row level security;
-alter table rank_snapshots       disable row level security;
+create table if not exists public.notifications (
+  id           text primary key,
+  user_id      text not null,
+  type         text not null,
+  title        text not null,
+  description  text not null,
+  link         text,
+  read         boolean not null default false,
+  created_at   bigint not null,
+  constraint notifications_user_id_fkey
+    foreign key (user_id) references public.users(id) on delete cascade,
+  constraint notifications_type_check
+    check (type in ('comment', 'reply', 'popular', 'security', 'system')),
+  constraint notifications_title_check
+    check (char_length(btrim(title)) > 0),
+  constraint notifications_description_check
+    check (char_length(btrim(description)) > 0),
+  constraint notifications_created_at_check
+    check (created_at >= 0)
+);
+
+alter table public.notifications
+  add column if not exists link text,
+  add column if not exists read boolean not null default false;
+
+alter table public.notifications
+  alter column read set default false;
+
+create index if not exists notifications_user_created_idx
+  on public.notifications (user_id, created_at desc);
+create index if not exists notifications_user_unread_idx
+  on public.notifications (user_id, created_at desc)
+  where read = false;
+
+
+-- False-positive feedback -------------------------------------------------
+
+create table if not exists public.false_positive_reports (
+  id           bigint generated by default as identity primary key,
+  site         text not null,
+  issue_id     text not null,
+  issue_title  text not null default '',
+  comment      text not null default '',
+  created_at   bigint not null,
+  constraint false_positive_reports_site_check
+    check (char_length(btrim(site)) > 0),
+  constraint false_positive_reports_issue_id_check
+    check (char_length(btrim(issue_id)) > 0),
+  constraint false_positive_reports_created_at_check
+    check (created_at >= 0)
+);
+
+alter table public.false_positive_reports
+  add column if not exists id bigint generated by default as identity,
+  add column if not exists issue_title text not null default '',
+  add column if not exists comment text not null default '';
+
+do $migration$
+begin
+  if not exists (
+    select 1
+    from pg_catalog.pg_constraint
+    where conrelid = 'public.false_positive_reports'::regclass
+      and contype = 'p'
+  ) then
+    alter table public.false_positive_reports
+      add constraint false_positive_reports_pkey primary key (id);
+  end if;
+end;
+$migration$;
+
+create index if not exists false_positive_reports_created_idx
+  on public.false_positive_reports (created_at desc);
+create index if not exists false_positive_reports_issue_idx
+  on public.false_positive_reports (issue_id, created_at desc);
+
+
+-- Leaderboard rank snapshots ---------------------------------------------
+
+create table if not exists public.rank_snapshots (
+  domain         text not null,
+  category       text not null,
+  time_filter    text not null,
+  scoring_version text not null default 'legacy',
+  rank_position  integer not null,
+  score          integer not null,
+  snapshot_date  date not null default current_date,
+  primary key (domain, category, time_filter, scoring_version, snapshot_date),
+  constraint rank_snapshots_domain_check
+    check (char_length(btrim(domain)) > 0),
+  constraint rank_snapshots_category_check
+    check (category in ('vibe', 'secure')),
+  constraint rank_snapshots_time_filter_check
+    check (time_filter in ('today', 'week', 'all')),
+  constraint rank_snapshots_rank_position_check
+    check (rank_position > 0),
+  constraint rank_snapshots_score_check
+    check (score between 0 and 100)
+);
+
+alter table public.rank_snapshots
+  add column if not exists scoring_version text not null default 'legacy',
+  alter column snapshot_date set default current_date;
+
+do $migration$
+declare
+  primary_key_name text;
+  primary_key_definition text;
+begin
+  select constraint_row.conname, pg_catalog.pg_get_constraintdef(constraint_row.oid)
+    into primary_key_name, primary_key_definition
+  from pg_catalog.pg_constraint as constraint_row
+  where constraint_row.conrelid = 'public.rank_snapshots'::regclass
+    and constraint_row.contype = 'p'
+  limit 1;
+
+  if primary_key_name is not null
+     and position('scoring_version' in primary_key_definition) = 0 then
+    execute format('alter table public.rank_snapshots drop constraint %I', primary_key_name);
+    primary_key_name := null;
+  end if;
+
+  if primary_key_name is null then
+    alter table public.rank_snapshots
+      add constraint rank_snapshots_pkey
+      primary key (domain, category, time_filter, scoring_version, snapshot_date);
+  end if;
+end;
+$migration$;
+
+create index if not exists rank_snapshots_date_idx
+  on public.rank_snapshots (snapshot_date desc);
+drop index if exists public.rank_snapshots_top_streak_idx;
+create index if not exists rank_snapshots_top_streak_idx
+  on public.rank_snapshots (domain, scoring_version, rank_position, snapshot_date desc);
+
+
+-- Constraints needed when upgrading the original partial schema ----------
+-- NOT VALID keeps the migration safe if historical rows predate a rule;
+-- PostgreSQL still enforces each constraint for all new writes.
+
+do $migration$
+begin
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.users'::regclass
+      and conname = 'users_plan_check'
+  ) then
+    alter table public.users add constraint users_plan_check
+      check (plan in ('free', 'pro', 'team')) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.users'::regclass
+      and conname = 'users_name_length_check'
+  ) then
+    alter table public.users add constraint users_name_length_check
+      check (char_length(btrim(name)) between 1 and 40) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.users'::regclass
+      and conname = 'users_email_normalized_check'
+  ) then
+    alter table public.users add constraint users_email_normalized_check
+      check (email = lower(btrim(email)) and char_length(email) > 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.users'::regclass
+      and conname = 'users_bio_length_check'
+  ) then
+    alter table public.users add constraint users_bio_length_check
+      check (bio is null or char_length(bio) <= 200) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.users'::regclass
+      and conname = 'users_avatar_url_length_check'
+  ) then
+    alter table public.users add constraint users_avatar_url_length_check
+      check (avatar_url is null or char_length(avatar_url) <= 600000) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.users'::regclass
+      and conname = 'users_password_hash_check'
+  ) then
+    alter table public.users add constraint users_password_hash_check
+      check (char_length(password_hash) > 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.users'::regclass
+      and conname = 'users_created_at_check'
+  ) then
+    alter table public.users add constraint users_created_at_check
+      check (created_at >= 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.scans'::regclass
+      and conname = 'scans_user_id_fkey'
+  ) then
+    alter table public.scans add constraint scans_user_id_fkey
+      foreign key (user_id) references public.users(id)
+      on delete set null not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.scans'::regclass
+      and conname = 'scans_result_object_check'
+  ) then
+    alter table public.scans add constraint scans_result_object_check
+      check (jsonb_typeof(result) = 'object') not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.scans'::regclass
+      and conname = 'scans_roasts_array_check'
+  ) then
+    alter table public.scans add constraint scans_roasts_array_check
+      check (jsonb_typeof(roasts) = 'array') not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.scans'::regclass
+      and conname = 'scans_created_at_check'
+  ) then
+    alter table public.scans add constraint scans_created_at_check
+      check (created_at >= 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.daily_usage'::regclass
+      and conname = 'daily_usage_key_check'
+  ) then
+    alter table public.daily_usage add constraint daily_usage_key_check
+      check (char_length(btrim(key)) > 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.daily_usage'::regclass
+      and conname = 'daily_usage_count_check'
+  ) then
+    alter table public.daily_usage add constraint daily_usage_count_check
+      check (count >= 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.verification_tokens'::regclass
+      and conname = 'verification_tokens_user_id_fkey'
+  ) then
+    alter table public.verification_tokens
+      add constraint verification_tokens_user_id_fkey
+      foreign key (user_id) references public.users(id)
+      on delete cascade not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.verification_tokens'::regclass
+      and conname = 'verification_tokens_domain_check'
+  ) then
+    alter table public.verification_tokens
+      add constraint verification_tokens_domain_check
+      check (
+        char_length(btrim(domain)) > 0
+        and domain = lower(btrim(domain))
+      ) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.verification_tokens'::regclass
+      and conname = 'verification_tokens_token_check'
+  ) then
+    alter table public.verification_tokens
+      add constraint verification_tokens_token_check
+      check (char_length(btrim(token)) > 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.verification_tokens'::regclass
+      and conname = 'verification_tokens_created_at_check'
+  ) then
+    alter table public.verification_tokens
+      add constraint verification_tokens_created_at_check
+      check (created_at >= 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.deep_scans'::regclass
+      and conname = 'deep_scans_user_id_fkey'
+  ) then
+    alter table public.deep_scans add constraint deep_scans_user_id_fkey
+      foreign key (user_id) references public.users(id)
+      on delete cascade not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.deep_scans'::regclass
+      and conname = 'deep_scans_domain_check'
+  ) then
+    alter table public.deep_scans add constraint deep_scans_domain_check
+      check (
+        char_length(btrim(domain)) > 0
+        and domain = lower(btrim(domain))
+      ) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.deep_scans'::regclass
+      and conname = 'deep_scans_result_object_check'
+  ) then
+    alter table public.deep_scans add constraint deep_scans_result_object_check
+      check (jsonb_typeof(result) = 'object') not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.deep_scans'::regclass
+      and conname = 'deep_scans_created_at_check'
+  ) then
+    alter table public.deep_scans add constraint deep_scans_created_at_check
+      check (created_at >= 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.rank_snapshots'::regclass
+      and conname = 'rank_snapshots_domain_check'
+  ) then
+    alter table public.rank_snapshots add constraint rank_snapshots_domain_check
+      check (char_length(btrim(domain)) > 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.rank_snapshots'::regclass
+      and conname = 'rank_snapshots_category_check'
+  ) then
+    alter table public.rank_snapshots add constraint rank_snapshots_category_check
+      check (category in ('vibe', 'secure')) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.rank_snapshots'::regclass
+      and conname = 'rank_snapshots_time_filter_check'
+  ) then
+    alter table public.rank_snapshots add constraint rank_snapshots_time_filter_check
+      check (time_filter in ('today', 'week', 'all')) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.rank_snapshots'::regclass
+      and conname = 'rank_snapshots_rank_position_check'
+  ) then
+    alter table public.rank_snapshots
+      add constraint rank_snapshots_rank_position_check
+      check (rank_position > 0) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.rank_snapshots'::regclass
+      and conname = 'rank_snapshots_score_check'
+  ) then
+    alter table public.rank_snapshots add constraint rank_snapshots_score_check
+      check (score between 0 and 100) not valid;
+  end if;
+
+  if not exists (
+    select 1 from pg_catalog.pg_constraint
+    where conrelid = 'public.comments'::regclass
+      and conname = 'comments_parent_same_scan_fkey'
+  ) then
+    alter table public.comments
+      add constraint comments_parent_same_scan_fkey
+      foreign key (parent_id, scan_id)
+      references public.comments(id, scan_id)
+      on delete cascade not valid;
+  end if;
+end;
+$migration$;
+
+
+-- Security ---------------------------------------------------------------
+-- All database access in the current app uses SUPABASE_SERVICE_ROLE_KEY on
+-- the server.  Enabling RLS with no client policies keeps anon/authenticated
+-- Supabase keys from reading password hashes or mutating application data;
+-- service_role continues to bypass RLS.
+
+alter table public.users enable row level security;
+alter table public.scans enable row level security;
+alter table public.daily_usage enable row level security;
+alter table public.verification_tokens enable row level security;
+alter table public.deep_scans enable row level security;
+alter table public.comments enable row level security;
+alter table public.comment_likes enable row level security;
+alter table public.scan_likes enable row level security;
+alter table public.notifications enable row level security;
+alter table public.false_positive_reports enable row level security;
+alter table public.rank_snapshots enable row level security;
+
+-- community_posts and community_reactions belonged to an abandoned feed
+-- model.  Do not recreate them on fresh installs and do not drop them during
+-- upgrades (they may contain user data).  If they remain, lock them down too.
+do $migration$
+begin
+  if to_regclass('public.community_posts') is not null then
+    alter table public.community_posts enable row level security;
+  end if;
+  if to_regclass('public.community_reactions') is not null then
+    alter table public.community_reactions enable row level security;
+  end if;
+end;
+$migration$;
+
+commit;

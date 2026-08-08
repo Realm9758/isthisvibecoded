@@ -42,5 +42,6 @@ export async function DELETE() {
   if (!payload) return Response.json({ error: 'Unauthorised' }, { status: 401 });
 
   const updated = await updateUser(payload.userId, { avatarUrl: undefined });
+  if (!updated) return Response.json({ error: 'User not found' }, { status: 404 });
   return Response.json({ ok: true });
 }

@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
+import { getVisibleScan } from '@/lib/scan-access';
 
 async function getCurrentUserId(): Promise<string | null> {
   const cookieStore = await cookies();
@@ -23,6 +24,16 @@ export async function POST(request: Request) {
   }
   if (!commentId) return Response.json({ error: 'commentId required' }, { status: 400 });
 
+  const { data: comment, error: commentError } = await supabase
+    .from('comments')
+    .select('scan_id')
+    .eq('id', commentId)
+    .maybeSingle();
+  if (commentError) return Response.json({ error: 'Could not load comment' }, { status: 503 });
+  if (!comment || !await getVisibleScan(comment.scan_id)) {
+    return Response.json({ error: 'Not found' }, { status: 404 });
+  }
+
   // Check if already liked
   const { data: existing } = await supabase
     .from('comment_likes')
@@ -32,12 +43,14 @@ export async function POST(request: Request) {
     .maybeSingle();
 
   if (existing) {
-    await supabase.from('comment_likes').delete()
+    const { error } = await supabase.from('comment_likes').delete()
       .eq('comment_id', commentId).eq('user_id', currentUserId);
+    if (error) return Response.json({ error: 'Could not update like' }, { status: 503 });
     const { count } = await supabase.from('comment_likes').select('*', { count: 'exact', head: true }).eq('comment_id', commentId);
     return Response.json({ liked: false, count: count ?? 0 });
   } else {
-    await supabase.from('comment_likes').insert({ comment_id: commentId, user_id: currentUserId });
+    const { error } = await supabase.from('comment_likes').insert({ comment_id: commentId, user_id: currentUserId });
+    if (error && error.code !== '23505') return Response.json({ error: 'Could not update like' }, { status: 503 });
     const { count } = await supabase.from('comment_likes').select('*', { count: 'exact', head: true }).eq('comment_id', commentId);
     return Response.json({ liked: true, count: count ?? 0 });
   }

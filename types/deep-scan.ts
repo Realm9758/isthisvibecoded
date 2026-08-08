@@ -40,7 +40,15 @@ export interface DeepScanResult {
     medium: number;
     low: number;
     info: number;
-    score: number;
+    /** Null when one or more required requests were unavailable or blocked. */
+    score: number | null;
+  };
+  coverage?: {
+    requestsAttempted: number;
+    requestsCompleted: number;
+    requestsFailed: number;
+    requestsBlocked: number;
+    complete: boolean;
   };
   findings: DeepFinding[];
   checked: CheckedItem[];

@@ -4,10 +4,11 @@ import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { ACCOUNT_POLICY_VERSION, isValidDisplayHandle } from '@/lib/policy';
 
 function PasswordStrength({ password }: { password: string }) {
   const strength = useMemo(() => {
-    if (!password) return 0;
+    if (!password || password.length < 8) return 0;
     let score = 0;
     if (password.length >= 8)  score++;
     if (password.length >= 12) score++;
@@ -73,12 +74,18 @@ export default function SignupPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!agreed) { setError('Please agree to the terms to continue.'); return; }
+    const displayHandle = name.trim();
+    if (!displayHandle) { setError('A public display handle is required.'); return; }
+    if (!isValidDisplayHandle(displayHandle)) {
+      setError('Use 1–40 letters, numbers, dots, underscores, or hyphens; start with a letter or number.');
+      return;
+    }
+    if (!agreed) { setError('Please accept the privacy and account policy to continue.'); return; }
     if (password.length < 8) { setError('Password must be at least 8 characters.'); return; }
     setError('');
     setLoading(true);
     try {
-      await signup(email, password, name);
+      await signup(email, password, displayHandle, ACCOUNT_POLICY_VERSION);
       setStep('notifications');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Signup failed');
@@ -88,15 +95,21 @@ export default function SignupPage() {
   }
 
   async function saveNotificationPrefs() {
+    setError('');
     setSavingPrefs(true);
     try {
-      await fetch('/api/user/profile', {
+      const response = await fetch('/api/user/profile', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notifInApp, notifEmail }),
       });
-    } catch { /* ignore */ }
-    router.push('/');
+      if (!response.ok) throw new Error('Could not save notification preferences');
+      router.push('/');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save notification preferences');
+    } finally {
+      setSavingPrefs(false);
+    }
   }
 
   function skipPrefs() {
@@ -140,7 +153,7 @@ export default function SignupPage() {
           <>
             {/* Free tier perks */}
             <div className="flex items-center justify-center gap-4 mb-6 flex-wrap">
-              {['5 scans/day', 'Full detection', 'Shareable links'].map(perk => (
+              {['5 scans/day', 'Provenance signals', 'Private by default'].map(perk => (
                 <span key={perk} className="flex items-center gap-1.5 text-xs text-white/40">
                   <span className="text-emerald-400 text-xs">✓</span>
                   {perk}
@@ -154,23 +167,31 @@ export default function SignupPage() {
               style={{ background: 'rgba(255,255,255,0.025)', backdropFilter: 'blur(16px)' }}
             >
               <form onSubmit={handleSubmit} className="space-y-4">
-                {/* Name */}
+                {/* Public display handle */}
                 <div>
                   <label className="block text-xs font-medium text-white/50 mb-1.5" htmlFor="name">
-                    Name <span className="text-white/20 font-normal">(optional)</span>
+                    Public display handle
                   </label>
                   <input
                     id="name"
                     type="text"
                     value={name}
                     onChange={e => setName(e.target.value)}
-                    autoComplete="name"
-                    placeholder="Your name"
+                    required
+                    maxLength={40}
+                    pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
+                    title="Use letters, numbers, dots, underscores, or hyphens; start with a letter or number."
+                    autoComplete="username"
+                    aria-describedby="handle-privacy-note"
+                    placeholder="your-handle"
                     className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/25 outline-none transition-all"
                     style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}
                     onFocus={e => (e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)')}
                     onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
                   />
+                  <p id="handle-privacy-note" className="text-[11px] text-white/30 leading-relaxed mt-1.5">
+                    This handle appears publicly with comments and replies. Your public profile becomes discoverable only after you explicitly publish a scan.
+                  </p>
                 </div>
 
                 {/* Email */}
@@ -235,31 +256,25 @@ export default function SignupPage() {
                   <PasswordStrength password={password} />
                 </div>
 
-                {/* Terms */}
-                <label className="flex items-start gap-3 cursor-pointer group">
-                  <div className="relative mt-0.5">
-                    <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} className="sr-only" />
-                    <div
-                      className="w-4 h-4 rounded border transition-all flex items-center justify-center"
-                      style={{
-                        background: agreed ? '#7c3aed' : 'rgba(255,255,255,0.04)',
-                        borderColor: agreed ? '#7c3aed' : 'rgba(255,255,255,0.15)',
-                      }}
-                    >
-                      {agreed && (
-                        <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
-                    </div>
-                  </div>
-                  <span className="text-xs text-white/40 leading-relaxed">
-                    I agree to the{' '}
-                    <span className="text-violet-400 hover:text-violet-300 transition-colors cursor-pointer">Terms of Service</span>
-                    {' '}and{' '}
-                    <span className="text-violet-400 hover:text-violet-300 transition-colors cursor-pointer">Privacy Policy</span>
-                  </span>
-                </label>
+                {/* Account policy consent */}
+                <div className="flex items-start gap-3">
+                  <input
+                    id="account-policy"
+                    type="checkbox"
+                    checked={agreed}
+                    onChange={e => setAgreed(e.target.checked)}
+                    required
+                    aria-describedby="account-policy-copy"
+                    className="w-4 h-4 mt-0.5 rounded accent-violet-600 shrink-0"
+                  />
+                  <p id="account-policy-copy" className="text-xs text-white/40 leading-relaxed">
+                    I accept the{' '}
+                    <Link href="/privacy" className="text-violet-400 hover:text-violet-300 transition-colors">
+                      privacy and account policy
+                    </Link>
+                    . I understand that my handle is public with comments and replies, and my profile becomes discoverable after I explicitly publish a scan.
+                  </p>
+                </div>
 
                 {error && (
                   <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
@@ -374,6 +389,14 @@ export default function SignupPage() {
 
               {/* Actions */}
               <div className="px-8 pb-8 space-y-2">
+                {error && (
+                  <div role="alert" className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+                    <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="text-xs text-red-400">{error}</p>
+                  </div>
+                )}
                 <button
                   onClick={saveNotificationPrefs}
                   disabled={savingPrefs}

@@ -2,6 +2,9 @@ import { resolveTxt } from 'dns/promises';
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
+import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
+import { VERIFICATION_MAX_AGE_MS } from '@/lib/policy';
+import { consumeUsage } from '@/lib/store';
 import type { VerificationToken } from '@/types/analysis';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -13,8 +16,97 @@ function randomToken(): string {
 }
 
 function getDomain(url: string): string {
-  const normalized = url.startsWith('http') ? url : `https://${url}`;
-  return new URL(normalized).hostname;
+  return normalizePublicUrl(url).hostname.toLowerCase();
+}
+
+function normalizeVerificationTarget(rawUrl: string): URL {
+  const requested = new URL(rawUrl);
+  const target = normalizePublicUrl(requested.href);
+  // Redirect query parameters can be required by a public site's routing. Keep
+  // them only for this outbound request; they are never returned or persisted.
+  target.search = requested.search;
+  return target;
+}
+
+async function fetchVerificationTarget(rawUrl: string): Promise<Response> {
+  let target = normalizeVerificationTarget(rawUrl);
+  const originalHost = target.host.toLowerCase();
+  const originalProtocol = target.protocol;
+
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    await assertPublicTarget(target);
+    const response = await fetch(target, {
+      headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
+      signal: AbortSignal.timeout(8_000),
+      redirect: 'manual',
+    });
+    if (response.status < 300 || response.status >= 400) return response;
+    const location = response.headers.get('location');
+    if (!location) return response;
+    const nextTarget = normalizeVerificationTarget(new URL(location, target).href);
+    if (nextTarget.host.toLowerCase() !== originalHost || nextTarget.protocol !== originalProtocol) {
+      throw new Error('Verification redirects must stay on the exact original HTTPS host');
+    }
+    target = nextTarget;
+  }
+  throw new Error('Too many redirects');
+}
+
+async function readVerificationBody(response: Response, maxBytes: number): Promise<string> {
+  const declaredLength = Number(response.headers.get('content-length') ?? 0);
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new Error('Verification response is too large');
+  if (!response.body) return '';
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytesRead = 0;
+  let text = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytesRead += value.byteLength;
+    if (bytesRead > maxBytes) {
+      await reader.cancel();
+      throw new Error('Verification response is too large');
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+
+  return text + decoder.decode();
+}
+
+function isFreshVerification(row: { verified?: unknown; verified_at?: unknown }): boolean {
+  const verifiedAt = Number(row.verified_at);
+  const age = Date.now() - verifiedAt;
+  return row.verified === true
+    && Number.isFinite(verifiedAt)
+    && verifiedAt > 0
+    && age >= 0
+    && age <= VERIFICATION_MAX_AGE_MS;
+}
+
+function storedCreatedAt(value: unknown): string {
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) && timestamp > 0
+    ? new Date(timestamp).toISOString()
+    : new Date().toISOString();
+}
+
+function readMetaAttribute(tag: string, attribute: 'name' | 'content'): string | null {
+  const pattern = attribute === 'name'
+    ? /\sname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i
+    : /\scontent\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i;
+  const match = tag.match(pattern);
+  return match ? (match[1] ?? match[2] ?? match[3] ?? '') : null;
+}
+
+function hasVerificationMeta(html: string, token: string): boolean {
+  const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
+  return tags.some(tag =>
+    readMetaAttribute(tag, 'name')?.trim().toLowerCase() === 'vibecoded-verification'
+      && readMetaAttribute(tag, 'content')?.trim() === token
+  );
 }
 
 async function getAuthUserId(): Promise<string | null> {
@@ -51,7 +143,10 @@ export async function POST(request: Request) {
   let domain: string;
   try {
     const body = await request.json();
-    domain = getDomain((body?.domain ?? '').trim());
+    if (typeof body?.domain !== 'string' || !body.domain.trim()) {
+      return Response.json({ error: 'Domain is required' }, { status: 400 });
+    }
+    domain = getDomain(body.domain);
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
@@ -63,21 +158,55 @@ export async function POST(request: Request) {
   if (isPrivateDomain(domain)) {
     return Response.json({ error: 'Invalid domain' }, { status: 400 });
   }
+  try {
+    await assertPublicTarget(new URL(`https://${domain}`));
+  } catch {
+    return Response.json({ error: 'Domain must resolve to a public network address' }, { status: 400 });
+  }
 
   // 1. Return existing token for this user (already verified or pending)
-  const { data: ownToken } = await supabase
+  const { data: ownToken, error: ownTokenError } = await supabase
     .from('verification_tokens')
-    .select('token, created_at, verified')
+    .select('token, created_at, verified, verified_at, verification_method')
     .eq('domain', domain)
     .eq('user_id', userId)
     .maybeSingle();
 
+  if (ownTokenError) {
+    return Response.json({ error: 'Could not load domain verification' }, { status: 503 });
+  }
+
   if (ownToken) {
-    const result: VerificationToken & { alreadyVerified?: boolean } = {
+    const alreadyVerified = isFreshVerification(ownToken);
+    const verificationExpired = ownToken.verified === true && !alreadyVerified;
+
+    if (verificationExpired) {
+      const { error: expireError } = await supabase
+        .from('verification_tokens')
+        .update({ verified: false })
+        .eq('domain', domain)
+        .eq('user_id', userId)
+        .eq('token', ownToken.token);
+      if (expireError) {
+        return Response.json({ error: 'Could not renew expired domain verification' }, { status: 503 });
+      }
+    }
+
+    const result: VerificationToken & {
+      alreadyVerified?: boolean;
+      verificationExpired?: boolean;
+      verifiedAt?: number;
+      verificationMethod?: string;
+    } = {
       token: ownToken.token as string,
       domain,
-      createdAt: new Date().toISOString(),
-      alreadyVerified: ownToken.verified === true,
+      createdAt: storedCreatedAt(ownToken.created_at),
+      alreadyVerified,
+      verificationExpired,
+      verifiedAt: alreadyVerified ? Number(ownToken.verified_at) : undefined,
+      verificationMethod: alreadyVerified && typeof ownToken.verification_method === 'string'
+        ? ownToken.verification_method
+        : undefined,
       methods: {
         dns: `Add TXT record: _vibecoded-verification.${domain} = vibecoded-verification=${ownToken.token}`,
         metaTag: `<meta name="vibecoded-verification" content="${ownToken.token}" />`,
@@ -93,13 +222,19 @@ export async function POST(request: Request) {
   //    Issue a contest token: if the user can place it on the live site they
   //    demonstrably own it and supersede the existing claim (same model as
   //    Google Search Console ownership transfer).
-  const { data: existingVerified } = await supabase
+  const verificationCutoff = Date.now() - VERIFICATION_MAX_AGE_MS;
+  const { data: existingVerified, error: existingVerifiedError } = await supabase
     .from('verification_tokens')
     .select('user_id')
     .eq('domain', domain)
     .eq('verified', true)
+    .gte('verified_at', verificationCutoff)
     .neq('user_id', userId)
     .maybeSingle();
+
+  if (existingVerifiedError) {
+    return Response.json({ error: 'Could not check existing domain verification' }, { status: 503 });
+  }
 
   const isClaimContest = !!existingVerified;
 
@@ -107,7 +242,7 @@ export async function POST(request: Request) {
   //    Using a WHERE on both conditions prevents a race where two users claim simultaneously.
   let token: string | null = null;
 
-  const { data: claimed } = await supabase
+  const { data: claimed, error: claimError } = await supabase
     .from('verification_tokens')
     .update({ user_id: userId })
     .eq('domain', domain)
@@ -115,6 +250,10 @@ export async function POST(request: Request) {
     .eq('verified', false)
     .select('token')
     .maybeSingle();
+
+  if (claimError) {
+    return Response.json({ error: 'Could not claim verification token' }, { status: 503 });
+  }
 
   if (claimed) {
     token = claimed.token as string;
@@ -127,18 +266,21 @@ export async function POST(request: Request) {
       domain,
       token,
       user_id: userId,
+      verified: false,
+      verified_at: null,
+      verification_method: null,
       created_at: Date.now(),
     });
 
     if (insertError) {
       // Race: another row was just inserted for (domain, userId) — fetch it
-      const { data: raceToken } = await supabase
+      const { data: raceToken, error: raceError } = await supabase
         .from('verification_tokens')
-        .select('token, verified')
+        .select('token')
         .eq('domain', domain)
         .eq('user_id', userId)
         .maybeSingle();
-      if (raceToken) {
+      if (!raceError && raceToken) {
         token = raceToken.token as string;
       } else {
         return Response.json({ error: 'Could not create verification token. Please try again.' }, { status: 500 });
@@ -165,7 +307,7 @@ export async function POST(request: Request) {
   return Response.json(result);
 }
 
-// ── DELETE /api/verify — remove a pending (unverified) token ──────────────
+// ── DELETE /api/verify — revoke this user's domain verification/token ─────
 
 export async function DELETE(request: Request) {
   const userId = await getAuthUserId();
@@ -176,7 +318,10 @@ export async function DELETE(request: Request) {
   let domain: string;
   try {
     const body = await request.json();
-    domain = (body?.domain ?? '').trim();
+    if (typeof body?.domain !== 'string' || !body.domain.trim()) {
+      return Response.json({ error: 'Domain required' }, { status: 400 });
+    }
+    domain = getDomain(body.domain);
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
@@ -185,34 +330,32 @@ export async function DELETE(request: Request) {
     return Response.json({ error: 'Domain required' }, { status: 400 });
   }
 
-  // Only allow deleting unverified tokens. A verified claim must go through
-  // an explicit revoke flow so ownership isn't silently transferred.
-  const { data: existing } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('verification_tokens')
     .select('verified')
     .eq('domain', domain)
     .eq('user_id', userId)
     .maybeSingle();
 
+  if (existingError) {
+    return Response.json({ error: 'Could not load domain verification' }, { status: 503 });
+  }
+
   if (!existing) {
     return Response.json({ error: 'No token found for this domain' }, { status: 404 });
   }
 
-  if (existing.verified === true) {
-    return Response.json(
-      { error: 'Cannot delete a verified domain claim. Contact support to revoke ownership.' },
-      { status: 403 }
-    );
-  }
-
-  await supabase
+  const { error: deleteError } = await supabase
     .from('verification_tokens')
     .delete()
     .eq('domain', domain)
-    .eq('user_id', userId)
-    .eq('verified', false);
+    .eq('user_id', userId);
 
-  return Response.json({ ok: true });
+  if (deleteError) {
+    return Response.json({ error: 'Could not revoke domain verification' }, { status: 503 });
+  }
+
+  return Response.json({ ok: true, revokedVerifiedClaim: existing.verified === true });
 }
 
 // ── GET /api/verify — check verification (auth required, own token only) ──
@@ -223,10 +366,24 @@ export async function GET(request: Request) {
     return Response.json({ error: 'You must be logged in to verify a domain' }, { status: 401 });
   }
 
+  const hourWindow = new Date().toISOString().slice(0, 13);
+  const remaining = await consumeUsage(`domain-verify:${userId}:${hourWindow}`, 30).catch(() => null);
+  if (remaining === null) {
+    return Response.json({ error: 'Could not verify the domain-check allowance' }, { status: 503 });
+  }
+  if (remaining < 0) {
+    return Response.json({ error: 'Too many verification checks. Try again later.' }, { status: 429 });
+  }
+
   const { searchParams } = new URL(request.url);
-  const domain = (searchParams.get('domain') ?? '').trim();
+  let domain: string;
+  try {
+    domain = getDomain((searchParams.get('domain') ?? '').trim());
+  } catch {
+    return Response.json({ error: 'Invalid domain' }, { status: 400 });
+  }
   const clientToken = (searchParams.get('token') ?? '').trim();
-  const method = (searchParams.get('method') ?? 'dns') as 'dns' | 'meta' | 'file';
+  const requestedMethod = searchParams.get('method') ?? 'dns';
 
   if (!domain || !clientToken) {
     return Response.json({ error: 'domain and token are required' }, { status: 400 });
@@ -235,27 +392,37 @@ export async function GET(request: Request) {
   if (isPrivateDomain(domain)) {
     return Response.json({ error: 'Invalid domain' }, { status: 400 });
   }
-
-  if (!['dns', 'meta', 'file'].includes(method)) {
-    return Response.json({ error: 'Invalid method' }, { status: 400 });
+  try {
+    await assertPublicTarget(new URL(`https://${domain}`));
+  } catch {
+    return Response.json({ error: 'Domain must resolve to a public network address' }, { status: 400 });
   }
 
+  if (!['dns', 'meta', 'file'].includes(requestedMethod)) {
+    return Response.json({ error: 'Invalid method' }, { status: 400 });
+  }
+  const method = requestedMethod as 'dns' | 'meta' | 'file';
+
   // Validate token — must be owned by this user and match exactly
-  const { data: stored } = await supabase
+  const { data: stored, error: storedError } = await supabase
     .from('verification_tokens')
-    .select('token, user_id')
+    .select('token, user_id, verified, verified_at')
     .eq('domain', domain)
     .eq('user_id', userId)
     .maybeSingle();
+
+  if (storedError) {
+    return Response.json({ verified: false, error: 'Could not load verification token' }, { status: 503 });
+  }
 
   if (!stored || stored.token !== clientToken) {
     return Response.json({ verified: false, error: 'Token not found. Generate a verification token first.' });
   }
 
-  // Check whether another user currently holds a verified claim on this domain.
-  // We don't block — if the live site check passes, the requester demonstrably
-  // controls the domain and their claim supersedes the old one.
-  const { data: priorOwner } = await supabase
+  // This is only used to tell the requester whether their successful proof
+  // superseded another claim. The RPC below performs the actual transfer under
+  // a row lock and remains the source of truth.
+  const { data: priorOwner, error: priorOwnerError } = await supabase
     .from('verification_tokens')
     .select('user_id')
     .eq('domain', domain)
@@ -263,42 +430,39 @@ export async function GET(request: Request) {
     .neq('user_id', userId)
     .maybeSingle();
 
+  if (priorOwnerError) {
+    return Response.json({ verified: false, error: 'Could not check existing domain claim' }, { status: 503 });
+  }
+
   let verified = false;
 
   if (method === 'dns') {
     try {
       const records = await resolveTxt(`_vibecoded-verification.${domain}`);
-      const flat = records.flat().join(' ');
-      verified = flat.includes(`vibecoded-verification=${clientToken}`);
+      const expected = `vibecoded-verification=${clientToken}`;
+      verified = records.some(chunks => chunks.join('').trim() === expected);
     } catch {
       return Response.json({ verified: false, method: 'dns', error: 'DNS record not found' });
     }
   } else if (method === 'meta') {
     try {
-      const res = await fetch(`https://${domain}`, {
-        headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
-        signal: AbortSignal.timeout(8000),
-        redirect: 'follow',
-      });
-      const html = await res.text();
-      // Use literal string search — no regex with user-influenced content
-      verified = html.includes(`vibecoded-verification" content="${clientToken}"`) ||
-                 html.includes(`content="${clientToken}" name="vibecoded-verification"`);
+      const res = await fetchVerificationTarget(`https://${domain}`);
+      if (!res.ok) return Response.json({ verified: false, method: 'meta', error: `Site returned HTTP ${res.status}` });
+      const html = await readVerificationBody(res, 512_000);
+      verified = hasVerificationMeta(html, clientToken);
     } catch {
       return Response.json({ verified: false, method: 'meta', error: 'Could not fetch site' });
     }
   } else {
     try {
-      const res = await fetch(`https://${domain}/.well-known/vibecoded.txt`, {
-        headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
-        signal: AbortSignal.timeout(8000),
-      });
+      const res = await fetchVerificationTarget(`https://${domain}/.well-known/vibecoded.txt`);
+      if (!res.ok) return Response.json({ verified: false, method: 'file', error: `Verification path returned HTTP ${res.status}` });
       // Only accept plain text responses to avoid HTML catch-all pages
       const ct = res.headers.get('content-type') ?? '';
       if (ct.includes('text/html')) {
         return Response.json({ verified: false, method: 'file', error: 'Verification file not found (got HTML response)' });
       }
-      const text = (await res.text()).trim();
+      const text = (await readVerificationBody(res, 4_096)).trim();
       verified = text === clientToken;
     } catch {
       return Response.json({ verified: false, method: 'file', error: 'Could not fetch verification file' });
@@ -306,22 +470,30 @@ export async function GET(request: Request) {
   }
 
   if (verified) {
-    // If a prior owner exists, revoke their claim first, then mark this one verified.
-    // Doing it in this order means there's never a window with two verified claims.
-    if (priorOwner) {
-      await supabase
-        .from('verification_tokens')
-        .delete()
-        .eq('domain', domain)
-        .eq('user_id', priorOwner.user_id);
+    const verifiedAt = Date.now();
+    const { data: completed, error: completeError } = await supabase.rpc('complete_domain_verification', {
+      claim_domain: domain,
+      claimant_user_id: userId,
+      claimant_token: clientToken,
+      verification_method: method,
+      verified_timestamp: verifiedAt,
+    });
+
+    if (completeError) {
+      return Response.json({ verified: false, error: 'Could not save domain verification' }, { status: 503 });
+    }
+    if (completed !== true) {
+      return Response.json({ verified: false, error: 'Verification token changed; generate a new token and try again.' }, { status: 409 });
     }
 
-    await supabase
-      .from('verification_tokens')
-      .update({ verified: true })
-      .eq('domain', domain)
-      .eq('user_id', userId);
+    return Response.json({
+      verified: true,
+      method,
+      verifiedAt,
+      expiresAt: verifiedAt + VERIFICATION_MAX_AGE_MS,
+      ownershipTransferred: !!priorOwner,
+    });
   }
 
-  return Response.json({ verified, method, ownershipTransferred: verified && !!priorOwner });
+  return Response.json({ verified: false, method, ownershipTransferred: false });
 }

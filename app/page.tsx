@@ -12,7 +12,13 @@ const EXAMPLE_SITES = [
   { label: 'your-site.com', url: 'https://your-site.com', hint: 'Replace with a site you control' },
 ];
 
-type FullResult = AnalysisResult & { scanId?: string; roasts?: string[]; scansRemaining?: number | null };
+type FullResult = AnalysisResult & {
+  scanId?: string;
+  roasts?: string[];
+  scansRemaining?: number | null;
+  isPublic?: boolean;
+  canPublish?: boolean;
+};
 
 function isValidUrl(val: string) {
   try { new URL(val.startsWith('http') ? val : `https://${val}`); return true; }
@@ -116,7 +122,7 @@ export default function Home() {
             <div className="max-w-2xl mx-auto">
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-violet-500/20 bg-violet-500/5 text-violet-400 text-xs font-medium mb-8">
                 <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse-glow" />
-                Passive security &amp; AI fingerprinting
+                Public provenance &amp; header review
               </div>
 
               <h1 className="text-4xl sm:text-5xl font-bold text-white mb-4 leading-tight">
@@ -132,7 +138,7 @@ export default function Home() {
               </h1>
 
               <p className="text-white/50 text-lg mb-10 max-w-lg mx-auto">
-                Detect AI-generated patterns, security misconfigurations, exposed keys, and tech stack — instantly and passively.
+                Check for explicit public AI-builder provenance, response-header hardening, exposed client keys, and visible technology signals.
               </p>
 
               {/* Scan limit strip for free logged-in users */}
@@ -151,7 +157,15 @@ export default function Home() {
               <div className="max-w-xl mx-auto">
                 <div className="flex gap-2 p-1.5 rounded-xl border border-white/8 bg-white/3 backdrop-blur-sm focus-within:border-violet-500/40 transition-colors">
                   <input
-                    type="text"
+                    id="scan-url"
+                    type="url"
+                    inputMode="url"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-label="Website URL to analyse"
+                    aria-describedby={errorMsg || status === 'error' ? 'scan-error' : 'scan-privacy-note'}
+                    aria-invalid={Boolean(errorMsg || status === 'error')}
                     value={url}
                     onChange={e => setUrl(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && analyze()}
@@ -159,6 +173,7 @@ export default function Home() {
                     className="flex-1 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/25 outline-none min-w-0"
                   />
                   <button
+                    type="button"
                     onClick={() => analyze()}
                     disabled={status === 'loading'}
                     className="px-5 py-2.5 rounded-lg text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
@@ -173,7 +188,7 @@ export default function Home() {
 
                 {(errorMsg || status === 'error') && (
                   <div className="mt-2 flex items-center justify-between gap-3">
-                    <p className="text-sm text-red-400 text-left px-1">{errorMsg || 'Analysis failed.'}</p>
+                    <p id="scan-error" role="alert" className="text-sm text-red-400 text-left px-1">{errorMsg || 'Analysis failed.'}</p>
                     {errorMsg.includes('limit') && (
                       <a href="/pricing" className="text-xs font-semibold text-violet-400 shrink-0 hover:text-violet-300 transition-colors">
                         Upgrade →
@@ -184,8 +199,8 @@ export default function Home() {
               </div>
 
               {/* Safety notice */}
-              <p className="mt-3 text-[11px] text-white/20 text-center">
-                We block local/private network targets and require ownership verification before active deep scans.{' '}
+              <p id="scan-privacy-note" className="mt-3 text-[11px] text-white/20 text-center">
+                Query strings are removed before scanning, anonymous results are not saved, and active tests require fresh domain-control evidence plus explicit authorisation.{' '}
                 <a href="/privacy" className="underline underline-offset-2 hover:text-white/40 transition-colors">Privacy policy</a>
               </p>
 
@@ -224,7 +239,7 @@ export default function Home() {
               {showIdle && (
                 <div className="mt-10">
                   <button
-                    onClick={() => { const el = document.querySelector('input[type=text]') as HTMLInputElement; el?.focus(); }}
+                    onClick={() => document.getElementById('scan-url')?.focus()}
                     className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-violet-500/25 bg-violet-500/8 text-violet-300 text-sm font-medium hover:bg-violet-500/12 transition-colors"
                   >
                     <span>🚀</span>
@@ -266,8 +281,8 @@ export default function Home() {
                   <div>
                     <h3 className="text-sm font-bold text-white/80 mb-0.5">Want to go deeper?</h3>
                     <p className="text-xs text-white/40 max-w-md leading-relaxed">
-                      This was a passive read-only scan. Deep vulnerability testing — SQL injection, XSS, auth bypass, and more —
-                      requires proving you own the site. Sign in or create a free account to get started.
+                      This was a bounded public scan. The experimental deep scanner runs selected SQL injection, XSS, access-control, and configuration checks
+                      only after domain-control verification. Its findings still require manual validation.
                     </p>
                   </div>
                 </div>
@@ -308,24 +323,24 @@ export default function Home() {
               <div className="border-t border-white/5 pt-16">
                 <h2 className="text-2xl font-bold text-white/80 mb-2 text-center">Why this matters</h2>
                 <p className="text-white/40 text-center text-sm mb-12 max-w-md mx-auto">
-                  AI-generated code ships fast — but often with security defaults left unconfigured.
+                  Public evidence can support a narrow provenance claim; it cannot reveal a developer&apos;s process, understanding, or review quality.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                   {[
                     {
                       icon: '◈', color: '#8b5cf6',
-                      title: 'Vibe-Code Fingerprinting',
-                      desc: 'AI tools produce identifiable patterns — generic Tailwind layouts, Supabase defaults, shadcn scaffolds, and boilerplate copy that reveal their origin.',
+                      title: 'Builder Provenance',
+                      desc: 'Only allowlisted generator metadata, builder project domains, explicit attribution, and builder-specific assets contribute to the evidence index.',
                     },
                     {
                       icon: '⬡', color: '#06b6d4',
                       title: 'Passive Security Audit',
-                      desc: 'Missing CSP, no HSTS, exposed .env files — common oversights that happen when you ship without reviewing the defaults your AI tool generated.',
+                      desc: 'Review a focused set of response headers and public deployment paths. This is a limited hardening check, not an overall security grade.',
                     },
                     {
                       icon: '◻', color: '#22c55e',
-                      title: 'Zero Exploitation',
-                      desc: 'Every check is read-only and passive. We detect what public crawlers can already see — no scanning, no probing, no brute force.',
+                      title: 'Bounded Public Checks',
+                      desc: 'The public scan makes read-only page and public-path requests. It sends no exploit payloads, authentication bypasses, or brute-force attempts.',
                     },
                   ].map(item => (
                     <div key={item.title} className="p-6 rounded-xl border border-white/5 bg-white/2">
@@ -342,7 +357,7 @@ export default function Home() {
           {/* Footer */}
           <footer className="border-t border-white/5 px-6 py-6 print:hidden">
             <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 flex-wrap">
-              <p className="text-xs text-white/20">Is This Vibe-Coded? — passive analysis only</p>
+              <p className="text-xs text-white/20">Is This Vibe-Coded? — public evidence, with explicit limits</p>
               <div className="flex items-center gap-4">
                 <a href="/privacy" className="text-xs text-white/20 hover:text-white/50 transition-colors">Privacy Policy</a>
                 <a href="/pricing" className="text-xs text-white/20 hover:text-white/50 transition-colors">Pricing</a>

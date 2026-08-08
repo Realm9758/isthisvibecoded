@@ -1,6 +1,36 @@
 import { stripe } from '@/lib/stripe';
 import { updateUser, getUserByStripeCustomerId } from '@/lib/store';
-import type { Plan } from '@/lib/store';
+import type Stripe from 'stripe';
+
+function subscriptionEntitlesPro(subscription: Stripe.Subscription): boolean {
+  const configuredPrice = process.env.STRIPE_PRO_PRICE_ID;
+  return Boolean(
+    configuredPrice
+    && (subscription.status === 'active' || subscription.status === 'trialing')
+    && subscription.items.data.some(item => item.price.id === configuredPrice),
+  );
+}
+
+async function reconcileSubscription(subscription: Stripe.Subscription): Promise<void> {
+  const customerId = typeof subscription.customer === 'string'
+    ? subscription.customer
+    : subscription.customer.id;
+  const user = await getUserByStripeCustomerId(customerId);
+  if (!user) return;
+
+  if (subscriptionEntitlesPro(subscription)) {
+    // Do not let a late event from an older subscription replace a newer one.
+    if (!user.stripeSubscriptionId || user.stripeSubscriptionId === subscription.id) {
+      await updateUser(user.id, { plan: 'pro', stripeSubscriptionId: subscription.id });
+    }
+    return;
+  }
+
+  // An old cancellation/unpaid event must not downgrade a newer active plan.
+  if (user.stripeSubscriptionId === subscription.id) {
+    await updateUser(user.id, { plan: 'free', stripeSubscriptionId: undefined });
+  }
+}
 
 export async function POST(request: Request) {
   if (!stripe) return new Response('Stripe not configured', { status: 503 });
@@ -20,23 +50,25 @@ export async function POST(request: Request) {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     const userId = session.metadata?.userId;
-    const plan = session.metadata?.plan as Plan;
-    if (userId && plan) {
-      await updateUser(userId, {
-        plan,
-        stripeCustomerId: session.customer as string,
-        stripeSubscriptionId: session.subscription as string,
-      });
+    const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+    const subscriptionId = typeof session.subscription === 'string'
+      ? session.subscription
+      : session.subscription?.id;
+    if (userId && customerId && subscriptionId) {
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      if (subscriptionEntitlesPro(subscription)) {
+        await updateUser(userId, { stripeCustomerId: customerId });
+        await reconcileSubscription(subscription);
+      }
     }
   }
 
-  if (event.type === 'customer.subscription.deleted') {
-    const sub = event.data.object;
-    const customerId = sub.customer as string;
-    const user = await getUserByStripeCustomerId(customerId);
-    if (user) {
-      await updateUser(user.id, { plan: 'free', stripeSubscriptionId: undefined });
-    }
+  if (
+    event.type === 'customer.subscription.created'
+    || event.type === 'customer.subscription.updated'
+    || event.type === 'customer.subscription.deleted'
+  ) {
+    await reconcileSubscription(event.data.object);
   }
 
   return Response.json({ received: true });

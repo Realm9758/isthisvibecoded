@@ -1,4 +1,3 @@
-import * as cheerio from 'cheerio';
 import type { TechStackItem, TechCategory, ConfidenceLevel } from '@/types/analysis';
 
 interface DetectionRule {

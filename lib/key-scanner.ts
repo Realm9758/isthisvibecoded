@@ -45,10 +45,11 @@ const KEY_PATTERNS: KeyPattern[] = [
     truncate: (m) => m.slice(0, 30) + (m.length > 30 ? '...' : ''),
   },
   {
-    type: 'AWS Access Key ID',
-    // Public-facing access key IDs start with AKIA, ASIA, AROA, AIDA
+    type: 'AWS Access Key ID (identifier only)',
+    // An access-key ID identifies a credential but is not the secret access
+    // key needed to authenticate. Report it as review context, not a leak.
     pattern: /(?:AKIA|ASIA|AROA|AIDA)[A-Z0-9]{16}/g,
-    risk: 'high',
+    risk: 'low',
     truncate: (m) => m.slice(0, 6) + '...' + m.slice(-4),
   },
   {

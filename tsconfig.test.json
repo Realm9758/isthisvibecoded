@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": false,
+    "incremental": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "target": "ES2022"
+  },
+  "include": [
+    "tests/**/*.test.ts",
+    "lib/vibe-detector.ts",
+    "lib/vibe-constants.ts",
+    "lib/security-headers.ts",
+    "lib/key-scanner.ts",
+    "types/analysis.ts"
+  ]
+}

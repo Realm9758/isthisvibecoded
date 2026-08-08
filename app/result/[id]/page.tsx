@@ -1,4 +1,4 @@
-import { getScan } from '@/lib/store';
+import { getCurrentUserId, getPublicScan, getVisibleScan } from '@/lib/scan-access';
 import { SharedResult } from './SharedResult';
 import Link from 'next/link';
 import type { AnalysisResult } from '@/types/analysis';
@@ -10,7 +10,7 @@ export async function generateMetadata(
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Metadata> {
   const { id } = await params;
-  const scan = await getScan(id);
+  const scan = await getPublicScan(id);
   if (!scan) return { title: 'Scan not found — VibeScan' };
 
   const domain = (() => { try { return new URL(scan.result.url).hostname; } catch { return scan.result.url; } })();
@@ -18,9 +18,9 @@ export async function generateMetadata(
   const cardUrl = `${appUrl}/api/sharecard/${id}`;
   const pageUrl = `${appUrl}/result/${id}`;
 
-  const title = `${domain} AI signal score: ${scan.result.vibe.score}/100`;
+  const title = `${domain} provenance evidence: ${scan.result.vibe.score}/100`;
   const description =
-    `${scan.result.vibe.label} · Security: ${scan.result.security.score}/100 · ${scan.result.security.riskLevel} · ` +
+    `${scan.result.vibe.label} · Header hardening: ${scan.result.security.score}/100 · ` +
     `${scan.result.techStack.slice(0, 3).map(t => t.name).join(', ') || 'Unknown stack'}`;
 
   return {
@@ -43,7 +43,7 @@ export async function generateMetadata(
 
 export default async function ResultPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const scan = await getScan(id);
+  const scan = await getVisibleScan(id);
 
   if (!scan) {
     return (
@@ -66,12 +66,21 @@ export default async function ResultPage({ params }: { params: Promise<{ id: str
     );
   }
 
+  const currentUserId = await getCurrentUserId();
   const result = {
     ...scan.result,
     scanId: scan.id,
     roasts: scan.roasts,
     scansRemaining: null,
-  } as AnalysisResult & { scanId: string; roasts: string[]; scansRemaining: null };
+    isPublic: scan.isPublic,
+    canPublish: !!currentUserId && scan.userId === currentUserId,
+  } as AnalysisResult & {
+    scanId: string;
+    roasts: string[];
+    scansRemaining: null;
+    isPublic: boolean;
+    canPublish: boolean;
+  };
 
   return (
     <main className="min-h-screen px-6 py-10" style={{ background: '#0a0a0f' }}>
@@ -88,7 +97,7 @@ export default async function ResultPage({ params }: { params: Promise<{ id: str
             ← Run new scan
           </Link>
           <span className="text-white/15">·</span>
-          <span className="text-xs text-white/20">Shared result</span>
+          <span className="text-xs text-white/20">{scan.isPublic ? 'Published result' : 'Private saved result'}</span>
         </div>
         <SharedResult result={result} />
       </div>

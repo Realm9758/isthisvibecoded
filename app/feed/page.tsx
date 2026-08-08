@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
+import { getSecurityColor, getVibeColor, VIBE_SCORE_BANDS } from '@/lib/vibe-constants';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ interface FullScan {
       score: number;
       riskLevel: string;
       httpsEnabled: boolean;
-      headers: { name: string; present: boolean; recommendation: string }[];
+      headers: { name: string; present: boolean; valid?: boolean; details?: string; recommendation: string }[];
     };
     techStack: { name: string; category: string }[];
     publicKeys: { type: string; risk: string }[];
@@ -86,9 +87,9 @@ type TimeFilter = 'today' | 'week' | 'all';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function getVibeColor(s: number) { return s >= 70 ? '#8b5cf6' : s >= 30 ? '#f59e0b' : '#22c55e'; }
-function getSecColor(s: number)  { return s >= 70 ? '#22c55e' : s >= 40 ? '#f59e0b' : '#ef4444'; }
+const getSecColor = getSecurityColor;
 function hostname(url: string)   { try { return new URL(url).hostname; } catch { return url; } }
+function headerRiskBand(value: string) { return value.replace(/\s+risk$/i, '') || 'Unknown'; }
 
 function timeAgo(ms: number) {
   const s = Math.floor((Date.now() - ms) / 1000);
@@ -138,13 +139,11 @@ function getBadges(item: LeaderboardItem, rank: number): Badge[] {
   const age = Date.now() - item.createdAt;
 
   if (rank === 1)
-    badges.push({ emoji: '👑', label: 'Champion', color: '#fbbf24', bg: 'rgba(251,191,36,0.1)', border: 'rgba(251,191,36,0.3)' });
-  if (item.vibeScore >= 95 && item.securityScore >= 95)
-    badges.push({ emoji: '💯', label: 'Flawless', color: '#a78bfa', bg: 'rgba(167,139,250,0.1)', border: 'rgba(167,139,250,0.3)' });
-  else if (item.securityScore >= 90)
-    badges.push({ emoji: '🔒', label: 'Fortress', color: '#34d399', bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.25)' });
-  if (item.vibeScore >= 90 && !(item.vibeScore >= 95 && item.securityScore >= 95))
-    badges.push({ emoji: '🔥', label: 'Pure Vibe', color: '#c4b5fd', bg: 'rgba(139,92,246,0.1)', border: 'rgba(139,92,246,0.28)' });
+    badges.push({ emoji: '◉', label: 'Highest current index', color: '#fbbf24', bg: 'rgba(251,191,36,0.1)', border: 'rgba(251,191,36,0.3)' });
+  if (item.securityScore >= 90)
+    badges.push({ emoji: '🔒', label: 'Strong Headers', color: '#34d399', bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.25)' });
+  if (item.vibeLabel === 'Direct AI-builder provenance')
+    badges.push({ emoji: '◈', label: 'High Evidence', color: '#c4b5fd', bg: 'rgba(139,92,246,0.1)', border: 'rgba(139,92,246,0.28)' });
   if (age < 3_600_000)
     badges.push({ emoji: '🆕', label: 'Just Arrived', color: '#38bdf8', bg: 'rgba(56,189,248,0.08)', border: 'rgba(56,189,248,0.22)' });
 
@@ -159,11 +158,7 @@ function generateMoments(items: LeaderboardItem[], category: Category): Moment[]
   const topAge = Date.now() - top.createdAt;
 
   if (topAge < 3_600_000 && (category === 'vibe' || category === 'secure'))
-    moments.push({ id: 'new-1', icon: '👑', text: `${hostname(top.url)} just took #1` });
-
-  const perfect = items.find(i => i.vibeScore >= 99 && i.securityScore >= 99);
-  if (perfect)
-    moments.push({ id: 'perfect', icon: '💯', text: `${hostname(perfect.url)} hit the ceiling — 99/99` });
+    moments.push({ id: 'new-1', icon: '◉', text: `${hostname(top.url)} is first in the current published set` });
 
   const biggestMover = items
     .filter(i => i.rankDelta !== null && i.rankDelta >= 5)
@@ -171,7 +166,7 @@ function generateMoments(items: LeaderboardItem[], category: Category): Moment[]
   if (biggestMover) {
     moments.push({ id: 'rocket', icon: '🚀', text: `${hostname(biggestMover.url)} jumped ↑${biggestMover.rankDelta} spots today` });
   } else {
-    const rocketEntry = items.find((i, idx) => idx > 8 && Date.now() - i.createdAt < 7_200_000 && i.vibeScore >= 85);
+    const rocketEntry = items.find((i, idx) => idx > 8 && Date.now() - i.createdAt < 7_200_000 && i.vibeScore >= VIBE_SCORE_BANDS.strong);
     if (rocketEntry)
       moments.push({ id: 'rocket', icon: '🚀', text: `${hostname(rocketEntry.url)} just appeared in the top 10` });
   }
@@ -352,7 +347,7 @@ function ActivityPulse({ count }: { count: number }) {
       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
       {count > 0
         ? `${count} scan${count !== 1 ? 's' : ''} in the last hour`
-        : 'Live rankings'}
+        : 'Published scan index'}
     </span>
   );
 }
@@ -367,16 +362,19 @@ function MomentToasts({ moments }: { moments: Moment[] }) {
 
   useEffect(() => {
     if (moments.length > 0) {
-      setTimeout(() => setQueue(moments), 2000);
+      const timer = setTimeout(() => setQueue(moments), 2000);
+      return () => clearTimeout(timer);
     }
   }, [moments]);
 
   useEffect(() => {
-    if (!visible && queue.length > 0) {
+    if (visible || queue.length === 0) return;
+    const timer = setTimeout(() => {
       const [next, ...rest] = queue;
       setVisible(next);
       setQueue(rest);
-    }
+    }, 0);
+    return () => clearTimeout(timer);
   }, [visible, queue]);
 
   useEffect(() => {
@@ -428,15 +426,7 @@ function PersonalRankStrip({ items }: { items: LeaderboardItem[] }) {
 
   const item = items[myRankIdx];
   const rank = myRankIdx + 1;
-  const rivalAbove = myRankIdx > 0 ? items[myRankIdx - 1] : null;
-
-  let nearMiss: string | null = null;
-  if (rank === 1)        nearMiss = "You hold #1.";
-  else if (rank <= 3)    nearMiss = `You're on the podium at #${rank}.`;
-  else if (rank <= 10)   nearMiss = `Top 10. ${rivalAbove ? `${hostname(rivalAbove.url)} is just ahead.` : ''}`;
-  else if (rank === 11)  nearMiss = 'One spot from Top 10.';
-  else if (rank <= 14)   nearMiss = `${rank - 10} spots from Top 10.`;
-  else if (rank <= 20)   nearMiss = 'Top 10 is within reach.';
+  const positionNote = `Position ${rank} among current, explicitly published results; this is not an overall quality rank.`;
 
   return (
     <div
@@ -459,11 +449,9 @@ function PersonalRankStrip({ items }: { items: LeaderboardItem[] }) {
               <span className="text-xs text-white/40 font-mono truncate">{hostname(item.url)}</span>
               {item.rankDelta !== null && item.rankDelta !== 0 && <RankDeltaChip delta={item.rankDelta} />}
             </div>
-            {nearMiss && (
-              <p className="text-[10px] mt-0.5 truncate" style={{ color: rank <= 3 ? 'rgba(251,191,36,0.55)' : 'rgba(167,139,250,0.45)' }}>
-                {nearMiss}
-              </p>
-            )}
+            <p className="text-[10px] mt-0.5 truncate" style={{ color: 'rgba(167,139,250,0.45)' }}>
+              {positionNote}
+            </p>
           </div>
         </div>
 
@@ -853,13 +841,13 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
 
   const vc = getVibeColor(item.vibeScore);
   const sc = getSecColor(item.securityScore);
-  const riskColor  = RISK_COLOR[item.riskLevel]  ?? '#94a3b8';
-  const riskBg     = RISK_BG[item.riskLevel]     ?? 'rgba(148,163,184,0.08)';
-  const riskBorder = RISK_BORDER[item.riskLevel] ?? 'rgba(148,163,184,0.15)';
+  const riskBand = headerRiskBand(item.riskLevel);
+  const riskColor  = RISK_COLOR[riskBand]  ?? '#94a3b8';
+  const riskBg     = RISK_BG[riskBand]     ?? 'rgba(148,163,184,0.08)';
+  const riskBorder = RISK_BORDER[riskBand] ?? 'rgba(148,163,184,0.15)';
   const site = hostname(item.url);
 
   useEffect(() => {
-    setScanLoading(true);
     Promise.all([
       fetch(`/api/scans/${item.id}`).then(r => r.json()),
       fetch(`/api/scans/${item.id}/like`).then(r => r.json()),
@@ -891,7 +879,7 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
     if (e.target === e.currentTarget) onClose();
   }
 
-  const missingHeaders = fullScan?.result.security.headers.filter(h => !h.present) ?? [];
+  const missingHeaders = fullScan?.result.security.headers.filter(h => !h.present || h.valid === false) ?? [];
   const exposedKeys    = fullScan?.result.publicKeys.filter(k => k.risk === 'high' || k.risk === 'medium') ?? [];
   const noHttps        = fullScan && !fullScan.result.security.httpsEnabled;
   const vibeReasons    = fullScan?.result.vibe.reasons ?? [];
@@ -936,7 +924,7 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
                     style={{ color: riskColor, background: riskBg, borderColor: riskBorder }}
                   >
                     <span className="w-1 h-1 rounded-full inline-block" style={{ background: riskColor }} />
-                    {item.riskLevel} Risk
+                    {riskBand} header gaps
                   </span>
                 </div>
               </div>
@@ -973,15 +961,15 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             <SectionHeader label="Overview" />
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-xl border p-4" style={{ background: `${vc}0d`, borderColor: `${vc}30` }}>
-                <p className="text-[10px] text-white/35 uppercase tracking-wider mb-2">AI Signal Score</p>
+                <p className="text-[10px] text-white/35 uppercase tracking-wider mb-2">Provenance Evidence</p>
                 <p className="text-3xl font-black tabular-nums mb-1" style={{ color: vc }}>{item.vibeScore}<span className="text-sm font-medium text-white/30">/100</span></p>
                 <p className="text-xs mb-2.5" style={{ color: `${vc}cc` }}>{item.vibeLabel}</p>
                 <ProgressBar value={item.vibeScore} color={vc} />
               </div>
               <div className="rounded-xl border p-4" style={{ background: `${sc}0d`, borderColor: `${sc}30` }}>
-                <p className="text-[10px] text-white/35 uppercase tracking-wider mb-2">Security Score</p>
+                <p className="text-[10px] text-white/35 uppercase tracking-wider mb-2">Header Hardening</p>
                 <p className="text-3xl font-black tabular-nums mb-1" style={{ color: sc }}>{item.securityScore}<span className="text-sm font-medium text-white/30">/100</span></p>
-                <p className="text-xs font-semibold mb-2.5" style={{ color: riskColor }}>{item.riskLevel} Risk</p>
+                <p className="text-xs font-semibold mb-2.5" style={{ color: riskColor }}>{riskBand} header gaps</p>
                 <ProgressBar value={item.securityScore} color={sc} />
               </div>
             </div>
@@ -1013,19 +1001,19 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
             <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)' }}>
               <div className="divide-y divide-white/5">
                 <div className="px-4 py-3 flex items-center gap-4">
-                  <p className="text-xs text-white/45 w-36 shrink-0">AI signal score</p>
+                  <p className="text-xs text-white/45 w-36 shrink-0">Evidence index</p>
                   <div className="flex-1"><ProgressBar value={item.vibeScore} color={vc} /></div>
                   <span className="text-xs font-bold tabular-nums w-10 text-right shrink-0" style={{ color: vc }}>{item.vibeScore}</span>
                 </div>
                 <div className="px-4 py-3 flex items-center gap-4">
-                  <p className="text-xs text-white/45 w-36 shrink-0">Security posture</p>
+                  <p className="text-xs text-white/45 w-36 shrink-0">Header hardening</p>
                   <div className="flex-1"><ProgressBar value={item.securityScore} color={sc} /></div>
                   <span className="text-xs font-bold tabular-nums w-10 text-right shrink-0" style={{ color: sc }}>{item.securityScore}</span>
                 </div>
                 <div className="px-4 py-3 flex items-center justify-between">
-                  <p className="text-xs text-white/45">Overall risk level</p>
+                  <p className="text-xs text-white/45">Observed header gaps</p>
                   <span className="text-[11px] font-bold px-2.5 py-1 rounded-full border" style={{ color: riskColor, background: riskBg, borderColor: riskBorder }}>
-                    {item.riskLevel} Risk
+                    {riskBand}
                   </span>
                 </div>
               </div>
@@ -1033,10 +1021,10 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
           </div>
 
           {scanLoading ? (
-            <div><SectionHeader label="Vibe Signals" /><div className="space-y-2"><Skeleton className="h-7" /><Skeleton className="h-7 w-4/5" /><Skeleton className="h-7 w-2/3" /></div></div>
+            <div><SectionHeader label="Provenance Evidence" /><div className="space-y-2"><Skeleton className="h-7" /><Skeleton className="h-7 w-4/5" /><Skeleton className="h-7 w-2/3" /></div></div>
           ) : vibeReasons.length > 0 ? (
             <div>
-              <SectionHeader label="Vibe Signals" />
+              <SectionHeader label="Provenance Evidence" />
               <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: 'rgba(139,92,246,0.03)' }}>
                 {vibeReasons.map((r, i) => (
                   <div key={i} className="flex items-start gap-3 px-4 py-2.5 border-b border-white/5 last:border-0">
@@ -1046,9 +1034,9 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
                 ))}
               </div>
             </div>
-          ) : item.vibeScore < 25 ? null : (
+          ) : item.vibeScore < VIBE_SCORE_BANDS.limited ? null : (
             <div>
-              <SectionHeader label="Vibe Signals" />
+              <SectionHeader label="Provenance Evidence" />
               <p className="text-xs text-white/25 italic">No specific signals logged.</p>
             </div>
           )}
@@ -1078,7 +1066,10 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
                 {missingHeaders.slice(0, 5).map(h => (
                   <div key={h.name} className="flex items-center gap-3 px-3 py-2.5 rounded-lg border" style={{ background: 'rgba(245,158,11,0.05)', borderColor: 'rgba(245,158,11,0.15)' }}>
                     <span className="text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded text-yellow-400/80 bg-yellow-500/10 border border-yellow-500/20">WARN</span>
-                    <p className="text-xs text-white/55">Missing header: <span className="font-mono">{h.name}</span></p>
+                    <p className="text-xs text-white/55">
+                      {h.present ? 'Weak or invalid header' : 'Missing header'}: <span className="font-mono">{h.name}</span>
+                      {h.present && h.details ? <span className="block text-[10px] text-white/30 mt-0.5">{h.details}</span> : null}
+                    </p>
                   </div>
                 ))}
               </div>
@@ -1088,7 +1079,7 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
               <SectionHeader label="Security Findings" />
               <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl border border-emerald-500/20" style={{ background: 'rgba(34,197,94,0.05)' }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ade80" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                <p className="text-xs text-emerald-400/80">No critical issues found in public data</p>
+                <p className="text-xs text-emerald-400/80">No selected passive findings were reported in this scan</p>
               </div>
             </div>
           ) : null}
@@ -1140,7 +1131,7 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
               </div>
               <div>
                 <p className="text-sm font-semibold text-violet-300">View Full Scan Report</p>
-                <p className="text-[10px] text-white/30">Tech stack · Security · Vibe analysis · Roast mode</p>
+                <p className="text-[10px] text-white/30">Tech stack · public findings · provenance evidence · Roast mode</p>
               </div>
             </div>
             <div className="text-white/30 group-hover:text-violet-400 transition-colors group-hover:translate-x-0.5 transform">
@@ -1173,7 +1164,7 @@ function LeaderboardRow({
   const site = hostname(item.url);
   const podium = rank !== undefined && rank <= 3 ? PODIUM[rank] : null;
   const badge = rank !== undefined ? getBadges(item, rank)[0] : undefined;
-  const isNewEntry = item.previousRank === null && Date.now() - item.createdAt < 86_400_000;
+  const isNewEntry = item.previousRank === null;
 
   return (
     <div
@@ -1252,7 +1243,7 @@ function LeaderboardRow({
       <div className="flex items-center gap-5 shrink-0">
         <div className="text-right hidden sm:block">
           <p className="text-base font-black tabular-nums leading-none" style={{ color: vc }}>{item.vibeScore}</p>
-          <p className="text-[9px] uppercase tracking-wider text-white/25 mt-0.5">vibe</p>
+          <p className="text-[9px] uppercase tracking-wider text-white/25 mt-0.5">evidence</p>
         </div>
         <div className="text-right">
           <p className="text-base font-black tabular-nums leading-none" style={{ color: sc }}>{item.securityScore}</p>
@@ -1275,8 +1266,8 @@ function LeaderboardRow({
 // ── Main page ──────────────────────────────────────────────────────────────
 
 const CATEGORIES: { id: Category; label: string }[] = [
-  { id: 'vibe',    label: 'Vibe' },
-  { id: 'secure',  label: 'Security' },
+  { id: 'vibe',    label: 'Evidence' },
+  { id: 'secure',  label: 'Headers' },
   { id: 'recent',  label: 'Recent' },
   { id: 'popular', label: 'Popular' },
 ];
@@ -1341,8 +1332,14 @@ export default function LeaderboardPage() {
   }, [category, time]);
 
   useEffect(() => {
-    const cleanup = fetchData();
-    return cleanup;
+    let cleanup: (() => void) | undefined;
+    const timer = setTimeout(() => {
+      cleanup = fetchData();
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      cleanup?.();
+    };
   }, [fetchData]);
 
   // Auto-refresh recent tab + detect new entries
@@ -1381,9 +1378,9 @@ export default function LeaderboardPage() {
 
   // Generate moments when data loads
   useEffect(() => {
-    if (items.length > 0) {
-      setMoments(generateMoments(items, category));
-    }
+    if (items.length === 0) return;
+    const timer = setTimeout(() => setMoments(generateMoments(items, category)), 0);
+    return () => clearTimeout(timer);
   }, [items, category]);
 
   const showTimeFilter = category === 'vibe' || category === 'secure' || category === 'popular';
@@ -1448,7 +1445,7 @@ export default function LeaderboardPage() {
                 Leaderboard
               </h1>
               <p className="text-white/35 text-sm">
-                Every site ranked by what actually matters.
+                Explicitly published snapshots, sorted within the current scoring version. These narrow indices are not overall quality ratings.
               </p>
             </div>
             <Link
@@ -1546,7 +1543,7 @@ export default function LeaderboardPage() {
                     <div className="flex items-center gap-5 shrink-0">
                       <div className="text-right hidden sm:block">
                         <p className="text-base font-black tabular-nums leading-none" style={{ color: vc }}>{item.latestScan.result?.vibe?.score ?? '—'}</p>
-                        <p className="text-[9px] uppercase tracking-wider text-white/25 mt-0.5">vibe</p>
+                        <p className="text-[9px] uppercase tracking-wider text-white/25 mt-0.5">evidence</p>
                       </div>
                       <div className="text-right">
                         <p className="text-base font-black tabular-nums leading-none" style={{ color: sc }}>{item.latestScan.result?.security?.score ?? '—'}</p>
@@ -1618,8 +1615,8 @@ export default function LeaderboardPage() {
             style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.2)' }}
           >
             <div>
-              <p className="text-sm font-semibold text-white/80">Your competitors are already ranked.</p>
-              <p className="text-xs text-white/30 mt-0.5">Are you?</p>
+              <p className="text-sm font-semibold text-white/80">Want to compare a public snapshot?</p>
+              <p className="text-xs text-white/30 mt-0.5">Run a scan privately, then publish it only if you choose.</p>
             </div>
             <Link
               href="/"
@@ -1627,7 +1624,7 @@ export default function LeaderboardPage() {
               style={{ background: 'rgba(139,92,246,0.5)', border: '1px solid rgba(139,92,246,0.35)' }}
             >
               <IconScan />
-              Claim your rank
+              Run a scan
             </Link>
           </div>
         )}

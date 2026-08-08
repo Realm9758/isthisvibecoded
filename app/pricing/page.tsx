@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { PLANS } from '@/lib/stripe';
+import { PLANS } from '@/lib/plans';
 
 function PlanCard({
   planId, plan, current, onUpgrade, loading,
@@ -83,18 +84,26 @@ function PlanCard({
 }
 
 export default function PricingPage() {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
+  const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
-  const [flash, setFlash] = useState<'success' | 'canceled' | null>(null);
+  const [flash, setFlash] = useState<'returned' | 'success' | 'canceled' | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('success')) setFlash('success');
+    if (params.get('success')) {
+      setFlash('returned');
+      void refreshUser();
+    }
     else if (params.get('canceled')) setFlash('canceled');
-  }, []);
+  }, [refreshUser]);
+
+  useEffect(() => {
+    if (flash === 'returned' && user && user.plan !== 'free') setFlash('success');
+  }, [flash, user]);
 
   async function handleUpgrade(planId: string) {
-    if (!user) { window.location.href = '/signup'; return; }
+    if (!user) { router.push('/signup'); return; }
     setLoading(planId);
     try {
       const res = await fetch('/api/stripe/checkout', {
@@ -126,9 +135,15 @@ export default function PricingPage() {
             <p className="text-emerald-400 font-semibold">Upgrade successful! Welcome to Pro.</p>
           </div>
         )}
+        {flash === 'returned' && (
+          <div className="mb-8 p-4 rounded-xl bg-sky-500/10 border border-sky-500/20 text-center">
+            <p className="text-sky-300 font-semibold">Payment returned. Confirming your subscription…</p>
+            <p className="text-xs text-white/35 mt-1">Your plan will update after Stripe&apos;s signed webhook is processed.</p>
+          </div>
+        )}
         {flash === 'canceled' && (
           <div className="mb-8 p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20 text-center">
-            <p className="text-yellow-400">Checkout canceled. You&apos;re still on the free plan.</p>
+            <p className="text-yellow-400">Checkout canceled. No subscription change was confirmed.</p>
           </div>
         )}
 
@@ -166,17 +181,15 @@ export default function PricingPage() {
             <tbody>
               {[
                 ['Passive scans per day',    '5',          'Unlimited'],
-                ['Deep scans (active OWASP)', '2 lifetime', 'Unlimited'],
-                ['Vibe-code detection',       '✓',          '✓'],
-                ['Security headers audit',    '✓',          '✓'],
+                ['Experimental active checks','2 lifetime', 'Unlimited'],
+                ['Public provenance evidence','✓',          '✓'],
+                ['Header hardening review',   '✓',          '✓'],
                 ['Tech stack detection',      '✓',          '✓'],
                 ['Shareable scan links',      '✓',          '✓'],
                 ['Roast Mode',                '✓',          '✓'],
                 ['Leaderboard & comments',    '✓',          '✓'],
-                ['PDF export',                '—',          '✓'],
-                ['Verified badge embed',      '—',          '✓'],
-                ['Scan history',              '—',          '✓'],
-                ['Priority analysis queue',   '—',          '✓'],
+                ['Private scan history',      '✓',          '✓'],
+                ['Published badge embed',     '✓',          '✓'],
               ].map(([feat, free, pro]) => (
                 <tr key={feat} className="border-b border-white/4 last:border-0">
                   <td className="px-6 py-3 text-white/60">{feat}</td>

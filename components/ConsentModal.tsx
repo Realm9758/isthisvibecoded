@@ -2,26 +2,37 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
-const CONSENT_KEY = 'vc-consent-v1';
+const CONSENT_KEY = 'vc-consent-v2';
 
 export function ConsentModal() {
   const [visible, setVisible] = useState(false);
+  const pathname = usePathname();
 
   useEffect(() => {
-    try {
-      if (!localStorage.getItem(CONSENT_KEY)) setVisible(true);
-    } catch {
-      // localStorage unavailable (SSR / private browsing)
-    }
-  }, []);
+    // The policy must remain readable before consent. Navigating back to the app
+    // will show this notice again unless the user explicitly accepts it.
+    if (pathname === '/privacy') return;
+
+    const timer = window.setTimeout(() => {
+      try {
+        setVisible(!localStorage.getItem(CONSENT_KEY));
+      } catch {
+        // localStorage unavailable (SSR / private browsing)
+        setVisible(true);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [pathname]);
 
   function accept() {
     try { localStorage.setItem(CONSENT_KEY, '1'); } catch { /* ignore */ }
     setVisible(false);
   }
 
-  if (!visible) return null;
+  if (!visible || pathname === '/privacy') return null;
 
   return (
     <div
@@ -52,23 +63,23 @@ export function ConsentModal() {
             {[
               {
                 icon: '👁',
-                title: 'Passive scanning only',
-                desc: 'We read only what any browser can already see — HTTP headers, public HTML, and tech signals. We never exploit, probe, or brute-force anything.',
+                title: 'Bounded, read-only public checks',
+                desc: 'A passive scan fetches the submitted public page, reads its response headers and HTML, then makes up to 15 HEAD or GET requests to a fixed list of public paths. It does not log in, exploit, inject payloads, or brute-force credentials.',
               },
               {
                 icon: '🔐',
-                title: 'Deep scans require ownership proof',
-                desc: 'Active vulnerability testing is only ever run on sites you can cryptographically prove you own (via DNS record, meta tag, or file upload). We never test third-party sites.',
+                title: 'Deep scans require domain-control verification',
+                desc: 'Before active checks can start, a signed-in user must place a unique token in DNS, a meta tag, or a hosted file and explicitly request the scan. You remain responsible for having legal permission to test the site.',
               },
               {
                 icon: '💾',
                 title: 'What we store',
-                desc: 'If you create an account: your email (hashed password, never plain text) and scan results tied to your account. Anonymous scans store no personal data.',
+                desc: 'Anonymous scan results are not saved. For abuse prevention, an HMAC-derived identifier is used in a date-scoped usage row. If you sign in, account details and scan results are stored; new results start private.',
               },
               {
                 icon: '🚫',
                 title: "What we don't do",
-                desc: "We don't sell your data, share it with third parties, or use it for advertising. Scan results are yours — delete them any time.",
+                desc: "We don't sell personal data or use it for advertising. A signed-in scan appears publicly only after its owner explicitly publishes it; private result routes are restricted to that owner.",
               },
             ].map(item => (
               <div key={item.title} className="flex gap-3">
@@ -102,7 +113,6 @@ export function ConsentModal() {
           </button>
           <Link
             href="/privacy"
-            onClick={accept}
             className="px-4 py-2.5 rounded-xl text-sm text-white/40 border border-white/8 hover:bg-white/5 transition-colors"
           >
             Read Policy

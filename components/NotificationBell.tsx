@@ -89,9 +89,12 @@ export function NotificationBell() {
   // Fetch on mount and poll every 30s
   useEffect(() => {
     if (!user) return;
-    fetchNotifications();
+    const initial = setTimeout(() => void fetchNotifications(), 0);
     const id = setInterval(fetchNotifications, 30_000);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(id);
+    };
   }, [user, fetchNotifications]);
 
   // Re-fetch when tab regains focus

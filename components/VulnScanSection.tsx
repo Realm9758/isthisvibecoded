@@ -47,7 +47,7 @@ export function VulnScanSection({ domain }: Props) {
               </span>
             </div>
             <p className="text-xs text-white/35 mt-0.5">
-              Active security testing — only on sites you own
+              Active security testing — only on sites you are authorised to test
             </p>
           </div>
         </div>
@@ -66,7 +66,7 @@ export function VulnScanSection({ domain }: Props) {
               },
               {
                 n: '2',
-                title: 'Prove you own the domain',
+                title: 'Verify domain control',
                 desc: (
                   <span>
                     Add a unique token to your site using one of three methods:
@@ -92,7 +92,7 @@ export function VulnScanSection({ domain }: Props) {
               {
                 n: '3',
                 title: 'Run the scan',
-                desc: 'Once ownership is confirmed, we run OWASP Top 10 checks, exposed endpoint audits, dependency vulnerability scanning, and more — only on your domain.',
+                desc: 'Once domain control and authorisation are confirmed, the service runs a selected, best-effort set of active checks. It is not a complete OWASP audit or penetration test.',
                 color: '#22c55e',
                 done: false,
               },
@@ -129,7 +129,7 @@ export function VulnScanSection({ domain }: Props) {
           <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mb-2">What gets scanned</p>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
             {[
-              'OWASP Top 10',
+              'Selected OWASP-aligned areas',
               'SQL injection & XSS',
               'Auth bypass checks',
               'Exposed endpoints',
@@ -157,7 +157,7 @@ export function VulnScanSection({ domain }: Props) {
               color: 'rgba(248,113,113,0.85)',
             }}
           >
-            {user ? 'Verify Ownership & Run Scan' : 'Get Started — it\'s free'}
+            {user ? 'Verify Domain Control & Run Scan' : 'Get Started — it\'s free'}
           </button>
         )}
       </div>
@@ -174,7 +174,7 @@ export function VulnScanSection({ domain }: Props) {
               </div>
               <p className="text-sm font-medium text-white/70 mb-0.5">Account required</p>
               <p className="text-xs text-white/35 mb-4 leading-relaxed">
-                Create a free account to verify ownership. We log who requested each deep scan for accountability.
+                Create a free account to verify control of a domain publication channel. We log who requested each deep scan for accountability.
               </p>
               <div className="flex gap-2 justify-center">
                 <Link
@@ -200,8 +200,8 @@ export function VulnScanSection({ domain }: Props) {
               <div className="flex items-center gap-2 p-2.5 rounded-lg bg-orange-500/8 border border-orange-500/20">
                 <span className="text-orange-400 shrink-0 text-sm">⚠</span>
                 <p className="text-xs text-orange-300/80">
-                  Prove you own <span className="font-mono font-semibold">{domain}</span> before we run any active tests.
-                  Only the legitimate site owner can pass this step.
+                  Place a token on <span className="font-mono font-semibold">{domain}</span> before we run any active tests.
+                  This proves token placement, not legal ownership or authorisation.
                 </p>
               </div>
               <OwnershipVerify domain={domain} onVerified={() => setStep('done')} />
@@ -216,10 +216,10 @@ export function VulnScanSection({ domain }: Props) {
                   <span className="text-sm">🚀</span>
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-violet-300">Ownership Verified — You&apos;re on the early access list!</p>
+                  <p className="text-sm font-semibold text-violet-300">Domain Control Verified — You&apos;re on the early access list!</p>
                   <p className="text-xs text-white/40 mt-1 leading-relaxed">
-                    Active pentesting for <span className="font-mono text-white/55">{domain}</span> is in development.
-                    You&apos;ve proven ownership and will be first to know when Deep Scan launches.
+                    Experimental active checks for <span className="font-mono text-white/55">{domain}</span> are available from the dashboard.
+                    Only proceed when you have explicit permission to test the target.
                   </p>
                 </div>
               </div>

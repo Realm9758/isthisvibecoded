@@ -3,12 +3,12 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
+import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 
 interface UserScan {
   id: string;
   url: string;
   vibeScore: number;
-  vibeLabel: string;
   securityScore: number;
   riskLevel: string;
   techStack: string[];
@@ -16,24 +16,16 @@ interface UserScan {
 }
 
 interface PublicProfile {
-  id: string;
   name: string;
   bio: string | null;
   avatarColor: string;
   avatarUrl: string | null;
-  plan: string;
-  createdAt: number;
   scans: UserScan[];
 }
 
-const PLAN_BADGE: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  pro:  { label: 'Pro',  color: '#a78bfa', bg: 'rgba(139,92,246,0.12)',  border: 'rgba(139,92,246,0.3)' },
-  team: { label: 'Team', color: '#38bdf8', bg: 'rgba(56,189,248,0.12)',  border: 'rgba(56,189,248,0.3)' },
-  free: { label: 'Free', color: 'rgba(255,255,255,0.35)', bg: 'rgba(255,255,255,0.05)', border: 'rgba(255,255,255,0.1)' },
-};
-
-function vibeColor(s: number) { return s >= 70 ? '#8b5cf6' : s >= 30 ? '#f59e0b' : '#22c55e'; }
-function secColor(s: number)  { return s >= 70 ? '#22c55e' : s >= 40 ? '#f59e0b' : '#ef4444'; }
+const vibeColor = getVibeColor;
+const secColor = getSecurityColor;
+const headerRiskBand = (value: string) => value.replace(/\s+risk$/i, '') || 'Unknown';
 
 const RISK_COLOR: Record<string, string> = {
   Low: '#22c55e', Medium: '#f59e0b', High: '#f97316', Critical: '#ef4444',
@@ -47,10 +39,6 @@ function timeAgo(ms: number) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function joinDate(ms: number) {
-  return new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(new Date(ms));
-}
-
 function hostname(url: string) {
   try { return new URL(url).hostname; } catch { return url; }
 }
@@ -60,8 +48,7 @@ function Skeleton({ className }: { className?: string }) {
 }
 
 export default function PublicProfilePage() {
-  const params = useParams();
-  const name = decodeURIComponent(params.name as string);
+  const { name } = useParams<{ name: string }>();
 
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -93,8 +80,8 @@ export default function PublicProfilePage() {
         {/* Not found */}
         {notFound && (
           <div className="text-center py-24">
-            <p className="text-white/30 text-lg mb-2">User not found</p>
-            <p className="text-white/20 text-sm">@{name} doesn't exist or has no public activity.</p>
+            <p className="text-white/30 text-lg mb-2">Public profile not found</p>
+            <p className="text-white/20 text-sm">@{name} doesn&apos;t exist or has no public activity.</p>
           </div>
         )}
 
@@ -123,6 +110,8 @@ export default function PublicProfilePage() {
               <div className="flex items-start gap-4">
                 {/* Avatar */}
                 {profile.avatarUrl ? (
+                  // User avatars are stored as compressed data URLs.
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={profile.avatarUrl}
                     alt={profile.name}
@@ -141,29 +130,15 @@ export default function PublicProfilePage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
                     <h1 className="text-xl font-bold text-white">@{profile.name}</h1>
-                    {profile.plan !== 'free' && (
-                      <span
-                        className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
-                        style={{
-                          color: PLAN_BADGE[profile.plan]?.color,
-                          background: PLAN_BADGE[profile.plan]?.bg,
-                          borderColor: PLAN_BADGE[profile.plan]?.border,
-                        }}
-                      >
-                        {PLAN_BADGE[profile.plan]?.label}
-                      </span>
-                    )}
                   </div>
 
                   {profile.bio && (
                     <p className="text-sm text-white/50 leading-relaxed mb-2">{profile.bio}</p>
                   )}
 
-                  <div className="flex items-center gap-3 text-xs text-white/30">
-                    <span>Joined {joinDate(profile.createdAt)}</span>
-                    <span className="text-white/15">·</span>
-                    <span>{profile.scans.length} public scan{profile.scans.length !== 1 ? 's' : ''}</span>
-                  </div>
+                  <p className="text-xs text-white/30">
+                    {profile.scans.length} public scan{profile.scans.length !== 1 ? 's' : ''}
+                  </p>
                 </div>
               </div>
             </div>
@@ -172,77 +147,68 @@ export default function PublicProfilePage() {
             <div>
               <p className="text-[11px] font-bold text-white/35 uppercase tracking-widest mb-3">Public Scans</p>
 
-              {profile.scans.length === 0 ? (
-                <div
-                  className="rounded-xl border p-8 text-center"
-                  style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}
-                >
-                  <p className="text-white/25 text-sm">No public scans yet.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {profile.scans.map(scan => (
-                    <Link
-                      key={scan.id}
-                      href={`/result/${scan.id}`}
-                      className="block rounded-xl border transition-all hover:border-white/15"
-                      style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}
-                    >
-                      <div className="p-4">
-                        <div className="flex items-start justify-between gap-3 mb-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-white/80 truncate">{hostname(scan.url)}</p>
-                            <p className="text-xs text-white/30 mt-0.5">{timeAgo(scan.createdAt)}</p>
-                          </div>
-                          <span
-                            className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
-                            style={{ color: RISK_COLOR[scan.riskLevel] ?? '#fff', background: `${RISK_COLOR[scan.riskLevel] ?? '#fff'}15` }}
-                          >
-                            {scan.riskLevel} Risk
+              <div className="space-y-3">
+                {profile.scans.map(scan => (
+                  <Link
+                    key={scan.id}
+                    href={`/result/${scan.id}`}
+                    className="block rounded-xl border transition-all hover:border-white/15"
+                    style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}
+                  >
+                    <div className="p-4">
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-white/80 truncate">{hostname(scan.url)}</p>
+                          <p className="text-xs text-white/30 mt-0.5">{timeAgo(scan.createdAt)}</p>
+                        </div>
+                        <span
+                          className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
+                          style={{ color: RISK_COLOR[headerRiskBand(scan.riskLevel)] ?? '#fff', background: `${RISK_COLOR[headerRiskBand(scan.riskLevel)] ?? '#fff'}15` }}
+                        >
+                          {headerRiskBand(scan.riskLevel)} header gaps
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-4">
+                        {/* Vibe score */}
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full" style={{ background: vibeColor(scan.vibeScore) }} />
+                          <span className="text-xs text-white/40">Evidence</span>
+                          <span className="text-xs font-bold" style={{ color: vibeColor(scan.vibeScore) }}>
+                            {scan.vibeScore}
                           </span>
                         </div>
-
-                        <div className="flex items-center gap-4">
-                          {/* Vibe score */}
-                          <div className="flex items-center gap-1.5">
-                            <div className="w-1.5 h-1.5 rounded-full" style={{ background: vibeColor(scan.vibeScore) }} />
-                            <span className="text-xs text-white/40">Vibe</span>
-                            <span className="text-xs font-bold" style={{ color: vibeColor(scan.vibeScore) }}>
-                              {scan.vibeScore}
-                            </span>
-                          </div>
-                          <div className="w-px h-3 bg-white/10" />
-                          {/* Security score */}
-                          <div className="flex items-center gap-1.5">
-                            <div className="w-1.5 h-1.5 rounded-full" style={{ background: secColor(scan.securityScore) }} />
-                            <span className="text-xs text-white/40">Security</span>
-                            <span className="text-xs font-bold" style={{ color: secColor(scan.securityScore) }}>
-                              {scan.securityScore}
-                            </span>
-                          </div>
-                          {/* Tech stack */}
-                          {scan.techStack.length > 0 && (
-                            <>
-                              <div className="w-px h-3 bg-white/10" />
-                              <div className="flex gap-1 flex-wrap">
-                                {scan.techStack.map(t => (
-                                  <span
-                                    key={t}
-                                    className="text-[10px] px-1.5 py-0.5 rounded-md"
-                                    style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)' }}
-                                  >
-                                    {t}
-                                  </span>
-                                ))}
-                              </div>
-                            </>
-                          )}
+                        <div className="w-px h-3 bg-white/10" />
+                        {/* Security score */}
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full" style={{ background: secColor(scan.securityScore) }} />
+                          <span className="text-xs text-white/40">Headers</span>
+                          <span className="text-xs font-bold" style={{ color: secColor(scan.securityScore) }}>
+                            {scan.securityScore}
+                          </span>
                         </div>
+                        {/* Tech stack */}
+                        {scan.techStack.length > 0 && (
+                          <>
+                            <div className="w-px h-3 bg-white/10" />
+                            <div className="flex gap-1 flex-wrap">
+                              {scan.techStack.map(t => (
+                                <span
+                                  key={t}
+                                  className="text-[10px] px-1.5 py-0.5 rounded-md"
+                                  style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.4)' }}
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </div>
-                    </Link>
-                  ))}
-                </div>
-              )}
+                    </div>
+                  </Link>
+                ))}
+              </div>
             </div>
           </>
         )}

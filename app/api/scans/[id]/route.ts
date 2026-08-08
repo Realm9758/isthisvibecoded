@@ -24,7 +24,13 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/scans/[id]'>) {
     }
   }
 
-  return Response.json(scan);
+  return Response.json({
+    id: scan.id,
+    result: scan.result,
+    isPublic: scan.isPublic,
+    roasts: scan.roasts,
+    createdAt: scan.createdAt,
+  });
 }
 
 export async function PATCH(request: Request, ctx: RouteContext<'/api/scans/[id]'>) {
@@ -35,14 +41,13 @@ export async function PATCH(request: Request, ctx: RouteContext<'/api/scans/[id]
   const scan = await getScan(id);
   if (!scan) return Response.json({ error: 'Not found' }, { status: 404 });
 
-  if (scan.userId !== userId) {
-    return Response.json({ error: 'Forbidden' }, { status: 403 });
-  }
+  if (scan.userId !== userId) return Response.json({ error: 'Not found' }, { status: 404 });
 
   const { isPublic } = await request.json().catch(() => ({}));
-  if (typeof isPublic === 'boolean') {
-    await updateScan(id, { isPublic });
+  if (typeof isPublic !== 'boolean') {
+    return Response.json({ error: 'isPublic must be a boolean' }, { status: 400 });
   }
+  await updateScan(id, { isPublic });
 
-  return Response.json({ ok: true });
+  return Response.json({ ok: true, isPublic });
 }

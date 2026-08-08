@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
+import { getVisibleScan } from '@/lib/scan-access';
 
 async function getCurrentUserId(): Promise<string | null> {
   const cookieStore = await cookies();
@@ -19,11 +20,13 @@ export async function PATCH(request: Request, ctx: RouteContext) {
 
   const { data: comment } = await supabase
     .from('comments')
-    .select('user_id')
+    .select('user_id, scan_id')
     .eq('id', id)
     .maybeSingle();
 
-  if (!comment) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!comment || !await getVisibleScan(comment.scan_id)) {
+    return Response.json({ error: 'Not found' }, { status: 404 });
+  }
   if (comment.user_id !== currentUserId) return Response.json({ error: 'Forbidden' }, { status: 403 });
 
   let body: string;
@@ -55,13 +58,16 @@ export async function DELETE(_req: Request, ctx: RouteContext) {
 
   const { data: comment } = await supabase
     .from('comments')
-    .select('user_id')
+    .select('user_id, scan_id')
     .eq('id', id)
     .maybeSingle();
 
-  if (!comment) return Response.json({ error: 'Not found' }, { status: 404 });
+  if (!comment || !await getVisibleScan(comment.scan_id)) {
+    return Response.json({ error: 'Not found' }, { status: 404 });
+  }
   if (comment.user_id !== currentUserId) return Response.json({ error: 'Forbidden' }, { status: 403 });
 
-  await supabase.from('comments').delete().eq('id', id);
+  const { error } = await supabase.from('comments').delete().eq('id', id);
+  if (error) return Response.json({ error: 'Could not delete comment' }, { status: 503 });
   return Response.json({ ok: true });
 }

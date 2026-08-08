@@ -5,6 +5,15 @@ import type { VerificationToken } from '@/types/analysis';
 
 type Method = 'dns' | 'meta' | 'file';
 
+type VerificationResponse = VerificationToken & {
+  alreadyVerified?: boolean;
+  verificationExpired?: boolean;
+  verifiedAt?: number;
+  expiresAt?: number;
+  verificationMethod?: Method;
+  claimContest?: boolean;
+};
+
 interface Props {
   domain: string;
   onVerified?: () => void;
@@ -59,7 +68,7 @@ function DNSInstructions({ domain, token }: { domain: string; token: string }) {
       </div>
 
       <div className="space-y-3">
-        <Step n={1} text={<>Go to your domain registrar's DNS settings. Common providers: <span className="text-white/70">Cloudflare</span> (DNS tab), <span className="text-white/70">Namecheap</span> (Advanced DNS), <span className="text-white/70">GoDaddy</span> (DNS Management), <span className="text-white/70">Vercel</span> (Project → Domains → your domain).</>} />
+        <Step n={1} text={<>Go to your domain registrar&apos;s DNS settings. Common providers: <span className="text-white/70">Cloudflare</span> (DNS tab), <span className="text-white/70">Namecheap</span> (Advanced DNS), <span className="text-white/70">GoDaddy</span> (DNS Management), <span className="text-white/70">Vercel</span> (Project → Domains → your domain).</>} />
 
         <Step n={2} text={<>Add a new <span className="font-mono text-white/70 bg-white/5 px-1 rounded">TXT</span> record with these exact values:</>} />
 
@@ -82,9 +91,8 @@ function DNSInstructions({ domain, token }: { domain: string; token: string }) {
   );
 }
 
-function MetaInstructions({ domain, token }: { domain: string; token: string }) {
+function MetaInstructions({ token }: { token: string }) {
   const tag = `<meta name="vibecoded-verification" content="${token}" />`;
-  const nextConfig = `// next.config.js\nmodule.exports = {\n  async headers() {\n    return [{ source: '/', headers: [\n      { key: 'x-vibe-verify', value: '${token}' }\n    ]}]\n  }\n}`;
 
   return (
     <div className="space-y-4">
@@ -139,7 +147,7 @@ function FileInstructions({ domain, token }: { domain: string; token: string }) 
   return (
     <div className="space-y-4">
       <div className="p-3 rounded-lg bg-sky-500/8 border border-sky-500/20 text-xs text-sky-300/80">
-        <strong>Works on all platforms.</strong> Best if you can't edit your HTML directly but can upload static files.
+        <strong>Works on all platforms.</strong> Best if you can&apos;t edit your HTML directly but can upload static files.
       </div>
 
       <div className="space-y-3">
@@ -149,7 +157,7 @@ function FileInstructions({ domain, token }: { domain: string; token: string }) 
           <CodeBlock label="File contents (exact)" text={token} />
         </div>
 
-        <Step n={2} text={<>Upload it so it's accessible at this exact URL:</>} />
+        <Step n={2} text={<>Upload it so it&apos;s accessible at this exact URL:</>} />
 
         <div className="ml-8">
           <CodeBlock label="Required URL" text={fullUrl} />
@@ -186,16 +194,18 @@ function FileInstructions({ domain, token }: { domain: string; token: string }) 
 }
 
 export function OwnershipVerify({ domain, onVerified }: Props) {
-  const [token, setToken] = useState<VerificationToken | null>(null);
+  const [token, setToken] = useState<VerificationResponse | null>(null);
   const [method, setMethod] = useState<Method>('meta');
   const [status, setStatus] = useState<'idle' | 'generating' | 'checking' | 'verified' | 'failed'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const [claimContest, setClaimContest] = useState(false);
 
   async function generate() {
     setStatus('generating');
     setError(null);
+    setClaimContest(false);
     try {
       const res = await fetch('/api/verify', {
         method: 'POST',
@@ -204,13 +214,14 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to generate token');
-      if ((data as { alreadyVerified?: boolean }).alreadyVerified) {
+      const verification = data as VerificationResponse;
+      setToken(verification);
+      if (verification.verificationMethod) setMethod(verification.verificationMethod);
+      if (verification.alreadyVerified) {
         setStatus('verified');
-        onVerified?.();
         return;
       }
-      setClaimContest(!!(data as { claimContest?: boolean }).claimContest);
-      setToken(data);
+      setClaimContest(!!verification.claimContest);
       setStatus('idle');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to generate token');
@@ -226,9 +237,17 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
       const params = new URLSearchParams({ domain, token: token.token, method });
       const res = await fetch(`/api/verify?${params}`);
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Verification check failed');
       if (data.verified) {
+        setToken(current => current ? {
+          ...current,
+          alreadyVerified: true,
+          verificationExpired: false,
+          verifiedAt: data.verifiedAt,
+          expiresAt: data.expiresAt,
+          verificationMethod: data.method,
+        } : current);
         setStatus('verified');
-        onVerified?.();
       } else {
         setStatus('failed');
         setError(data.error ?? 'Verification record not found yet. Try again after adding it.');
@@ -239,15 +258,29 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
     }
   }
 
-  async function reset() {
-    await fetch('/api/verify', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain }),
-    });
-    setToken(null);
-    setStatus('idle');
+  async function removeVerification(requireConfirmation: boolean) {
+    if (requireConfirmation && !window.confirm(`Revoke verification for ${domain}? A new proof will be required before another deep scan.`)) {
+      return;
+    }
+
+    setRemoving(true);
     setError(null);
+    try {
+      const res = await fetch('/api/verify', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Could not remove verification');
+      setToken(null);
+      setClaimContest(false);
+      setStatus('idle');
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : 'Could not remove verification');
+    } finally {
+      setRemoving(false);
+    }
   }
 
   const METHODS: { id: Method; label: string; icon: string; best: string }[] = [
@@ -261,23 +294,45 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
       {/* Header */}
       <div className="px-5 py-4 border-b border-violet-500/15 flex items-center gap-2">
         <div className="w-2 h-2 rounded-full bg-violet-400" />
-        <h3 className="text-sm font-semibold text-violet-300">Verify Ownership of {domain}</h3>
+        <h3 className="text-sm font-semibold text-violet-300">Verify domain control for {domain}</h3>
       </div>
 
       <div className="p-5">
         {status === 'verified' ? (
-          <div className="flex items-center gap-4 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/25">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center text-xl shrink-0">✓</div>
-            <div>
-              <p className="font-bold text-emerald-300">Domain Verified!</p>
-              <p className="text-xs text-white/50 mt-0.5">You have confirmed ownership of <span className="font-mono">{domain}</span>.</p>
+          <div className="space-y-3">
+            <div className="flex items-center gap-4 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/25">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center text-xl shrink-0">✓</div>
+              <div>
+                <p className="font-bold text-emerald-300">Domain control verified</p>
+                <p className="text-xs text-white/50 mt-0.5">
+                  A current control proof exists for <span className="font-mono">{domain}</span>. It expires after 30 days.
+                </p>
+              </div>
+            </div>
+            {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => onVerified?.()}
+                className="px-5 py-2.5 text-sm font-bold rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-colors"
+              >
+                Continue to authorisation
+              </button>
+              <button
+                onClick={() => removeVerification(true)}
+                disabled={removing}
+                className="text-xs text-red-300/60 hover:text-red-300 transition-colors disabled:opacity-50"
+              >
+                {removing ? 'Revoking…' : 'Revoke verification'}
+              </button>
             </div>
           </div>
 
         ) : !token ? (
           <div className="space-y-4">
             <p className="text-sm text-white/50 leading-relaxed">
-              To run active security tests, you must prove you own <span className="font-mono text-white/70">{domain}</span>. This uses the same method as Google Search Console — only the real site owner can complete it.
+              To run active security tests, show that you can publish a unique token through a DNS or web channel for{' '}
+              <span className="font-mono text-white/70">{domain}</span>. Someone able to place the token can complete this check;
+              it does not prove legal ownership or authorisation to test the site.
             </p>
             <button
               onClick={generate}
@@ -291,11 +346,16 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
 
         ) : (
           <div className="space-y-5">
+            {token.verificationExpired && (
+              <div className="p-3 rounded-xl border border-amber-500/25 bg-amber-500/8 text-xs text-amber-300/85 leading-relaxed">
+                The previous control proof has expired. Place the token again and renew verification before scanning.
+              </div>
+            )}
             {/* Claim contest warning */}
             {claimContest && (
               <div className="p-3 rounded-xl border border-yellow-500/30 bg-yellow-500/8 text-xs text-yellow-300/90 leading-relaxed">
-                <p className="font-bold mb-0.5">This domain is claimed by another account.</p>
-                Place the verification token on the live site and click <span className="font-medium">Check Verification</span>. If you can prove control, your claim supersedes the existing one.
+                <p className="font-bold mb-0.5">Another account has a current control verification for this domain.</p>
+                Publish this token on the live site and click <span className="font-medium">Check Verification</span>. A successful check replaces the existing account&apos;s verification.
               </div>
             )}
             {/* Method tabs */}
@@ -320,7 +380,7 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
             {/* Instructions */}
             <div className="rounded-xl border border-white/8 bg-black/20 p-4">
               {method === 'dns'  && <DNSInstructions  domain={domain} token={token.token} />}
-              {method === 'meta' && <MetaInstructions domain={domain} token={token.token} />}
+              {method === 'meta' && <MetaInstructions token={token.token} />}
               {method === 'file' && <FileInstructions domain={domain} token={token.token} />}
             </div>
 
@@ -336,8 +396,12 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
                 )}
                 {status === 'checking' ? 'Checking…' : 'Check Verification'}
               </button>
-              <button onClick={reset} className="text-xs text-white/30 hover:text-white/60 transition-colors">
-                Reset token
+              <button
+                onClick={() => removeVerification(false)}
+                disabled={removing}
+                className="text-xs text-white/30 hover:text-white/60 transition-colors disabled:opacity-50"
+              >
+                {removing ? 'Removing…' : 'Reset token'}
               </button>
             </div>
 

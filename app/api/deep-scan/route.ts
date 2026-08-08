@@ -2,15 +2,12 @@ import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { deepScanDomain, SCAN_PHASES } from '@/lib/deep-scanner';
+import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
+import { DEEP_SCAN_TERMS_VERSION, VERIFICATION_MAX_AGE_MS } from '@/lib/policy';
 import type { DeepFinding } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
 export const maxDuration = 55;
-
-function getDomain(url: string): string {
-  const normalized = url.startsWith('http') ? url : `https://${url}`;
-  return new URL(normalized).hostname;
-}
 
 function sse(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -26,56 +23,100 @@ export async function POST(request: Request) {
   }
 
   let domain: string;
+  let authorizationAcceptedAt: number;
   try {
     const body = await request.json();
-    domain = getDomain((body?.domain ?? '').trim());
-  } catch {
-    return Response.json({ error: 'Invalid request body' }, { status: 400 });
-  }
-
-  if (!domain) return Response.json({ error: 'Domain is required' }, { status: 400 });
-
-  if (
-    domain === 'localhost' || domain === '127.0.0.1' ||
-    domain.startsWith('192.168.') || domain.startsWith('10.') || domain.endsWith('.local')
-  ) {
-    return Response.json({ error: 'Private/local domains are not allowed' }, { status: 400 });
+    if (typeof body?.domain !== 'string' || !body.domain.trim()) {
+      return Response.json({ error: 'Domain is required' }, { status: 400 });
+    }
+    if (body.authorizationAccepted !== true) {
+      return Response.json(
+        { error: 'Explicit authorisation confirmation is required before active testing.' },
+        { status: 403 },
+      );
+    }
+    if (body.termsVersion !== DEEP_SCAN_TERMS_VERSION) {
+      return Response.json(
+        {
+          error: 'The active-scan terms have changed. Review and accept the current terms before continuing.',
+          currentTermsVersion: DEEP_SCAN_TERMS_VERSION,
+        },
+        { status: 409 },
+      );
+    }
+    authorizationAcceptedAt = Date.now();
+    const target = normalizePublicUrl(body.domain);
+    await assertPublicTarget(target);
+    domain = target.hostname.toLowerCase();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Invalid request body';
+    return Response.json({ error: message }, { status: 400 });
   }
 
   // Deep scan limit for free users
-  const { data: userRow } = await supabase.from('users').select('plan').eq('id', payload.userId).maybeSingle();
-  if (!userRow || userRow.plan === 'free') {
-    const { count } = await supabase
-      .from('deep_scans')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', payload.userId);
-    if ((count ?? 0) >= 2) {
-      return Response.json(
-        { error: 'Free plan limit reached. Upgrade to Pro for unlimited deep scans.' },
-        { status: 403 }
-      );
-    }
+  const { data: userRow, error: userError } = await supabase
+    .from('users')
+    .select('plan')
+    .eq('id', payload.userId)
+    .maybeSingle();
+  if (userError) {
+    return Response.json({ error: 'Could not verify account plan' }, { status: 503 });
   }
-
   // Ownership check — must be verified by THIS user
-  const { data: verif } = await supabase
+  const { data: verif, error: verificationError } = await supabase
     .from('verification_tokens')
-    .select('token, verified')
+    .select('verified, verified_at')
     .eq('domain', domain)
     .eq('user_id', payload.userId)
     .maybeSingle();
 
-  if (!verif || !verif.verified) {
+  if (verificationError) {
+    return Response.json({ error: 'Could not verify domain control' }, { status: 503 });
+  }
+
+  const verifiedAt = Number(verif?.verified_at);
+  const verificationAge = Date.now() - verifiedAt;
+  const verificationIsCurrent = verif?.verified === true
+    && Number.isFinite(verifiedAt)
+    && verifiedAt > 0
+    && verificationAge >= 0
+    && verificationAge <= VERIFICATION_MAX_AGE_MS;
+
+  if (!verificationIsCurrent) {
     return Response.json(
-      { error: 'Domain ownership not verified. Complete verification in your dashboard first.' },
+      {
+        error: verif?.verified
+          ? 'Domain verification has expired. Renew the control proof before running another active scan.'
+          : 'Domain control is not verified. Complete verification in your dashboard first.',
+        verificationExpired: verif?.verified === true,
+      },
       { status: 403 }
     );
+  }
+
+  let deepQuotaKey: string | null = null;
+  if (!userRow || userRow.plan === 'free') {
+    deepQuotaKey = `deep:${payload.userId}:lifetime`;
+    const { data: remaining, error: countError } = await supabase.rpc('consume_usage', {
+      usage_key: deepQuotaKey,
+      usage_limit: 2,
+    });
+    if (countError) {
+      return Response.json({ error: 'Could not reserve deep scan allowance' }, { status: 503 });
+    }
+    if (Number(remaining) < 0) {
+      return Response.json(
+        { error: 'Free plan limit reached. Upgrade to Pro for unlimited deep scans.' },
+        { status: 403 },
+      );
+    }
   }
 
   // Stream SSE
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
+      let persisted = false;
       function emit(event: string, data: unknown) {
         controller.enqueue(encoder.encode(sse(event, data)));
       }
@@ -83,25 +124,46 @@ export async function POST(request: Request) {
       try {
         emit('phases', SCAN_PHASES);
 
-        const result = await deepScanDomain(domain, (phase, findings: DeepFinding[]) => {
-          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings });
+        const result = await deepScanDomain(domain, (phase, findings: DeepFinding[], status) => {
+          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings, status });
         });
 
         // Persist to DB
         const scanId = crypto.randomUUID();
-        await supabase.from('deep_scans').insert({
+        const { error: insertError } = await supabase.from('deep_scans').insert({
           id: scanId,
           domain,
           user_id: payload.userId,
+          authorization_terms_version: DEEP_SCAN_TERMS_VERSION,
+          authorization_accepted_at: authorizationAcceptedAt,
           result,
           created_at: Date.now(),
         });
+        if (insertError) {
+          throw new Error('Scan completed but the result could not be saved. Please try again.');
+        }
+        persisted = true;
 
         emit('result', { ...result, scanId });
       } catch (err) {
-        emit('error', { error: err instanceof Error ? err.message : 'Scan failed' });
+        let errorMessage = err instanceof Error ? err.message : 'Scan failed';
+        if (deepQuotaKey && !persisted) {
+          try {
+            const { error: refundError } = await supabase.rpc('refund_usage', { usage_key: deepQuotaKey });
+            if (refundError) {
+              errorMessage += ' The reserved scan allowance could not be restored; please contact support.';
+            }
+          } catch {
+            errorMessage += ' The reserved scan allowance could not be restored; please contact support.';
+          }
+        }
+        try {
+          emit('error', { error: errorMessage });
+        } catch {
+          // The client may have disconnected after the result was persisted.
+        }
       } finally {
-        controller.close();
+        try { controller.close(); } catch { /* already cancelled */ }
       }
     },
   });

@@ -1,18 +1,13 @@
 import { cookies } from 'next/headers';
 import { analyzeUrl } from '@/lib/analyzer';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
-import { getUserById, getDailyCount, incrementUsage, saveScan, getRemainingScans } from '@/lib/store';
+import { consumeUsage, getDailyCount, getUserById, refundUsage, saveScan } from '@/lib/store';
 import { generateRoasts } from '@/lib/roast';
 import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
+import { getAnonymousRateLimitKey } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
-
-function getClientIp(request: Request): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-    ?? request.headers.get('x-real-ip')
-    ?? 'anonymous';
-}
 
 export async function POST(request: Request) {
   let url: string;
@@ -39,13 +34,22 @@ export async function POST(request: Request) {
   const payload = token ? await verifyToken(token) : null;
 
   // Rate limiting
-  const limitKey = payload ? payload.userId : getClientIp(request);
+  const limitKey = payload ? `user:${payload.userId}` : getAnonymousRateLimitKey(request);
+  if (!limitKey) {
+    return Response.json(
+      { error: 'Anonymous scanning is unavailable until the server rate-limit secret is configured.' },
+      { status: 503 },
+    );
+  }
   const user = payload ? await getUserById(payload.userId) : null;
   const plan = user?.plan ?? 'free';
+  let quotaReserved = false;
+  let scansRemaining: number | null = null;
 
   if (plan === 'free') {
-    const used = await getDailyCount(limitKey);
-    if (used >= 5) {
+    scansRemaining = await consumeUsage(limitKey, 5);
+    if (scansRemaining < 0) {
+      const used = await getDailyCount(limitKey);
       return Response.json({
         error: 'Daily scan limit reached (5/day on free tier). Upgrade to Pro for unlimited scans.',
         limitReached: true,
@@ -53,37 +57,62 @@ export async function POST(request: Request) {
         scansLimit: 5,
       }, { status: 429 });
     }
+    quotaReserved = true;
   }
-
-  await incrementUsage(limitKey);
 
   try {
     const result = await analyzeUrl(parsed.href);
     const roasts = generateRoasts(result);
 
-    const scan = await saveScan({
+    // Anonymous scans are returned to the browser but are not persisted. Signed-in
+    // scans are private until their owner explicitly publishes them.
+    const scan = payload ? await saveScan({
       result,
-      userId: payload?.userId,
-      isPublic: true,
+      userId: payload.userId,
+      isPublic: false,
       roasts,
-    });
-
-    const remaining = plan === 'free' ? await getRemainingScans(limitKey, 'free') : null;
+    }) : null;
 
     return Response.json({
       ...result,
-      scanId: scan.id,
+      scanId: scan?.id,
+      isPublic: false,
+      canPublish: !!scan,
       roasts,
-      scansRemaining: remaining,
+      scansRemaining,
     });
   } catch (err) {
+    let refundFailed = false;
+    if (quotaReserved) {
+      try {
+        await refundUsage(limitKey);
+      } catch {
+        refundFailed = true;
+      }
+    }
     const message = err instanceof Error ? err.message : 'Unknown error';
+    let status = 500;
+    let error = `Analysis failed: ${message}`;
     if (message.includes('ENOTFOUND') || message.includes('fetch')) {
-      return Response.json({ error: `Could not reach the website: ${message}` }, { status: 422 });
+      status = 422;
+      error = `Could not reach the website: ${message}`;
+    } else if (message.includes('timeout') || message.includes('AbortError')) {
+      status = 408;
+      error = 'Website took too long to respond (>10s)';
+    } else if (
+      message.includes('returned HTTP')
+      || message.includes('Unsupported content type')
+      || message.includes('enough HTML')
+      || message.includes('bot-protection')
+      || message.includes('too large')
+    ) {
+      status = 422;
+      error = message;
     }
-    if (message.includes('timeout') || message.includes('AbortError')) {
-      return Response.json({ error: 'Website took too long to respond (>10s)' }, { status: 408 });
+    if (refundFailed) {
+      status = 503;
+      error += ' The reserved scan allowance could not be restored automatically; contact the operator before retrying repeatedly.';
     }
-    return Response.json({ error: `Analysis failed: ${message}` }, { status: 500 });
+    return Response.json({ error }, { status });
   }
 }

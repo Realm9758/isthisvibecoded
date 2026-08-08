@@ -29,7 +29,10 @@ function sinceFromTime(time: string | null): number | undefined {
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const type = searchParams.get('type') ?? 'recent';
-  const limit = Math.min(50, Number(searchParams.get('limit') ?? 20));
+  const requestedLimit = Number(searchParams.get('limit') ?? 20);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(50, Math.floor(requestedLimit)))
+    : 20;
   const timeParam = searchParams.get('time');
   const since = sinceFromTime(timeParam);
   const timeFilter = (timeParam === 'today' || timeParam === 'week' ? timeParam : 'all') as 'today' | 'week' | 'all';
@@ -82,10 +85,22 @@ export async function GET(request: Request) {
   // Compute current ranks and domains
   const domains = scans.map(s => extractDomain(s.result.url));
 
+  // Persist today's ranking before calculating a streak so the current day is
+  // represented. Failure only suppresses history metadata; it does not hide the feed.
+  await saveRankSnapshot(
+    scans.map((s, i) => ({
+      domain: extractDomain(s.result.url),
+      rank: i + 1,
+      score: category === 'vibe' ? s.result.vibe.score : s.result.security.score,
+    })),
+    category,
+    timeFilter,
+  ).catch(() => undefined);
+
   // Fetch yesterday's ranks + #1 streak for top entry in parallel
   const [yesterdayRanks, topStreak] = await Promise.all([
     getRankDeltas(domains, category, timeFilter),
-    domains[0] ? getTopRankStreak(domains[0]) : Promise.resolve(0),
+    domains[0] ? getTopRankStreak(domains[0], category, timeFilter) : Promise.resolve(0),
   ]);
 
   // Build response with rank deltas
@@ -114,17 +129,6 @@ export async function GET(request: Request) {
       score,
     };
   });
-
-  // Save today's snapshot in the background — don't block the response
-  saveRankSnapshot(
-    scans.map((s, i) => ({
-      domain: extractDomain(s.result.url),
-      rank: i + 1,
-      score: category === 'vibe' ? s.result.vibe.score : s.result.security.score,
-    })),
-    category,
-    timeFilter,
-  ).catch(() => {});
 
   return Response.json(formatted);
 }

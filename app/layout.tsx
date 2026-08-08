@@ -11,13 +11,13 @@ const BASE = 'https://isthisvibecoded-one.vercel.app';
 
 export const metadata: Metadata = {
   title: 'Is This Vibe-Coded?',
-  description: 'Detect AI-generated websites, audit security headers, and identify tech stacks — instantly.',
+  description: 'Inspect public generative-builder provenance evidence, response-header hardening, and visible tech signals — without claiming how the code was written.',
   alternates: { canonical: BASE },
   openGraph: {
     type: 'website',
     url: BASE,
     title: 'Is This Vibe-Coded?',
-    description: 'Detect AI-generated websites, audit security headers, and identify tech stacks — instantly.',
+    description: 'Inspect public generative-builder provenance evidence, response-header hardening, and visible tech signals — without claiming how the code was written.',
     images: [{ url: `${BASE}/og/default.png` }],
   },
   twitter: { card: 'summary_large_image' },

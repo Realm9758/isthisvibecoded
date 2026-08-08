@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
-import { updateUser, type User } from '@/lib/store';
+import { StoreError, updateUser, type User } from '@/lib/store';
+import { isValidDisplayHandle } from '@/lib/policy';
 
 export async function PATCH(request: Request) {
   const cookieStore = await cookies();
@@ -25,8 +26,11 @@ export async function PATCH(request: Request) {
     return Response.json({ error: 'Invalid body' }, { status: 400 });
   }
 
-  if (name !== undefined && (name.length < 1 || name.length > 40)) {
-    return Response.json({ error: 'Name must be 1–40 characters' }, { status: 400 });
+  if (name !== undefined && !isValidDisplayHandle(name)) {
+    return Response.json(
+      { error: 'Handle must use 1–40 letters, numbers, dots, underscores, or hyphens and start with a letter or number' },
+      { status: 400 },
+    );
   }
 
   const patch: Record<string, unknown> = {};
@@ -40,7 +44,15 @@ export async function PATCH(request: Request) {
     return Response.json({ error: 'Nothing to update' }, { status: 400 });
   }
 
-  const updated = await updateUser(payload.userId, patch as Partial<User>);
+  let updated;
+  try {
+    updated = await updateUser(payload.userId, patch as Partial<User>);
+  } catch (error) {
+    if (error instanceof StoreError && error.code === '23505') {
+      return Response.json({ error: 'That public handle is already in use' }, { status: 409 });
+    }
+    return Response.json({ error: 'Could not update profile' }, { status: 503 });
+  }
   if (!updated) return Response.json({ error: 'User not found' }, { status: 404 });
 
   return Response.json({

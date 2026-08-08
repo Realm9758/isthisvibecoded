@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import { ACCOUNT_POLICY_VERSION } from '@/lib/policy';
 import type { Plan } from '@/lib/store';
 
 export interface AuthUser {
@@ -20,7 +21,12 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string, name?: string) => Promise<void>;
+  signup: (
+    email: string,
+    password: string,
+    name: string,
+    acceptedPolicyVersion: typeof ACCOUNT_POLICY_VERSION,
+  ) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -42,7 +48,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    refreshUser().finally(() => setLoading(false));
+    const timer = setTimeout(() => {
+      refreshUser().finally(() => setLoading(false));
+    }, 0);
+    return () => clearTimeout(timer);
   }, [refreshUser]);
 
   async function login(email: string, password: string) {
@@ -56,11 +65,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await refreshUser();
   }
 
-  async function signup(email: string, password: string, name?: string) {
+  async function signup(
+    email: string,
+    password: string,
+    name: string,
+    acceptedPolicyVersion: typeof ACCOUNT_POLICY_VERSION,
+  ) {
+    if (acceptedPolicyVersion !== ACCOUNT_POLICY_VERSION) {
+      throw new Error('Please accept the current account policy before signing up');
+    }
+
     const res = await fetch('/api/auth/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, name }),
+      body: JSON.stringify({ email, password, name, policyVersion: acceptedPolicyVersion }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? 'Signup failed');

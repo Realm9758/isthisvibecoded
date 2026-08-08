@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { OwnershipVerify } from '@/components/OwnershipVerify';
 import type { DeepScanResult, DeepFinding } from '@/types/deep-scan';
 import type { ScanPhase } from '@/lib/deep-scanner';
+import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
+import { ACCOUNT_POLICY_VERSION, DEEP_SCAN_TERMS_VERSION, isValidDisplayHandle } from '@/lib/policy';
 
 // The SSE result event includes scanId alongside the DeepScanResult fields
 type DeepScanResultWithId = DeepScanResult & { scanId?: string };
@@ -30,8 +31,8 @@ interface DeepScanEntry {
   created_at: number;
 }
 
-function vibeColor(s: number) { return s >= 70 ? '#8b5cf6' : s >= 30 ? '#f59e0b' : '#22c55e'; }
-function secColor(s: number)  { return s >= 70 ? '#22c55e' : s >= 40 ? '#f59e0b' : '#ef4444'; }
+const vibeColor = getVibeColor;
+const secColor = getSecurityColor;
 function domain(url: string)  { try { return new URL(url.startsWith('http') ? url : `https://${url}`).hostname; } catch { return url; } }
 function timeAgo(ms: number) {
   const s = Math.floor((Date.now() - ms) / 1000);
@@ -50,6 +51,7 @@ function AuthGate() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [policyAccepted, setPolicyAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { login, signup } = useAuth();
@@ -60,7 +62,15 @@ function AuthGate() {
     setLoading(true);
     try {
       if (mode === 'login') await login(email, password);
-      else await signup(email, password, name);
+      else {
+        const displayHandle = name.trim();
+        if (!displayHandle) throw new Error('A public display handle is required.');
+        if (!isValidDisplayHandle(displayHandle)) {
+          throw new Error('Use 1–40 letters, numbers, dots, underscores, or hyphens; start with a letter or number.');
+        }
+        if (!policyAccepted) throw new Error('Please accept the privacy and account policy to continue.');
+        await signup(email, password, displayHandle, ACCOUNT_POLICY_VERSION);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
@@ -95,17 +105,29 @@ function AuthGate() {
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'signup' && (
               <div>
-                <label className="block text-xs font-medium text-white/50 mb-1.5">Name</label>
+                <label className="block text-xs font-medium text-white/50 mb-1.5" htmlFor="dashboard-signup-handle">
+                  Public display handle
+                </label>
                 <input
+                  id="dashboard-signup-handle"
                   type="text"
                   value={name}
                   onChange={e => setName(e.target.value)}
-                  placeholder="Your name"
+                  required
+                  maxLength={40}
+                  pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
+                  title="Use letters, numbers, dots, underscores, or hyphens; start with a letter or number."
+                  autoComplete="username"
+                  aria-describedby="dashboard-handle-privacy-note"
+                  placeholder="your-handle"
                   className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/25 outline-none transition-all"
                   style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}
                   onFocus={e => (e.currentTarget.style.borderColor = 'rgba(239,68,68,0.4)')}
                   onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
                 />
+                <p id="dashboard-handle-privacy-note" className="text-[11px] text-white/30 leading-relaxed mt-1.5">
+                  Your handle is public when you comment or reply. Your public profile becomes discoverable only after you explicitly publish a scan.
+                </p>
               </div>
             )}
             <div>
@@ -138,6 +160,24 @@ function AuthGate() {
               />
             </div>
 
+            {mode === 'signup' && (
+              <label className="flex items-start gap-2.5 rounded-xl border border-white/8 bg-white/2 p-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={policyAccepted}
+                  onChange={event => setPolicyAccepted(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-red-500"
+                />
+                <span className="text-xs text-white/45 leading-relaxed">
+                  I agree to the{' '}
+                  <Link href="/privacy" className="text-red-300/80 underline hover:text-red-200">
+                    privacy and account policy
+                  </Link>
+                  . <span className="text-[10px] text-white/25">Version {ACCOUNT_POLICY_VERSION}</span>
+                </span>
+              </label>
+            )}
+
             {error && (
               <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20">
                 <p className="text-xs text-red-400">{error}</p>
@@ -146,7 +186,7 @@ function AuthGate() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (mode === 'signup' && !policyAccepted)}
               className="w-full py-3 rounded-xl text-sm font-semibold text-white transition-all disabled:opacity-50"
               style={{
                 background: loading ? 'rgba(220,38,38,0.5)' : 'linear-gradient(135deg, #dc2626, #b91c1c)',
@@ -161,7 +201,11 @@ function AuthGate() {
         <p className="text-center text-sm text-white/30 mt-5">
           {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
           <button
-            onClick={() => { setMode(m => m === 'login' ? 'signup' : 'login'); setError(''); }}
+            onClick={() => {
+              setMode(m => m === 'login' ? 'signup' : 'login');
+              setPolicyAccepted(false);
+              setError('');
+            }}
             className="text-red-400 hover:text-red-300 transition-colors font-medium"
           >
             {mode === 'login' ? 'Sign up free →' : 'Sign in →'}
@@ -246,7 +290,7 @@ function FindingCard({ f }: { f: DeepFinding }) {
 }
 
 const GRADE = (s: number) => s >= 90 ? 'A' : s >= 75 ? 'B' : s >= 55 ? 'C' : s >= 35 ? 'D' : 'F';
-const GRADE_COLOR = (g: string) => g === 'A' ? '#22c55e' : g === 'B' ? '#84cc16' : g === 'C' ? '#f59e0b' : g === 'D' ? '#f97316' : '#ef4444';
+const GRADE_COLOR = (g: string) => g === '—' ? '#94a3b8' : g === 'A' ? '#22c55e' : g === 'B' ? '#84cc16' : g === 'C' ? '#f59e0b' : g === 'D' ? '#f97316' : '#ef4444';
 
 function CheckRow({ item }: { item: { id: string; label: string; description: string; status: string; detail: string } }) {
   const [open, setOpen] = useState(false);
@@ -275,7 +319,7 @@ function CheckRow({ item }: { item: { id: string; label: string; description: st
         </svg>
       </div>
       {open && (
-        <div className="mt-2 pt-2 border-t border-white/5 text-xs text-white/45 leading-relaxed" style={{ color: item.status === 'pass' ? '#4ade80cc' : item.status === 'warn' ? '#fbbf24cc' : '#f87171cc' }}>
+        <div className="mt-2 pt-2 border-t border-white/5 text-xs text-white/45 leading-relaxed" style={{ color: item.status === 'pass' ? '#4ade80cc' : item.status === 'warn' ? '#fbbf24cc' : item.status === 'fail' ? '#f87171cc' : '#94a3b8cc' }}>
           {item.detail}
         </div>
       )}
@@ -307,9 +351,9 @@ function buildFixPrompt(tool: AiTool, result: DeepScanResult): string {
     `[${f.severity.toUpperCase()}] ${f.title}\n  Issue: ${f.description}\n  Fix: ${f.remediation}`
   ).join('\n\n');
 
-  const scoreBlurb = `Security score: ${summary.score}/100 · ${summary.critical} critical · ${summary.high} high · ${summary.medium} medium`;
+  const scoreBlurb = `${summary.score === null ? 'No score: request coverage was incomplete' : `Experimental risk index: ${summary.score}/100`} · ${summary.critical} critical · ${summary.high} high · ${summary.medium} medium`;
 
-  const shared = `I ran a security audit on ${domain} and found ${actionable.length} issues that need fixing.\n\n${scoreBlurb}\n\n--- Vulnerabilities ---\n\n${findingLines || 'No critical/high issues — but medium/low findings need attention.'}`;
+  const shared = `An experimental black-box scan of ${domain} reported ${actionable.length} potential finding${actionable.length === 1 ? '' : 's'}. Validate each observation and its application context before changing code.\n\n${scoreBlurb}\n\n--- Potential findings ---\n\n${findingLines || 'No actionable findings were reported by the selected checks.'}`;
 
   const suffix: Record<AiTool, string> = {
     cursor: `\n\n---\nPlease go through each issue one by one. For each:\n1. Identify the affected file(s) in the codebase\n2. Show me the exact code change needed\n3. Explain why the fix works\n\nStart with the critical issues first.`,
@@ -406,14 +450,15 @@ function DeepScanPromptSection({ result }: { result: DeepScanResult }) {
 function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWithId; domain: string; onReset: () => void }) {
   const [tab, setTab] = useState<'findings' | 'checked'>('findings');
   const { summary, findings, checked } = result;
-  const grade = GRADE(summary.score);
+  const scoreAvailable = summary.score !== null && result.coverage?.complete === true;
+  const grade = scoreAvailable ? GRADE(summary.score as number) : '—';
   const gradeColor = GRADE_COLOR(grade);
   const order: DeepFinding['severity'][] = ['critical', 'high', 'medium', 'low', 'info'];
   const sorted = [...findings].sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
   const passCount = checked?.filter(c => c.status === 'pass').length ?? 0;
   const failCount = checked?.filter(c => c.status === 'fail').length ?? 0;
   const warnCount = checked?.filter(c => c.status === 'warn').length ?? 0;
-  const isCertified = failCount === 0;
+  const unknownCount = checked?.filter(c => c.status === 'skip').length ?? 0;
 
   return (
     <div className="space-y-5">
@@ -438,8 +483,13 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
                 )
               )}
               {findings.length === 0 && (
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full text-emerald-400 bg-emerald-500/10 border border-emerald-500/20">
-                  No vulnerabilities found
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full text-slate-300 bg-slate-500/10 border border-slate-500/20">
+                  No confirmed findings
+                </span>
+              )}
+              {!scoreAvailable && (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full text-amber-300 bg-amber-500/10 border border-amber-500/20">
+                  Incomplete coverage
                 </span>
               )}
             </div>
@@ -452,15 +502,15 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
             >
               <span className="text-3xl font-black" style={{ color: gradeColor }}>{grade}</span>
             </div>
-            <p className="text-xs text-white/30 mt-1">{summary.score}/100</p>
+            <p className="text-xs text-white/30 mt-1">{scoreAvailable ? `${summary.score}/100` : 'score withheld'}</p>
           </div>
         </div>
 
         {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-white/5">
+        <div className="grid grid-cols-4 gap-3 mt-4 pt-4 border-t border-white/5">
           <div className="text-center">
             <p className="text-lg font-bold text-emerald-400">{passCount}</p>
-            <p className="text-[10px] text-white/30 uppercase tracking-wider">Passed</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">No finding</p>
           </div>
           <div className="text-center">
             <p className="text-lg font-bold text-amber-400">{warnCount}</p>
@@ -469,6 +519,10 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
           <div className="text-center">
             <p className="text-lg font-bold text-red-400">{failCount}</p>
             <p className="text-[10px] text-white/30 uppercase tracking-wider">Failed</p>
+          </div>
+          <div className="text-center">
+            <p className="text-lg font-bold text-slate-400">{unknownCount}</p>
+            <p className="text-[10px] text-white/30 uppercase tracking-wider">Unknown</p>
           </div>
         </div>
       </div>
@@ -481,7 +535,7 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
           className="flex-1 py-2 rounded-lg text-xs font-semibold transition-all"
           style={{ background: tab === 'findings' ? 'rgba(239,68,68,0.15)' : 'transparent', color: tab === 'findings' ? '#f87171' : 'rgba(255,255,255,0.4)' }}
         >
-          {findings.length} Vulnerabilities
+          {findings.length} Findings
         </button>
         <button
           onClick={() => setTab('checked')}
@@ -496,10 +550,14 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
       {tab === 'findings' && (
         <div className="space-y-2">
           {sorted.length === 0 ? (
-            <div className="text-center py-10 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
+            <div className="text-center py-10 rounded-xl border border-slate-500/20 bg-slate-500/5">
               <p className="text-2xl mb-2">🛡</p>
-              <p className="text-sm font-semibold text-emerald-300">No vulnerabilities detected</p>
-              <p className="text-xs text-white/35 mt-1">All {checked?.length ?? 0} checks passed clean.</p>
+              <p className="text-sm font-semibold text-slate-300">No confirmed findings</p>
+              <p className="text-xs text-white/35 mt-1">
+                {scoreAvailable
+                  ? `None of the ${checked?.length ?? 0} selected checks matched a finding. This is not proof the site is vulnerability-free.`
+                  : `${result.coverage?.requestsFailed ?? 0} requests failed and ${result.coverage?.requestsBlocked ?? 0} were blocked, so no grade was produced.`}
+              </p>
             </div>
           ) : (
             sorted.map(f => <FindingCard key={f.id} f={f} />)
@@ -534,8 +592,9 @@ type PhaseState = {
   findingCount: number;
 };
 
-function TerminalScan({ domain, onResult, onError }: {
+function TerminalScan({ domain, authorizationAccepted, onResult, onError }: {
   domain: string;
+  authorizationAccepted: boolean;
   onResult: (r: DeepScanResultWithId) => void;
   onError: (e: string) => void;
 }) {
@@ -558,7 +617,11 @@ function TerminalScan({ domain, onResult, onError }: {
       const res = await fetch('/api/deep-scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain }),
+        body: JSON.stringify({
+          domain,
+          authorizationAccepted,
+          termsVersion: DEEP_SCAN_TERMS_VERSION,
+        }),
         signal: ctrl.signal,
       }).catch(() => null);
 
@@ -571,34 +634,35 @@ function TerminalScan({ domain, onResult, onError }: {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
+      let terminalEventReceived = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const events = buf.split('\n\n');
-        buf = events.pop() ?? '';
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const events = buf.split('\n\n');
+          buf = events.pop() ?? '';
 
-        for (const block of events) {
-          const lines = block.split('\n');
-          const eventLine = lines.find(l => l.startsWith('event:'));
-          const dataLine = lines.find(l => l.startsWith('data:'));
-          if (!eventLine || !dataLine) continue;
+          for (const block of events) {
+            const lines = block.split('\n');
+            const eventLine = lines.find(l => l.startsWith('event:'));
+            const dataLine = lines.find(l => l.startsWith('data:'));
+            if (!eventLine || !dataLine) continue;
 
-          const event = eventLine.replace('event:', '').trim();
-          const data = JSON.parse(dataLine.replace('data:', '').trim());
+            const event = eventLine.replace('event:', '').trim();
+            const data = JSON.parse(dataLine.replace('data:', '').trim());
 
-          if (event === 'phases') {
-            setPhases((data as ScanPhase[]).map(p => ({ phase: p, status: 'pending', findingCount: 0 })));
-          }
+            if (event === 'phases') {
+              setPhases((data as ScanPhase[]).map(p => ({ phase: p, status: 'pending', findingCount: 0 })));
+            }
 
-          if (event === 'phase') {
-            const { id, label, detail, findings } = data as ScanPhase & { findings: DeepFinding[] };
-            const isStart = findings.length === 0;
+            if (event === 'phase') {
+              const { id, label, detail, findings, status } = data as ScanPhase & { findings: DeepFinding[]; status: 'start' | 'complete' };
 
             setCurrentDetail(detail);
 
-            if (isStart) {
+            if (status === 'start') {
               addLog(`[>] ${label}: ${detail}`);
               setPhases(prev => prev.map(p =>
                 p.phase.id === id ? { ...p, status: 'running' } : p
@@ -608,28 +672,41 @@ function TerminalScan({ domain, onResult, onError }: {
               if (count > 0) {
                 addLog(`[!] ${label}: ${count} finding${count > 1 ? 's' : ''} — ${findings.map(f => f.severity.toUpperCase()).join(', ')}`);
               } else {
-                addLog(`[✓] ${label}: clean`);
+                addLog(`[✓] ${label}: no matching finding`);
               }
               setPhases(prev => prev.map(p =>
                 p.phase.id === id ? { ...p, status: count > 0 ? 'found' : 'done', findingCount: count } : p
               ));
             }
-          }
+            }
 
-          if (event === 'result') {
-            addLog(`[✓] Scan complete — ${(data as DeepScanResultWithId).findings.length} findings, score ${(data as DeepScanResultWithId).summary.score}/100`);
-            onResult(data as DeepScanResultWithId);
-          }
+            if (event === 'result') {
+              terminalEventReceived = true;
+              const completed = data as DeepScanResultWithId;
+              addLog(`[✓] Scan complete — ${completed.findings.length} findings, ${completed.summary.score === null ? 'score withheld (incomplete coverage)' : `index ${completed.summary.score}/100`}`);
+              onResult(completed);
+            }
 
-          if (event === 'error') {
-            onError(data.error ?? 'Scan failed');
+            if (event === 'error') {
+              terminalEventReceived = true;
+              onError(data.error ?? 'Scan failed');
+            }
           }
         }
+      } catch {
+        if (!ctrl.signal.aborted) {
+          terminalEventReceived = true;
+          onError('The scan stream was interrupted before a complete result was received.');
+        }
+      }
+
+      if (!terminalEventReceived && !ctrl.signal.aborted) {
+        onError('The scan ended without a complete result. No grade was produced.');
       }
     })();
 
     return () => ctrl.abort();
-  }, [domain, onResult, onError]);
+  }, [authorizationAccepted, domain, onResult, onError]);
 
   // Auto-scroll log
   useEffect(() => {
@@ -739,6 +816,7 @@ function DeepScanPanel() {
   const [urlError, setUrlError] = useState('');
   const [scanError, setScanError] = useState('');
   const [scanResult, setScanResult] = useState<DeepScanResultWithId | null>(null);
+  const [authorizationAccepted, setAuthorizationAccepted] = useState(false);
 
   function handleUrlSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -752,6 +830,7 @@ function DeepScanPanel() {
     }
     if (!d) { setUrlError('Enter a valid domain'); return; }
     setScanDomain(d);
+    setAuthorizationAccepted(false);
     setStep('verify');
   }
 
@@ -761,6 +840,7 @@ function DeepScanPanel() {
     setScanDomain('');
     setScanError('');
     setScanResult(null);
+    setAuthorizationAccepted(false);
   }
 
   return (
@@ -781,7 +861,7 @@ function DeepScanPanel() {
           </div>
           <div>
             <h2 className="text-sm font-bold text-white/85">Deep Vulnerability Scan</h2>
-            <p className="text-xs text-white/35 mt-0.5">Owner-verified · Active OWASP checks · Real-time</p>
+            <p className="text-xs text-white/35 mt-0.5">Verified domain control · Selected active checks · Experimental</p>
           </div>
         </div>
         <Link href="/vulnerability" className="text-xs text-white/30 hover:text-white/60 transition-colors hidden sm:block">
@@ -793,7 +873,7 @@ function DeepScanPanel() {
         {step === 'idle' && (
           <div className="text-center py-4">
             <p className="text-sm text-white/45 mb-5 max-w-sm mx-auto leading-relaxed">
-              Run an active OWASP Top 10 audit — SQL injection, exposed files, CORS, headers, admin paths, and more. Ownership verification required.
+              Run selected best-effort checks for reflection, exposed files, CORS, headers, and public paths. This is not a complete OWASP audit or penetration test.
             </p>
             <button
               onClick={() => setStep('enter-url')}
@@ -810,7 +890,7 @@ function DeepScanPanel() {
             <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-500/8 border border-amber-500/20 mb-5">
               <span className="text-amber-400 shrink-0">⚠</span>
               <p className="text-xs text-amber-300/80">
-                Only submit a website you own or have explicit written permission to test.
+                Only submit a website you are explicitly authorised to test.
               </p>
             </div>
             <form onSubmit={handleUrlSubmit} className="space-y-3">
@@ -835,7 +915,7 @@ function DeepScanPanel() {
                   className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition-all"
                   style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)', boxShadow: '0 0 16px rgba(220,38,38,0.2)' }}
                 >
-                  Continue to Verify Ownership
+                  Continue to Verify Domain Control
                 </button>
                 <button type="button" onClick={() => setStep('idle')} className="px-4 py-2.5 rounded-xl text-sm border border-white/8 text-white/40 hover:bg-white/5 transition-colors">
                   Cancel
@@ -850,11 +930,17 @@ function DeepScanPanel() {
             <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/8 border border-red-500/18">
               <span className="text-red-400 shrink-0 text-sm">🔐</span>
               <p className="text-xs text-red-300/80">
-                Proving ownership of <span className="font-mono font-semibold text-white/65">{scanDomain}</span>.
-                Only the legitimate site owner can complete this step.
+                Checking control of a publication channel for <span className="font-mono font-semibold text-white/65">{scanDomain}</span>.
+                Someone able to place the token can complete this step; it does not prove legal ownership or authorisation.
               </p>
             </div>
-            <OwnershipVerify domain={scanDomain} onVerified={() => setStep('confirmed')} />
+            <OwnershipVerify
+              domain={scanDomain}
+              onVerified={() => {
+                setAuthorizationAccepted(false);
+                setStep('confirmed');
+              }}
+            />
             <button onClick={() => setStep('enter-url')} className="text-xs text-white/25 hover:text-white/55 transition-colors">
               ← Change URL
             </button>
@@ -866,8 +952,8 @@ function DeepScanPanel() {
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/8 p-4 flex items-center gap-3">
               <span className="text-emerald-400 text-lg">✓</span>
               <div>
-                <p className="text-sm font-semibold text-emerald-300">Ownership verified for {scanDomain}</p>
-                <p className="text-xs text-white/40 mt-0.5">Ready to run a full active vulnerability audit.</p>
+                <p className="text-sm font-semibold text-emerald-300">Domain control verified for {scanDomain}</p>
+                <p className="text-xs text-white/40 mt-0.5">Ready to run the experimental set of active checks.</p>
               </div>
             </div>
             {scanError && (
@@ -875,10 +961,28 @@ function DeepScanPanel() {
                 <p className="text-xs text-red-400">{scanError}</p>
               </div>
             )}
+            <label className="flex items-start gap-3 rounded-xl border border-amber-500/20 bg-amber-500/6 p-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={authorizationAccepted}
+                onChange={event => setAuthorizationAccepted(event.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-red-500"
+              />
+              <span className="text-xs text-white/55 leading-relaxed">
+                I confirm that I am explicitly authorised to test <span className="font-mono text-white/75">{scanDomain}</span> and to run
+                the active requests described in the{' '}
+                <Link href="/vulnerability" className="text-amber-300/80 underline hover:text-amber-200">
+                  deep-scan terms
+                </Link>
+                . I authorise this specific scan. This confirmation is recorded with the result.
+                <span className="block mt-1 text-[10px] text-white/25">Terms version: {DEEP_SCAN_TERMS_VERSION}</span>
+              </span>
+            </label>
             <div className="flex gap-3">
               <button
                 onClick={() => { setScanError(''); setStep('scanning'); }}
-                className="flex-1 py-3 rounded-xl text-sm font-bold text-white transition-all"
+                disabled={!authorizationAccepted}
+                className="flex-1 py-3 rounded-xl text-sm font-bold text-white transition-all disabled:cursor-not-allowed disabled:opacity-40"
                 style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)', boxShadow: '0 0 20px rgba(220,38,38,0.25)' }}
               >
                 Run Deep Scan Now
@@ -893,8 +997,13 @@ function DeepScanPanel() {
         {step === 'scanning' && (
           <TerminalScan
             domain={scanDomain}
+            authorizationAccepted={authorizationAccepted}
             onResult={r => { setScanResult(r); setStep('results'); }}
-            onError={e => { setScanError(e); setStep('confirmed'); }}
+            onError={e => {
+              setAuthorizationAccepted(false);
+              setScanError(e);
+              setStep('confirmed');
+            }}
           />
         )}
 
@@ -910,7 +1019,8 @@ function DeepScanPanel() {
 
 function DeepScanHistoryCard({ entry }: { entry: DeepScanEntry }) {
   const { summary, findings } = entry.result;
-  const grade = GRADE(summary.score);
+  const scoreAvailable = summary.score !== null && entry.result.coverage?.complete === true;
+  const grade = scoreAvailable ? GRADE(summary.score as number) : '—';
   const gradeColor = GRADE_COLOR(grade);
   const criticalCount = summary.critical ?? 0;
   const highCount = summary.high ?? 0;
@@ -931,8 +1041,8 @@ function DeepScanHistoryCard({ entry }: { entry: DeepScanEntry }) {
             </span>
           )}
           {findings.length === 0 && (
-            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded text-emerald-400" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)' }}>
-              Clean
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded text-slate-300" style={{ background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.2)' }}>
+              No confirmed findings
             </span>
           )}
           <span className="text-[10px] text-white/25">{timeAgo(entry.created_at)}</span>
@@ -945,7 +1055,7 @@ function DeepScanHistoryCard({ entry }: { entry: DeepScanEntry }) {
         >
           <span className="text-lg font-black" style={{ color: gradeColor }}>{grade}</span>
         </div>
-        <p className="text-[10px] text-white/25 mt-0.5">{summary.score}/100</p>
+        <p className="text-[10px] text-white/25 mt-0.5">{scoreAvailable ? `${summary.score}/100` : 'withheld'}</p>
       </div>
     </div>
   );
@@ -978,11 +1088,11 @@ function ScanCard({ scan }: { scan: ScanSummary }) {
 
         <div className="flex items-center gap-3 shrink-0">
           <div className="text-right">
-            <p className="text-xs text-white/25 uppercase tracking-wider text-[9px]">AI</p>
+            <p className="text-xs text-white/25 uppercase tracking-wider text-[9px]">Evidence</p>
             <p className="text-sm font-bold" style={{ color: vc }}>{scan.result.vibe.score}</p>
           </div>
           <div className="text-right">
-            <p className="text-xs text-white/25 uppercase tracking-wider text-[9px]">Security</p>
+            <p className="text-xs text-white/25 uppercase tracking-wider text-[9px]">Headers</p>
             <p className="text-sm font-bold" style={{ color: sc }}>{scan.result.security.score}</p>
           </div>
           <svg className="w-4 h-4 text-white/20 group-hover:text-white/50 transition-colors shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -999,20 +1109,17 @@ function ScanCard({ scan }: { scan: ScanSummary }) {
 export default function DashboardPage() {
   const { user, loading } = useAuth();
   const [scans, setScans] = useState<ScanSummary[]>([]);
-  const [scansLoading, setScansLoading] = useState(false);
+  const [scansLoading, setScansLoading] = useState(true);
   const [deepScans, setDeepScans] = useState<DeepScanEntry[]>([]);
-  const [deepScansLoading, setDeepScansLoading] = useState(false);
-  const router = useRouter();
+  const [deepScansLoading, setDeepScansLoading] = useState(true);
 
   useEffect(() => {
     if (!user) return;
-    setScansLoading(true);
     fetch('/api/user/scans')
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setScans(data); })
       .finally(() => setScansLoading(false));
 
-    setDeepScansLoading(true);
     fetch('/api/user/deep-scans')
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setDeepScans(data); })
@@ -1106,7 +1213,7 @@ export default function DashboardPage() {
             >
               <div>
                 <p className="text-sm text-white/45 mb-0.5">No deep scans yet</p>
-                <p className="text-xs text-white/25">Run your first active OWASP audit from the panel above.</p>
+                <p className="text-xs text-white/25">Run your first experimental active check set from the panel above.</p>
               </div>
               <div
                 className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"

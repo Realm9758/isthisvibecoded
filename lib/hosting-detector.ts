@@ -43,7 +43,7 @@ const HOSTING_RULES: Array<{
   },
   {
     provider: 'GitHub Pages',
-    test: (html, headers) => {
+    test: (html) => {
       if (html.includes('.github.io')) return 'github.io domain in source';
       return null;
     },
@@ -57,7 +57,7 @@ const HOSTING_RULES: Array<{
   },
   {
     provider: 'Render',
-    test: (html, headers) => {
+    test: (html) => {
       if (html.includes('.onrender.com')) return 'onrender.com domain in source';
       return null;
     },
@@ -93,8 +93,6 @@ const HOSTING_RULES: Array<{
 ];
 
 export function detectHosting(html: string, headers: Record<string, string>, url?: string): HostingResult {
-  const indicators: string[] = [];
-
   // URL-based hostname matching (highest confidence)
   if (url) {
     try {

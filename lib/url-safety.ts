@@ -18,12 +18,21 @@ export function normalizePublicUrl(rawUrl: string): URL {
     throw new Error('Only standard web ports 80 and 443 are allowed');
   }
 
+  // Query strings frequently contain signed preview tokens, email addresses,
+  // and other identifiers. They are not needed for a public provenance scan
+  // and must never be persisted or published.
+  url.search = '';
   url.hash = '';
   return url;
 }
 
 export async function assertPublicTarget(url: URL): Promise<void> {
-  const host = url.hostname.toLowerCase();
+  // WHATWG URL retains brackets around IPv6 literals in some runtimes; DNS
+  // and node:net expect the address itself.
+  const hostname = url.hostname.toLowerCase();
+  const host = hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
 
   if (BLOCKED_HOSTS.has(host) || host.endsWith('.local') || host.endsWith('.internal')) {
     throw new Error('Private/local URLs are not allowed');
@@ -54,7 +63,9 @@ function isPrivateIp(address: string): boolean {
       normalized === '::' ||
       normalized.startsWith('fc') ||
       normalized.startsWith('fd') ||
-      normalized.startsWith('fe80:');
+      /^fe[89ab]/.test(normalized) ||
+      normalized.startsWith('ff') ||
+      normalized.startsWith('2001:db8:');
   }
 
   const parts = address.split('.').map(Number);
@@ -62,14 +73,17 @@ function isPrivateIp(address: string): boolean {
     return true;
   }
 
-  const [a, b] = parts;
+  const [a, b, c] = parts;
   return a === 0 ||
     a === 10 ||
     a === 127 ||
     (a === 100 && b >= 64 && b <= 127) ||
     (a === 169 && b === 254) ||
     (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 0 && (c === 0 || c === 2)) ||
     (a === 192 && b === 168) ||
+    (a === 198 && b === 51 && c === 100) ||
     (a === 198 && (b === 18 || b === 19)) ||
+    (a === 203 && b === 0 && c === 113) ||
     a >= 224;
 }

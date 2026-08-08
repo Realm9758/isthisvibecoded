@@ -1,16 +1,29 @@
-import { getScan } from '@/lib/store';
+import { getPublicScan } from '@/lib/scan-access';
+import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
+
+function escapeXml(value: unknown): string {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
 
 export async function GET(_req: Request, ctx: RouteContext<'/api/badge/[id]'>) {
   const { id } = await ctx.params;
-  const scan = await getScan(id);
+  const scan = await getPublicScan(id);
   if (!scan) return new Response('Not found', { status: 404 });
 
   const { vibe, security } = scan.result;
   const hostname = (() => { try { return new URL(scan.result.url).hostname; } catch { return scan.result.url; } })();
 
-  const vibeColor = vibe.score >= 70 ? '#8b5cf6' : vibe.score >= 30 ? '#f59e0b' : '#22c55e';
-  const secColor = security.score >= 70 ? '#22c55e' : security.score >= 40 ? '#f59e0b' : '#ef4444';
-  const label = vibe.label;
+  const vibeColor = getVibeColor(vibe.score);
+  const secColor = getSecurityColor(security.score);
+  const label = escapeXml(vibe.label);
+  const safeHostname = escapeXml(`${hostname.slice(0, 28)}${hostname.length > 28 ? '…' : ''}`);
+  const vibeScore = escapeXml(vibe.score);
+  const securityScore = escapeXml(security.score);
 
   const w = 260;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="72" viewBox="0 0 ${w} 72">
@@ -23,17 +36,17 @@ export async function GET(_req: Request, ctx: RouteContext<'/api/badge/[id]'>) {
   <rect width="${w}" height="72" rx="8" fill="url(#bg)" stroke="${vibeColor}" stroke-width="1.5" stroke-opacity="0.6"/>
   <rect x="0" y="0" width="6" height="72" rx="3" fill="${vibeColor}"/>
   <text x="18" y="20" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="${vibeColor}" font-weight="700" letter-spacing="1">VIBESCAN</text>
-  <text x="18" y="38" font-family="system-ui,-apple-system,sans-serif" font-size="13" fill="#ffffff" font-weight="600">${hostname.slice(0, 28)}${hostname.length > 28 ? '…' : ''}</text>
+  <text x="18" y="38" font-family="system-ui,-apple-system,sans-serif" font-size="13" fill="#ffffff" font-weight="600">${safeHostname}</text>
   <text x="18" y="55" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="${vibeColor}">${label}</text>
-  <text x="${w - 12}" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="#ffffff" font-weight="700" text-anchor="end">AI: ${vibe.score}</text>
-  <text x="${w - 12}" y="48" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="${secColor}" font-weight="700" text-anchor="end">S: ${security.score}</text>
+  <text x="${w - 12}" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="#ffffff" font-weight="700" text-anchor="end">E: ${vibeScore}</text>
+  <text x="${w - 12}" y="48" font-family="system-ui,-apple-system,sans-serif" font-size="11" fill="${secColor}" font-weight="700" text-anchor="end">H: ${securityScore}</text>
   <text x="${w - 12}" y="64" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#444466" text-anchor="end">isthisvibecoded.com</text>
 </svg>`;
 
   return new Response(svg, {
     headers: {
       'Content-Type': 'image/svg+xml',
-      'Cache-Control': 'public, max-age=3600',
+      'Cache-Control': 'no-store',
       'Access-Control-Allow-Origin': '*',
     },
   });

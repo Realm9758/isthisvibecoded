@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import type { AnalysisResult } from '@/types/analysis';
 import { Confetti } from './Confetti';
+import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 
 interface Props {
   result: AnalysisResult & { scanId?: string };
@@ -13,8 +14,8 @@ function buildSummary(result: AnalysisResult, domain: string): string {
   const tech = result.techStack.slice(0, 3).map(t => t.name).join(' + ');
   const techPart = tech ? ` Built with ${tech}.` : '';
   return (
-    `${domain} scored ${result.vibe.score}/100 for public AI-generation signals (${result.vibe.label}). ` +
-    `Security: ${result.security.score}/100 — ${result.security.riskLevel}.` +
+    `${domain} has a ${result.vibe.score}/100 public provenance evidence index (${result.vibe.label}; not a probability). ` +
+    `Header hardening: ${result.security.score}/100 — ${result.security.riskLevel}.` +
     `${techPart} Check yours at isthisvibecoded.com`
   );
 }
@@ -28,8 +29,8 @@ export function ShareModal({ result, onClose }: Props) {
   const domain = (() => { try { return new URL(result.url).hostname; } catch { return result.url; } })();
   const summary = buildSummary(result, domain);
 
-  const vibeColor = result.vibe.score >= 70 ? '#8b5cf6' : result.vibe.score >= 30 ? '#f59e0b' : '#22c55e';
-  const secColor = result.security.score >= 70 ? '#22c55e' : result.security.score >= 40 ? '#f59e0b' : '#ef4444';
+  const vibeColor = getVibeColor(result.vibe.score);
+  const secColor = getSecurityColor(result.security.score);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -71,7 +72,7 @@ export function ShareModal({ result, onClose }: Props) {
   const shareLink = encodeURIComponent(resultUrl);
   const twitterUrl = `https://x.com/intent/tweet?text=${tweetText}&url=${shareLink}`;
   const linkedinUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${shareLink}`;
-  const redditUrl = `https://reddit.com/submit?url=${shareLink}&title=${encodeURIComponent(`${domain} AI signal score: ${result.vibe.score}/100 — VibeScan Results`)}`;
+  const redditUrl = `https://reddit.com/submit?url=${shareLink}&title=${encodeURIComponent(`${domain} provenance evidence index: ${result.vibe.score}/100 — VibeScan Results`)}`;
 
   const tech = result.techStack.slice(0, 3).map(t => t.name);
 
@@ -132,21 +133,21 @@ export function ShareModal({ result, onClose }: Props) {
                   <p className="text-4xl font-black leading-none" style={{ color: vibeColor }}>
                     {result.vibe.score}
                   </p>
-                  <p className="text-[9px] text-white/35 mt-0.5 uppercase tracking-wide">AI signals</p>
+                  <p className="text-[9px] text-white/35 mt-0.5 uppercase tracking-wide">evidence index</p>
                 </div>
               </div>
 
               <div className="flex gap-2 mb-3">
                 <div className="flex-1 rounded-lg bg-white/5 border border-white/8 px-2.5 py-2">
-                  <p className="text-[9px] text-white/30 uppercase tracking-wider">Security</p>
+                  <p className="text-[9px] text-white/30 uppercase tracking-wider">Header index</p>
                   <p className="text-sm font-bold mt-0.5" style={{ color: secColor }}>
                     {result.security.score}<span className="text-xs font-normal text-white/20">/100</span>
                   </p>
                 </div>
                 <div className="flex-1 rounded-lg bg-white/5 border border-white/8 px-2.5 py-2">
-                  <p className="text-[9px] text-white/30 uppercase tracking-wider">Risk</p>
+                  <p className="text-[9px] text-white/30 uppercase tracking-wider">Header gaps</p>
                   <p className="text-sm font-bold mt-0.5 capitalize" style={{ color: secColor }}>
-                    {result.security.riskLevel}
+                    {result.security.riskLevel.replace(/\s+risk$/i, '')}
                   </p>
                 </div>
                 {tech.length > 0 && (
