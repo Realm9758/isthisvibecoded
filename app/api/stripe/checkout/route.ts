@@ -3,6 +3,10 @@ import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
 import { PLANS, type PlanId } from '@/lib/plans';
 import { getUserById, updateUser } from '@/lib/store';
+import {
+  selectEntitlingSubscription,
+  subscriptionBlocksNewCheckout,
+} from '@/lib/stripe-entitlements';
 
 export async function POST(request: Request) {
   if (!stripe) {
@@ -43,6 +47,34 @@ export async function POST(request: Request) {
     });
     customerId = customer.id;
     await updateUser(user.id, { stripeCustomerId: customerId });
+  }
+
+  // The database can lag behind Stripe when a webhook is delayed. Query the
+  // customer's current subscriptions before creating a Checkout Session so a
+  // completed or recoverable subscription cannot become a duplicate charge.
+  const currentSubscriptions = await stripe.subscriptions.list({
+    customer: customerId,
+    price: priceId,
+    status: 'all',
+    limit: 100,
+  }).autoPagingToArray({ limit: 500 });
+  const currentEntitlement = selectEntitlingSubscription(currentSubscriptions, priceId);
+  if (currentEntitlement) {
+    await updateUser(user.id, {
+      plan: 'pro',
+      stripeCustomerId: customerId,
+      stripeSubscriptionId: currentEntitlement.id,
+    });
+    return Response.json(
+      { error: 'An active subscription already exists. Your account has been reconciled.' },
+      { status: 409 },
+    );
+  }
+  if (currentSubscriptions.some(subscription => subscriptionBlocksNewCheckout(subscription, priceId))) {
+    return Response.json(
+      { error: 'An existing subscription needs attention. Manage it in billing before starting another.' },
+      { status: 409 },
+    );
   }
 
   const existingSessions = await stripe.checkout.sessions.list({

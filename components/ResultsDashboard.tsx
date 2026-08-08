@@ -365,9 +365,9 @@ function buildPassiveFindings(result: AnalysisResult): PassiveFinding[] {
   }
 
   const headerSeverityMap: Record<string, PassiveFinding['severity']> = {
-    'Content-Security-Policy': 'high',
-    'Strict-Transport-Security': 'medium',
-    'X-Frame-Options': 'medium',
+    'Content-Security-Policy': 'medium',
+    'Strict-Transport-Security': 'low',
+    'X-Frame-Options': 'low',
     'X-Content-Type-Options': 'low',
     'Referrer-Policy': 'low',
     'Permissions-Policy': 'info',
@@ -407,8 +407,8 @@ function buildPassiveFindings(result: AnalysisResult): PassiveFinding[] {
     '/.env': {
       title: 'Environment configuration exposed',
       severity: 'critical',
-      detail: 'Your .env file is publicly accessible. It likely contains database passwords, API secrets, JWT signing keys, and third-party service credentials — everything an attacker needs for full system compromise.',
-      fix: 'Block access immediately via your web server config. Rotate every secret in the file. Add .env to .gitignore and never commit it.',
+      detail: 'A public environment-shaped file contains at least one sensitive variable name with a value. Confirm the response is genuine; if it is, the impact depends on that credential\'s privileges and it should be treated as exposed.',
+      fix: 'Block access immediately via your web server config. Validate and rotate each genuine secret in the response. Add .env to .gitignore and never commit it.',
       fixCodes: [
         { label: 'Nginx',  code: `location ~ /\\.env { deny all; return 403; }` },
         { label: 'Apache', code: `<Files ".env">\n  Order allow,deny\n  Deny from all\n</Files>` },
@@ -418,7 +418,7 @@ function buildPassiveFindings(result: AnalysisResult): PassiveFinding[] {
     '/config.json': {
       title: 'Sensitive configuration keys exposed',
       severity: 'high',
-      detail: 'A config.json file is publicly accessible and may contain database connection strings, API keys, or application secrets.',
+      detail: 'A public config.json response contains sensitive-looking key names. Validate whether the associated values are real secrets or intentionally public client configuration before assigning impact.',
       fix: 'Move config files outside the webroot or restrict access via server configuration.',
       fixCodes: [
         { label: 'Nginx', code: `location ~ /config\\.json { deny all; return 403; }` },
@@ -837,29 +837,46 @@ interface Props {
 function PublishModal({ scanId, onClose, onPublished }: { scanId: string; onClose: () => void; onPublished: () => void }) {
   const [comment, setComment] = useState('');
   const [publishing, setPublishing] = useState(false);
+  const [scanPublished, setScanPublished] = useState(false);
   const [error, setError] = useState('');
 
   async function handlePublish() {
     setError('');
     setPublishing(true);
+    let published = scanPublished;
     try {
-      const res = await fetch(`/api/scans/${scanId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isPublic: true }),
-      });
-      if (!res.ok) { setError('Failed to publish'); return; }
+      if (!published) {
+        const res = await fetch(`/api/scans/${scanId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isPublic: true }),
+        });
+        if (!res.ok) { setError('Failed to publish'); return; }
+
+        published = true;
+        setScanPublished(true);
+        onPublished();
+      }
 
       if (comment.trim()) {
-        await fetch('/api/comments', {
+        const commentRes = await fetch('/api/comments', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ scanId, body: comment.trim() }),
         });
+        if (!commentRes.ok) {
+          const data = await commentRes.json().catch(() => ({}));
+          const detail = typeof data.error === 'string' ? ` ${data.error}` : '';
+          setError(`Scan is public, but its caption could not be added.${detail}`);
+          return;
+        }
       }
 
-      onPublished();
       onClose();
+    } catch {
+      setError(published
+        ? 'Scan is public, but its caption could not be added. Please try again.'
+        : 'Failed to publish. Please try again.');
     } finally {
       setPublishing(false);
     }
@@ -903,13 +920,13 @@ function PublishModal({ scanId, onClose, onPublished }: { scanId: string; onClos
             className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-50 transition-all"
             style={{ background: 'rgba(139,92,246,0.85)', border: '1px solid rgba(139,92,246,0.5)' }}
           >
-            {publishing ? 'Publishing…' : 'Publish'}
+            {publishing ? (scanPublished ? 'Adding caption…' : 'Publishing…') : scanPublished ? 'Retry caption' : 'Publish'}
           </button>
           <button
             onClick={onClose}
             className="px-5 py-2.5 rounded-xl text-sm border border-white/10 text-white/40 hover:bg-white/5 transition-colors"
           >
-            Cancel
+            {scanPublished ? 'Close' : 'Cancel'}
           </button>
         </div>
       </div>

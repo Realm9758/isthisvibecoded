@@ -357,8 +357,6 @@ export default function SignupPage() {
                     {[
                       { icon: '💬', text: 'Someone comments on your scan' },
                       { icon: '↩', text: 'Someone replies to your comment' },
-                      { icon: '⚡', text: 'Your scan becomes popular' },
-                      { icon: '🔒', text: 'Security issues are detected' },
                     ].map(item => (
                       <div key={item.text} className="flex items-center gap-2.5 text-xs text-white/40">
                         <span className="text-sm">{item.icon}</span>

@@ -334,7 +334,7 @@ export default function Home() {
                     },
                     {
                       icon: '⬡', color: '#06b6d4',
-                      title: 'Passive Security Audit',
+                      title: 'Passive Hardening Review',
                       desc: 'Review a focused set of response headers and public deployment paths. This is a limited hardening check, not an overall security grade.',
                     },
                     {

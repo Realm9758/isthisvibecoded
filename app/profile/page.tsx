@@ -228,7 +228,7 @@ function OverviewTab({
               <span className="font-semibold text-white/65">{user.scansRemaining ?? 0}</span> passive scans left today
               · <span className="font-semibold text-white/65">{Math.max(0, 2 - (deepCount ?? 0))}</span> deep scans remaining
             </p>
-            <p className="text-[11px] text-white/25">Upgrade for unlimited passive and experimental deep scans.</p>
+            <p className="text-[11px] text-white/25">Upgrade to remove daily and lifetime quotas; fair-use burst limits still apply.</p>
           </div>
           <Link
             href="/pricing"
@@ -320,7 +320,11 @@ function EditProfileModal({
           }
         } else {
           // Remove avatar
-          await fetch('/api/user/avatar', { method: 'DELETE' });
+          const avatarRes = await fetch('/api/user/avatar', { method: 'DELETE' });
+          if (!avatarRes.ok) {
+            const d = await avatarRes.json().catch(() => ({}));
+            throw new Error(d.error ?? 'Failed to remove avatar');
+          }
         }
       }
 
@@ -615,8 +619,6 @@ function SettingsTab({
           {[
             { icon: '💬', label: 'Someone comments on your scan' },
             { icon: '↩', label: 'Someone replies to your comment' },
-            { icon: '⚡', label: 'Your scan becomes popular' },
-            { icon: '🔒', label: 'Security issues are detected' },
           ].map(item => (
             <div key={item.label} className="flex items-center gap-2.5 text-xs text-white/35">
               <span className="text-sm">{item.icon}</span>

@@ -26,7 +26,30 @@ export function normalizePublicUrl(rawUrl: string): URL {
   return url;
 }
 
-export async function assertPublicTarget(url: URL): Promise<void> {
+export async function assertPublicTarget(url: URL, timeoutMs?: number): Promise<void> {
+  const resolution = resolvePublicTarget(url);
+  if (!timeoutMs) {
+    await resolution;
+    return;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      resolution,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('URL validation timed out')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export type PublicTargetAddress = { address: string; family: 4 | 6 };
+
+/** Resolve once, reject every unsafe answer, and return addresses for a pinned connection. */
+export async function resolvePublicTarget(url: URL): Promise<PublicTargetAddress[]> {
   // WHATWG URL retains brackets around IPv6 literals in some runtimes; DNS
   // and node:net expect the address itself.
   const hostname = url.hostname.toLowerCase();
@@ -41,7 +64,7 @@ export async function assertPublicTarget(url: URL): Promise<void> {
   const directIp = isIP(host);
   if (directIp) {
     if (isPrivateIp(host)) throw new Error('Private/local URLs are not allowed');
-    return;
+    return [{ address: host, family: directIp as 4 | 6 }];
   }
 
   const records = await lookup(host, { all: true, verbatim: false });
@@ -50,6 +73,11 @@ export async function assertPublicTarget(url: URL): Promise<void> {
   if (records.some(record => isPrivateIp(record.address))) {
     throw new Error('Private/local network targets are not allowed');
   }
+
+  return records.map(record => ({
+    address: record.address,
+    family: record.family as 4 | 6,
+  }));
 }
 
 function isPrivateIp(address: string): boolean {

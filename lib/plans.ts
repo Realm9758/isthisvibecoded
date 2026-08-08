@@ -15,8 +15,8 @@ export const PLANS = {
       'Roast Mode',
     ],
     missing: [
-      'Unlimited passive scans',
-      'Unlimited deep scans',
+      'Passive scans without a daily quota',
+      'Active scans without a lifetime quota',
     ],
   },
   pro: {
@@ -26,8 +26,9 @@ export const PLANS = {
     scansPerDay: null,
     deepScansTotal: null,
     features: [
-      'Unlimited passive evidence scans',
-      'Unlimited experimental active scans',
+      'Passive evidence scans without a daily quota',
+      'Experimental active scans without a lifetime quota',
+      'Fair-use burst limits still protect scanner availability',
       'The same evidence, history, publishing, and badge tools as Free',
       'Support continued scanner development',
     ],

@@ -32,7 +32,7 @@ const CONFLICT_CAP = 35;
 const AI_GENERATORS: Array<{ id: string; name: string; generatorPattern: RegExp; mentionPattern: RegExp }> = [
   { id: 'lovable', name: 'Lovable', generatorPattern: /^(?:lovable|gpt[ -]?engineer)(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\blovable\b|gpt[ -]?engineer/i },
   { id: 'v0', name: 'v0 by Vercel', generatorPattern: /^v0(?:\.dev)?(?: by vercel)?(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bv0(?:\.dev| by vercel)\b/i },
-  { id: 'bolt', name: 'Bolt', generatorPattern: /^(?:bolt|bolt\.new|bolt by stackblitz)(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bbolt(?:\.new| by stackblitz)?\b/i },
+  { id: 'bolt', name: 'Bolt', generatorPattern: /^(?:bolt|bolt\.new|bolt by stackblitz)(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bbolt(?:\.new| by stackblitz)\b/i },
   { id: 'replit-agent', name: 'Replit Agent', generatorPattern: /^replit agent(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\breplit agent\b/i },
   { id: 'base44', name: 'Base44', generatorPattern: /^base44(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bbase44\b/i },
   { id: 'wix-ai', name: 'Wix AI', generatorPattern: /^(?:wix ai|wix artificial design intelligence)(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bwix ai\b|artificial design intelligence/i },
@@ -151,11 +151,35 @@ function getResourceUrls(html: string): string[] {
 const ATTRIBUTION_PATTERN = /\b(?:built|generated|created|made|edit(?:ed)?)\s+(?:by|with|in)\b/gi;
 
 function hasPositiveAttribution(value: string): boolean {
-  const normalized = visibleText(value).replace(/\s+/g, ' ').trim();
+  const normalized = decodeHtmlText(
+    value.replace(/<!--|-->/g, ' ').replace(/<[^>]+>/g, ' '),
+  ).replace(/\s+/g, ' ').trim();
   const matches = normalized.matchAll(new RegExp(ATTRIBUTION_PATTERN.source, ATTRIBUTION_PATTERN.flags));
   for (const match of matches) {
     const before = normalized.slice(Math.max(0, (match.index ?? 0) - 32), match.index);
     if (/\b(?:not|never|without|isn't|wasn't|isn’t|wasn’t)\b[^.!?]{0,24}$/i.test(before)) continue;
+    return true;
+  }
+  return false;
+}
+
+function hasBuilderAttribution(value: string, builderPattern: RegExp): boolean {
+  const normalized = decodeHtmlText(
+    value.replace(/<!--|-->/g, ' ').replace(/<[^>]+>/g, ' '),
+  ).replace(/\s+/g, ' ').trim();
+  const matches = normalized.matchAll(new RegExp(ATTRIBUTION_PATTERN.source, ATTRIBUTION_PATTERN.flags));
+  for (const match of matches) {
+    const matchIndex = match.index ?? 0;
+    const beforeAttribution = normalized.slice(Math.max(0, matchIndex - 32), matchIndex);
+    if (/\b(?:not|never|without|isn't|wasn't|isn’t|wasn’t)\b[^.!?]{0,24}$/i.test(beforeAttribution)) continue;
+
+    const afterAttribution = normalized
+      .slice(matchIndex + match[0].length, matchIndex + match[0].length + 64)
+      .split(/[.!?;]/, 1)[0];
+    const builderMatch = afterAttribution.match(builderPattern);
+    if (!builderMatch || builderMatch.index === undefined) continue;
+    const beforeBuilder = afterAttribution.slice(Math.max(0, builderMatch.index - 24), builderMatch.index);
+    if (/\b(?:not|never|without|except)\b[^.!?]{0,20}$/i.test(beforeBuilder)) continue;
     return true;
   }
   return false;
@@ -256,11 +280,9 @@ export function detectVibe(
     }
   }
 
-  const comments = (html.match(/<!--[\s\S]*?-->/g) ?? [])
-    .filter(hasPositiveAttribution)
-    .join('\n');
+  const comments = html.match(/<!--[\s\S]*?-->/g) ?? [];
   for (const candidate of AI_GENERATORS) {
-    if (!candidate.mentionPattern.test(comments)) continue;
+    if (!comments.some(comment => hasBuilderAttribution(comment, candidate.mentionPattern))) continue;
     add({
       id: `builder-comment-${candidate.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
       category: 'provenance',
@@ -367,8 +389,7 @@ export function detectVibe(
 
   // Replit is a general-purpose host. It is supporting context, never direct AI provenance.
   const replitHost = hostname.endsWith('.replit.app') || hostname.endsWith('.repl.co');
-  const replitAgentMarker = /data-replit-agent(?:\s|=|>)/i.test(html)
-    || /<!--[^>]*\breplit agent\b[^>]*-->/i.test(html);
+  const replitAgentMarker = /data-replit-agent(?:\s|=|>)/i.test(html);
   if (replitAgentMarker) {
     add({
       id: 'replit-agent-marker',

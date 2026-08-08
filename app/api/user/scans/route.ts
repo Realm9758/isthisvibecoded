@@ -1,7 +1,6 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
-import type { AnalysisResult } from '@/types/analysis';
+import { getScansByUser, usesCurrentScoring } from '@/lib/store';
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -12,25 +11,17 @@ export async function GET() {
     return Response.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
-  const { data, error } = await supabase
-    .from('scans')
-    .select('*')
-    .eq('user_id', payload.userId)
-    .order('created_at', { ascending: false })
-    .limit(50);
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  let scans: Awaited<ReturnType<typeof getScansByUser>>;
+  try {
+    scans = (await getScansByUser(payload.userId)).map(scan => ({
+      ...scan,
+      // Historical rows were auto-published without the current consent/model
+      // contract. Keep them visible to their owner, but represent them as private.
+      isPublic: scan.isPublic && usesCurrentScoring(scan),
+    }));
+  } catch {
+    return Response.json({ error: 'Could not load scan history' }, { status: 503 });
   }
-
-  const scans = (data ?? []).map((row) => ({
-    id: row.id as string,
-    result: row.result as AnalysisResult,
-    userId: row.user_id as string,
-    isPublic: row.is_public as boolean,
-    roasts: row.roasts as string[],
-    createdAt: row.created_at as number,
-  }));
 
   return Response.json(scans);
 }

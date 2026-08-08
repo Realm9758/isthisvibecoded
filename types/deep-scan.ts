@@ -34,6 +34,12 @@ export interface DeepScanResult {
   domain: string;
   scannedAt: string;
   duration: number;
+  /** Missing on legacy rows created before scanner/scoring versioning. */
+  versions?: {
+    scanner: string;
+    scoring: string;
+    coverage: string;
+  };
   summary: {
     critical: number;
     high: number;

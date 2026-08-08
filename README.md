@@ -32,6 +32,7 @@ Open `http://localhost:3000`.
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Server-only database credential; never expose it to browser code |
 | `JWT_SECRET` | Yes | Signs authentication cookies; use at least 32 random bytes |
 | `RATE_LIMIT_SECRET` | Recommended | HMAC key for anonymous daily-rate identifiers; keep distinct from the JWT key |
+| `TRUST_PROXY_HEADERS` | Self-hosted only | Set `true` only when a trusted proxy overwrites forwarding headers; Vercel is detected automatically |
 | `STRIPE_SECRET_KEY` | For billing | Server-only Stripe API key |
 | `STRIPE_PRO_PRICE_ID` | For billing | Allowed Pro subscription price |
 | `STRIPE_WEBHOOK_SECRET` | For billing | Verifies Stripe webhook payloads |
@@ -49,7 +50,7 @@ npm run lint
 npm run build
 ```
 
-`npm run check` runs those four gates in order. The focused unit suite covers negative and negated provenance controls, direct/strong provenance fixtures, builder-family correlation, determinism, malformed-input handling, effective security-header values, and client-visible key severity. Database migration, access-control integration, and browser tests remain release-gate work documented in the roadmap.
+`npm run check` runs those four gates in order. The focused unit suite covers negative and negated provenance controls, direct/strong provenance fixtures, builder-family correlation, determinism, malformed-input handling, effective security-header values, client-visible key severity, deep-score correlation, Stripe entitlement selection, and outbound-address rejection. Database migration, access-control integration, and browser tests remain release-gate work documented in the roadmap.
 
 ## Model rules
 
@@ -71,7 +72,7 @@ Common frameworks, Vercel/Netlify/Replit/StackBlitz hosting, Supabase/Firebase, 
 - Private result pages, metadata, badges, share cards, and comments are owner-gated.
 - Public scans use read-only page and bounded public-path requests. Active deep scans require a signed-in account, explicit acceptance of the current active-scan terms for each run, and domain-control evidence renewed at least every 30 days.
 - Public write endpoints have bounded account/IP abuse controls. Anonymous rate-limit identifiers use a keyed HMAC rather than persisting a raw IP address.
-- Application-level DNS/IP validation narrows SSRF risk but does not replace an egress-restricted worker with IP-pinned connections. Do not treat the active scanner as production-ready until the P0 roadmap is complete.
+- Outbound scanner connections bind the validated public IP to the socket while preserving hostname/TLS verification, closing the application-level DNS-rebinding gap. This still does not replace an egress-restricted worker. Do not treat the active scanner as production-ready until the P0 roadmap is complete.
 
 ## Important limitations
 

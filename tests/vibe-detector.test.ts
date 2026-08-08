@@ -109,12 +109,32 @@ test('correlated observations from one builder do not double count', () => {
 
 test('Bolt comment, hostname, and attribution share one correlation family', () => {
   const html = `<!doctype html><html><body>
-    <!-- Built with Bolt -->
+    <!-- Built with Bolt by StackBlitz -->
     <a href="https://bolt.new/project/abc">Built with Bolt</a>
   </body></html>`;
   const result = detectVibe(html, {}, 'https://demo.bolt.host');
   assert.equal(result.breakdown.provenance, 52);
   assert.equal(result.score, 52);
+});
+
+test('a builder mention elsewhere in a provenance-style comment does not score', () => {
+  const html = `<!doctype html><html><body>
+    <!-- Built with React. See our separate Lovable integration notes. -->
+    <!-- Built with Bolt CMS, not Bolt by StackBlitz. -->
+  </body></html>`;
+  const result = detectVibe(html, {}, 'https://example.com');
+  assert.equal(result.score, 0);
+  assert.equal(result.label, 'Inconclusive');
+});
+
+test('a comment-only exact builder attribution is strong provenance', () => {
+  const result = detectVibe(
+    '<html><body><!-- Built with Lovable --></body></html>',
+    {},
+    'https://example.com',
+  );
+  assert.equal(result.score, 52);
+  assert.equal(result.label, 'Strong supporting evidence');
 });
 
 test('negated builder attributions are not positive provenance', () => {
@@ -123,6 +143,16 @@ test('negated builder attributions are not positive provenance', () => {
     <a href="https://lovable.dev">Never built with Lovable</a>
   </body></html>`;
   const result = detectVibe(html, {}, 'https://example.com');
+  assert.equal(result.score, 0);
+  assert.equal(result.label, 'Inconclusive');
+});
+
+test('a negated Replit Agent comment is not a structured marker', () => {
+  const result = detectVibe(
+    '<html><body><!-- This was not built with Replit Agent --></body></html>',
+    {},
+    'https://example.com',
+  );
   assert.equal(result.score, 0);
   assert.equal(result.label, 'Inconclusive');
 });

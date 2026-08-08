@@ -1,35 +1,59 @@
 import { stripe } from '@/lib/stripe';
-import { updateUser, getUserByStripeCustomerId } from '@/lib/store';
+import { selectEntitlingSubscription } from '@/lib/stripe-entitlements';
+import { getUserById, getUserByStripeCustomerId, updateUser } from '@/lib/store';
 import type Stripe from 'stripe';
 
-function subscriptionEntitlesPro(subscription: Stripe.Subscription): boolean {
-  const configuredPrice = process.env.STRIPE_PRO_PRICE_ID;
-  return Boolean(
-    configuredPrice
-    && (subscription.status === 'active' || subscription.status === 'trialing')
-    && subscription.items.data.some(item => item.price.id === configuredPrice),
-  );
+function customerIdFrom(value: string | Stripe.Customer | Stripe.DeletedCustomer | null): string | undefined {
+  return typeof value === 'string' ? value : value?.id;
 }
 
-async function reconcileSubscription(subscription: Stripe.Subscription): Promise<void> {
-  const customerId = typeof subscription.customer === 'string'
-    ? subscription.customer
-    : subscription.customer.id;
-  const user = await getUserByStripeCustomerId(customerId);
+async function reconcileCustomerSubscriptions(
+  client: Stripe,
+  customerId: string,
+  hintedUserId?: string | null,
+): Promise<void> {
+  const configuredPriceId = process.env.STRIPE_PRO_PRICE_ID;
+  if (!configuredPriceId) {
+    throw new Error('STRIPE_PRO_PRICE_ID is not configured');
+  }
+
+  let user = await getUserByStripeCustomerId(customerId);
+  if (!user && hintedUserId) {
+    const hintedUser = await getUserById(hintedUserId);
+    if (!hintedUser || (hintedUser.stripeCustomerId && hintedUser.stripeCustomerId !== customerId)) {
+      return;
+    }
+    user = await updateUser(hintedUser.id, { stripeCustomerId: customerId });
+  }
   if (!user) return;
 
-  if (subscriptionEntitlesPro(subscription)) {
-    // Do not let a late event from an older subscription replace a newer one.
-    if (!user.stripeSubscriptionId || user.stripeSubscriptionId === subscription.id) {
-      await updateUser(user.id, { plan: 'pro', stripeSubscriptionId: subscription.id });
-    }
-    return;
-  }
+  // Query Stripe's current customer state instead of trusting the event
+  // snapshot. This makes delayed or out-of-order webhook deliveries converge on
+  // the same entitlement and supports customers with multiple subscriptions.
+  const [activeSubscriptions, trialingSubscriptions] = await Promise.all([
+    client.subscriptions.list({
+      customer: customerId,
+      price: configuredPriceId,
+      status: 'active',
+      limit: 100,
+    }).autoPagingToArray({ limit: 500 }),
+    client.subscriptions.list({
+      customer: customerId,
+      price: configuredPriceId,
+      status: 'trialing',
+      limit: 100,
+    }).autoPagingToArray({ limit: 500 }),
+  ]);
+  const entitlingSubscription = selectEntitlingSubscription(
+    [...activeSubscriptions, ...trialingSubscriptions],
+    configuredPriceId,
+  );
 
-  // An old cancellation/unpaid event must not downgrade a newer active plan.
-  if (user.stripeSubscriptionId === subscription.id) {
-    await updateUser(user.id, { plan: 'free', stripeSubscriptionId: undefined });
-  }
+  await updateUser(user.id, {
+    plan: entitlingSubscription ? 'pro' : 'free',
+    stripeCustomerId: customerId,
+    stripeSubscriptionId: entitlingSubscription?.id,
+  });
 }
 
 export async function POST(request: Request) {
@@ -49,26 +73,31 @@ export async function POST(request: Request) {
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    const userId = session.metadata?.userId;
-    const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
-    const subscriptionId = typeof session.subscription === 'string'
-      ? session.subscription
-      : session.subscription?.id;
-    if (userId && customerId && subscriptionId) {
-      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-      if (subscriptionEntitlesPro(subscription)) {
-        await updateUser(userId, { stripeCustomerId: customerId });
-        await reconcileSubscription(subscription);
-      }
+    const customerId = customerIdFrom(session.customer);
+    if (customerId) {
+      await reconcileCustomerSubscriptions(
+        stripe,
+        customerId,
+        session.metadata?.userId ?? session.client_reference_id,
+      );
     }
   }
 
-  if (
-    event.type === 'customer.subscription.created'
-    || event.type === 'customer.subscription.updated'
-    || event.type === 'customer.subscription.deleted'
-  ) {
-    await reconcileSubscription(event.data.object);
+  switch (event.type) {
+    case 'customer.subscription.created':
+    case 'customer.subscription.updated':
+    case 'customer.subscription.deleted':
+    case 'customer.subscription.paused':
+    case 'customer.subscription.resumed':
+    case 'customer.subscription.pending_update_applied':
+    case 'customer.subscription.pending_update_expired': {
+      const subscription = event.data.object;
+      const customerId = customerIdFrom(subscription.customer);
+      if (customerId) {
+        await reconcileCustomerSubscriptions(stripe, customerId, subscription.metadata?.userId);
+      }
+      break;
+    }
   }
 
   return Response.json({ received: true });

@@ -23,9 +23,10 @@ export async function POST(request: Request) {
   let parsed: URL;
   try {
     parsed = normalizePublicUrl(url);
-    await assertPublicTarget(parsed);
+    await assertPublicTarget(parsed, 4_000);
   } catch (err) {
-    return Response.json({ error: err instanceof Error ? err.message : 'Invalid URL format' }, { status: 400 });
+    const message = err instanceof Error ? err.message : 'Invalid URL format';
+    return Response.json({ error: message }, { status: message.includes('timed out') ? 408 : 400 });
   }
 
   // Auth check (optional — anonymous users get free tier limits)
@@ -43,6 +44,17 @@ export async function POST(request: Request) {
   }
   const user = payload ? await getUserById(payload.userId) : null;
   const plan = user?.plan ?? 'free';
+  const minuteWindow = new Date().toISOString().slice(0, 16);
+  const burstRemaining = await consumeUsage(
+    `passive-burst:${limitKey}:${minuteWindow}`,
+    plan === 'free' ? 3 : 10,
+  ).catch(() => null);
+  if (burstRemaining === null) {
+    return Response.json({ error: 'Could not reserve the scan-rate allowance' }, { status: 503 });
+  }
+  if (burstRemaining < 0) {
+    return Response.json({ error: 'Too many scans started at once. Try again in a minute.' }, { status: 429 });
+  }
   let quotaReserved = false;
   let scansRemaining: number | null = null;
 
@@ -51,7 +63,7 @@ export async function POST(request: Request) {
     if (scansRemaining < 0) {
       const used = await getDailyCount(limitKey);
       return Response.json({
-        error: 'Daily scan limit reached (5/day on free tier). Upgrade to Pro for unlimited scans.',
+        error: 'Daily scan limit reached (5/day on free tier). Pro removes the daily quota; operational rate limits still apply.',
         limitReached: true,
         scansUsed: used,
         scansLimit: 5,
@@ -98,7 +110,7 @@ export async function POST(request: Request) {
       error = `Could not reach the website: ${message}`;
     } else if (message.includes('timeout') || message.includes('AbortError')) {
       status = 408;
-      error = 'Website took too long to respond (>10s)';
+      error = 'Website took too long to respond within the bounded scan window';
     } else if (
       message.includes('returned HTTP')
       || message.includes('Unsupported content type')

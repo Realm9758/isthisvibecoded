@@ -15,6 +15,9 @@
     "lib/vibe-constants.ts",
     "lib/security-headers.ts",
     "lib/key-scanner.ts",
+    "lib/deep-score.ts",
+    "lib/stripe-entitlements.ts",
+    "lib/url-safety.ts",
     "types/analysis.ts"
   ]
 }

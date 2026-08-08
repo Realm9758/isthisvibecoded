@@ -246,9 +246,14 @@ function dedupeByDomain(scans: StoredScan[]): StoredScan[] {
   return [...seen.values()];
 }
 
-function usesCurrentScoring(scan: StoredScan): boolean {
-  return scan.result.vibe.breakdown?.modelVersion === VIBE_MODEL_VERSION
-    && scan.result.security.modelVersion === SECURITY_MODEL_VERSION;
+export function usesCurrentScoringResult(result: unknown): result is AnalysisResult {
+  if (!isStoredAnalysisResult(result)) return false;
+  return result.vibe.breakdown?.modelVersion === VIBE_MODEL_VERSION
+    && result.security.modelVersion === SECURITY_MODEL_VERSION;
+}
+
+export function usesCurrentScoring(scan: StoredScan): boolean {
+  return usesCurrentScoringResult(scan.result);
 }
 
 export async function getPublicScans(limit = 30, since?: number): Promise<StoredScan[]> {
@@ -360,6 +365,17 @@ export async function getPublicScansByUser(userId: string, limit = 20): Promise<
     .limit(limit * 5);
   if (error) throw new Error(error.message);
   return rowsToScans(data ?? []).filter(usesCurrentScoring).slice(0, limit);
+}
+
+export async function getScansByUser(userId: string, limit = 50): Promise<StoredScan[]> {
+  const { data, error } = await supabase
+    .from('scans')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return rowsToScans(data ?? []);
 }
 
 

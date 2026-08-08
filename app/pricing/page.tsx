@@ -42,7 +42,7 @@ function PlanCard({
           <p className="text-xs text-white/40 mt-1">{plan.scansPerDay} passive scans / day</p>
         )}
         {'scansPerDay' in plan && plan.scansPerDay === null && (
-          <p className="text-xs text-violet-400 mt-1">Unlimited scans</p>
+          <p className="text-xs text-violet-400 mt-1">No daily quota · fair-use rate limits</p>
         )}
       </div>
 
@@ -180,8 +180,8 @@ export default function PricingPage() {
             </thead>
             <tbody>
               {[
-                ['Passive scans per day',    '5',          'Unlimited'],
-                ['Experimental active checks','2 lifetime', 'Unlimited'],
+                ['Passive scans per day',    '5',          'No daily quota*'],
+                ['Experimental active checks','2 lifetime', 'No lifetime quota*'],
                 ['Public provenance evidence','✓',          '✓'],
                 ['Header hardening review',   '✓',          '✓'],
                 ['Tech stack detection',      '✓',          '✓'],
@@ -202,7 +202,7 @@ export default function PricingPage() {
         </div>
 
         <p className="text-center text-xs text-white/20 mt-8">
-          Prices in GBP. Cancel anytime. Stripe powers all payments.
+          Prices in GBP. Cancel anytime. Stripe powers all payments. *Operational burst limits apply to every plan.
         </p>
       </div>
     </main>

@@ -46,11 +46,11 @@ export async function POST(request: Request) {
     }
     authorizationAcceptedAt = Date.now();
     const target = normalizePublicUrl(body.domain);
-    await assertPublicTarget(target);
+    await assertPublicTarget(target, 4_000);
     domain = target.hostname.toLowerCase();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid request body';
-    return Response.json({ error: message }, { status: 400 });
+    return Response.json({ error: message }, { status: message.includes('timed out') ? 408 : 400 });
   }
 
   // Deep scan limit for free users
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
   if (userError) {
     return Response.json({ error: 'Could not verify account plan' }, { status: 503 });
   }
-  // Ownership check — must be verified by THIS user
+  // Fresh domain-control check — must belong to this authenticated user.
   const { data: verif, error: verificationError } = await supabase
     .from('verification_tokens')
     .select('verified, verified_at')
@@ -94,6 +94,31 @@ export async function POST(request: Request) {
     );
   }
 
+  // Plan entitlement controls the daily/lifetime quota, not operational
+  // safety. Every account and target remains burst-limited so a paid account
+  // cannot launch an unbounded number of outbound active scans.
+  const minuteWindow = new Date().toISOString().slice(0, 16);
+  const hourWindow = new Date().toISOString().slice(0, 13);
+  const [{ data: userBurst, error: userBurstError }, { data: targetBurst, error: targetBurstError }] = await Promise.all([
+    supabase.rpc('consume_usage', {
+      usage_key: `deep-burst:${payload.userId}:${minuteWindow}`,
+      usage_limit: 1,
+    }),
+    supabase.rpc('consume_usage', {
+      usage_key: `deep-target:${domain}:${hourWindow}`,
+      usage_limit: 10,
+    }),
+  ]);
+  if (userBurstError || targetBurstError) {
+    return Response.json({ error: 'Could not reserve the active-scan rate allowance' }, { status: 503 });
+  }
+  if (Number(userBurst) < 0 || Number(targetBurst) < 0) {
+    return Response.json(
+      { error: 'Active-scan burst limit reached. Wait before starting another scan.' },
+      { status: 429 },
+    );
+  }
+
   let deepQuotaKey: string | null = null;
   if (!userRow || userRow.plan === 'free') {
     deepQuotaKey = `deep:${payload.userId}:lifetime`;
@@ -106,7 +131,7 @@ export async function POST(request: Request) {
     }
     if (Number(remaining) < 0) {
       return Response.json(
-        { error: 'Free plan limit reached. Upgrade to Pro for unlimited deep scans.' },
+        { error: 'Free plan lifetime limit reached. Pro removes the lifetime quota; operational rate limits still apply.' },
         { status: 403 },
       );
     }

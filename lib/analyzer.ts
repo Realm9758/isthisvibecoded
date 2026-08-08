@@ -5,28 +5,56 @@ import { detectTechStack } from './tech-detector';
 import { detectHosting } from './hosting-detector';
 import { scanForPublicKeys } from './key-scanner';
 import { checkPublicFiles } from './public-files';
-import { assertPublicTarget, normalizePublicUrl } from './url-safety';
+import { normalizePublicUrl } from './url-safety';
+import { pinnedFetch } from './pinned-fetch';
 
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 const MAX_HTML_BYTES = 2_000_000;
+// Leave enough of the route's 30-second budget for bounded public-path probes,
+// persistence, and (on failure) quota restoration. This is one deadline for the
+// complete redirect chain, not a fresh timeout for every hop.
+const MAIN_FETCH_BUDGET_MS = 14_000;
+
+function remainingTime(deadlineAt: number): number {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) throw new Error('Analysis timeout while fetching the main page');
+  return remaining;
+}
+
+async function withinDeadline<T>(operation: Promise<T>, deadlineAt: number): Promise<T> {
+  const remaining = remainingTime(deadlineAt);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Analysis timeout while validating the target')),
+          remaining,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 async function fetchWithSafeRedirects(
   startUrl: URL,
+  deadlineAt: number,
 ): Promise<{ response: Response; finalUrl: URL; redirectsFollowed: number }> {
   let currentUrl = startUrl;
 
   for (let i = 0; i < 6; i++) {
-    // Revalidate immediately before every request and every redirect hop. This
-    // narrows (but cannot fully eliminate) DNS rebinding risk; production egress
-    // should additionally be restricted at the network layer.
-    await assertPublicTarget(currentUrl);
-    const response = await fetch(currentUrl.href, {
+    // Resolve, validate, and pin the socket immediately before each request so
+    // a second DNS answer cannot redirect the connection to a private address.
+    const response = await withinDeadline(pinnedFetch(currentUrl, {
       headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/xhtml+xml,*/*' },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(Math.min(10_000, remainingTime(deadlineAt))),
       redirect: 'manual',
-    });
+    }), deadlineAt);
 
     if (response.status < 300 || response.status >= 400) {
       return { response, finalUrl: currentUrl, redirectsFollowed: i };
@@ -38,7 +66,7 @@ async function fetchWithSafeRedirects(
     }
 
     const nextUrl = normalizePublicUrl(new URL(location, currentUrl).href);
-    await assertPublicTarget(nextUrl);
+    await response.body?.cancel().catch(() => undefined);
     currentUrl = nextUrl;
   }
 
@@ -94,8 +122,12 @@ function assertUsableHtml(response: Response, html: string): void {
 
 export async function analyzeUrl(rawUrl: string): Promise<AnalysisResult> {
   const requestedUrl = normalizePublicUrl(rawUrl);
+  const mainFetchDeadline = Date.now() + MAIN_FETCH_BUDGET_MS;
 
-  const { response, finalUrl, redirectsFollowed } = await fetchWithSafeRedirects(requestedUrl);
+  const { response, finalUrl, redirectsFollowed } = await fetchWithSafeRedirects(
+    requestedUrl,
+    mainFetchDeadline,
+  );
 
   const html = await readLimitedText(response);
   assertUsableHtml(response, html);

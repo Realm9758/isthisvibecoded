@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
+import { usesCurrentScoringResult } from '@/lib/store';
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -11,7 +12,7 @@ export async function GET() {
   const uid = payload.userId;
 
   // Recent published scans (public)
-  const { data: scanRows } = await supabase
+  const { data: scanRows, error: scanError } = await supabase
     .from('scans')
     .select('id, result, created_at, is_public')
     .eq('user_id', uid)
@@ -20,22 +21,28 @@ export async function GET() {
     .limit(5);
 
   // Recent comments (with scan domain via join isn't possible without FK, fetch separately)
-  const { data: commentRows } = await supabase
+  const { data: commentRows, error: commentError } = await supabase
     .from('comments')
     .select('id, body, created_at, scan_id')
     .eq('user_id', uid)
     .order('created_at', { ascending: false })
     .limit(5);
+  if (scanError || commentError) {
+    return Response.json({ error: 'Could not load account activity' }, { status: 503 });
+  }
 
   // Fetch scan domains for comments
   const scanIds = [...new Set((commentRows ?? []).map(c => c.scan_id as string))];
   const scanDomainMap = new Map<string, string>();
 
   if (scanIds.length > 0) {
-    const { data: scanData } = await supabase
+    const { data: scanData, error: scanDataError } = await supabase
       .from('scans')
       .select('id, result')
       .in('id', scanIds);
+    if (scanDataError) {
+      return Response.json({ error: 'Could not load comment activity' }, { status: 503 });
+    }
 
     for (const s of scanData ?? []) {
       try {
@@ -48,7 +55,7 @@ export async function GET() {
     }
   }
 
-  const posts = (scanRows ?? []).map(s => {
+  const posts = (scanRows ?? []).filter(s => usesCurrentScoringResult(s.result)).map(s => {
     let domain = '';
     let vibeScore = 0;
     let securityScore = 0;

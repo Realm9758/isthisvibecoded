@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { OwnershipVerify } from '@/components/OwnershipVerify';
 import type { DeepScanResult, DeepFinding } from '@/types/deep-scan';
+import { DEEP_SCORING_VERSION } from '@/lib/deep-score';
 import type { ScanPhase } from '@/lib/deep-scanner';
 import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 import { ACCOUNT_POLICY_VERSION, DEEP_SCAN_TERMS_VERSION, isValidDisplayHandle } from '@/lib/policy';
@@ -357,7 +358,7 @@ function buildFixPrompt(tool: AiTool, result: DeepScanResult): string {
 
   const suffix: Record<AiTool, string> = {
     cursor: `\n\n---\nPlease go through each issue one by one. For each:\n1. Identify the affected file(s) in the codebase\n2. Show me the exact code change needed\n3. Explain why the fix works\n\nStart with the critical issues first.`,
-    claude: `\n\n---\nFor each vulnerability:\n- Explain the attack vector clearly\n- Show the exact code fix (before/after)\n- Suggest any related hardening improvements\n\nPrioritise critical > high > medium. Be precise about file paths.`,
+    claude: `\n\n---\nFor each potential finding:\n- Validate whether the evidence establishes an attack vector\n- Show the exact code fix (before/after) only when warranted\n- Suggest any related hardening improvements\n\nPrioritise critical > high > medium. Be precise about file paths.`,
     lovable: `\n\n---\nI'm using Lovable (React + Supabase). Help me fix each issue:\n1. Which file and component needs changing\n2. The updated code\n3. Any Supabase RLS policies that need updating\n\nFix critical issues first.`,
     v0: `\n\n---\nMy project uses Next.js App Router + shadcn/ui. For each issue:\n1. Which route, component or middleware is affected\n2. The corrected code snippet\n3. Any next.config.js or middleware changes needed`,
     bolt: `\n\n---\nI'm using React + Vite + Firebase. Help me fix these step by step:\n1. Affected component or Firebase rule\n2. The exact code fix\n3. Any Firebase security rule updates needed`,
@@ -450,7 +451,9 @@ function DeepScanPromptSection({ result }: { result: DeepScanResult }) {
 function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWithId; domain: string; onReset: () => void }) {
   const [tab, setTab] = useState<'findings' | 'checked'>('findings');
   const { summary, findings, checked } = result;
-  const scoreAvailable = summary.score !== null && result.coverage?.complete === true;
+  const scoreAvailable = summary.score !== null
+    && result.coverage?.complete === true
+    && result.versions?.scoring === DEEP_SCORING_VERSION;
   const grade = scoreAvailable ? GRADE(summary.score as number) : '—';
   const gradeColor = GRADE_COLOR(grade);
   const order: DeepFinding['severity'][] = ['critical', 'high', 'medium', 'low', 'info'];
@@ -473,6 +476,11 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
             <p className="font-mono text-base font-bold text-white/85 truncate">{domain}</p>
             <p className="text-xs text-white/25 mt-0.5">
               {findings.length} finding{findings.length !== 1 ? 's' : ''} · {checked?.length ?? 0} checks · {(result.duration / 1000).toFixed(1)}s
+            </p>
+            <p className="text-[10px] text-white/20 mt-1 font-mono">
+              {result.versions
+                ? `scanner ${result.versions.scanner} · score ${result.versions.scoring} · coverage ${result.versions.coverage}`
+                : 'legacy/unversioned result · score withheld'}
             </p>
             <div className="flex gap-2 mt-3 flex-wrap">
               {(['critical','high','medium','low'] as const).map(sev =>
@@ -1019,7 +1027,9 @@ function DeepScanPanel() {
 
 function DeepScanHistoryCard({ entry }: { entry: DeepScanEntry }) {
   const { summary, findings } = entry.result;
-  const scoreAvailable = summary.score !== null && entry.result.coverage?.complete === true;
+  const scoreAvailable = summary.score !== null
+    && entry.result.coverage?.complete === true
+    && entry.result.versions?.scoring === DEEP_SCORING_VERSION;
   const grade = scoreAvailable ? GRADE(summary.score as number) : '—';
   const gradeColor = GRADE_COLOR(grade);
   const criticalCount = summary.critical ?? 0;

@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
 import { VERIFICATION_MAX_AGE_MS } from '@/lib/policy';
 import { consumeUsage } from '@/lib/store';
+import { pinnedFetch } from '@/lib/pinned-fetch';
 import type { VerificationToken } from '@/types/analysis';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -34,8 +35,7 @@ async function fetchVerificationTarget(rawUrl: string): Promise<Response> {
   const originalProtocol = target.protocol;
 
   for (let redirects = 0; redirects <= 5; redirects++) {
-    await assertPublicTarget(target);
-    const response = await fetch(target, {
+    const response = await pinnedFetch(target, {
       headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
       signal: AbortSignal.timeout(8_000),
       redirect: 'manual',
@@ -47,6 +47,7 @@ async function fetchVerificationTarget(rawUrl: string): Promise<Response> {
     if (nextTarget.host.toLowerCase() !== originalHost || nextTarget.protocol !== originalProtocol) {
       throw new Error('Verification redirects must stay on the exact original HTTPS host');
     }
+    await response.body?.cancel().catch(() => undefined);
     target = nextTarget;
   }
   throw new Error('Too many redirects');
@@ -140,6 +141,15 @@ export async function POST(request: Request) {
     return Response.json({ error: 'You must be logged in to verify a domain' }, { status: 401 });
   }
 
+  const hourWindow = new Date().toISOString().slice(0, 13);
+  const remaining = await consumeUsage(`domain-token:${userId}:${hourWindow}`, 30).catch(() => null);
+  if (remaining === null) {
+    return Response.json({ error: 'Could not verify the token-generation allowance' }, { status: 503 });
+  }
+  if (remaining < 0) {
+    return Response.json({ error: 'Too many domain-token requests. Try again later.' }, { status: 429 });
+  }
+
   let domain: string;
   try {
     const body = await request.json();
@@ -158,12 +168,6 @@ export async function POST(request: Request) {
   if (isPrivateDomain(domain)) {
     return Response.json({ error: 'Invalid domain' }, { status: 400 });
   }
-  try {
-    await assertPublicTarget(new URL(`https://${domain}`));
-  } catch {
-    return Response.json({ error: 'Domain must resolve to a public network address' }, { status: 400 });
-  }
-
   // 1. Return existing token for this user (already verified or pending)
   const { data: ownToken, error: ownTokenError } = await supabase
     .from('verification_tokens')
@@ -217,11 +221,34 @@ export async function POST(request: Request) {
     return Response.json(result);
   }
 
-  // 2. Check if another account has already verified this domain.
-  //    We don't hard-block — ownership is proven by control, not first-claim.
+  const { count: pendingCount, error: pendingCountError } = await supabase
+    .from('verification_tokens')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('verified', false);
+  if (pendingCountError) {
+    return Response.json({ error: 'Could not check pending domain verifications' }, { status: 503 });
+  }
+  if ((pendingCount ?? 0) >= 20) {
+    return Response.json(
+      { error: 'Pending domain limit reached. Revoke an unused token before adding another domain.' },
+      { status: 429 },
+    );
+  }
+
+  // A new claim must resolve publicly. Existing tokens above can be displayed
+  // without performing another outbound DNS lookup.
+  try {
+    await assertPublicTarget(new URL(`https://${domain}`), 4_000);
+  } catch {
+    return Response.json({ error: 'Domain must resolve to a public network address' }, { status: 400 });
+  }
+
+  // 2. Check if another account already has fresh control evidence for this domain.
+  //    We don't hard-block — current token placement, not first claim, wins.
   //    Issue a contest token: if the user can place it on the live site they
   //    demonstrably own it and supersede the existing claim (same model as
-  //    Google Search Console ownership transfer).
+  //    Google Search Console-style claim transfer).
   const verificationCutoff = Date.now() - VERIFICATION_MAX_AGE_MS;
   const { data: existingVerified, error: existingVerifiedError } = await supabase
     .from('verification_tokens')
@@ -393,7 +420,7 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Invalid domain' }, { status: 400 });
   }
   try {
-    await assertPublicTarget(new URL(`https://${domain}`));
+    await assertPublicTarget(new URL(`https://${domain}`), 4_000);
   } catch {
     return Response.json({ error: 'Domain must resolve to a public network address' }, { status: 400 });
   }

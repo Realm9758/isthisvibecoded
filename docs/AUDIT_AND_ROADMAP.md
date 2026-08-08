@@ -75,7 +75,7 @@ There was no labelled benchmark, model version, calibration report, false-positi
 
 The original path could analyse error documents, catch-all pages, bot challenges, non-HTML responses, or incomplete fetches as if they were the requested site. Public-path probes treated status codes too optimistically. Query strings could be retained even though they may contain signed preview tokens or personal data. SSRF checks were inconsistent across fetch sites and redirects.
 
-The current checks reduce this risk, but DNS resolution followed by an independent network connection still leaves a DNS-rebinding/time-of-check-to-time-of-use gap. Application-only validation is not a substitute for network egress controls.
+The audited baseline resolved and validated DNS separately from the network connection, leaving a DNS-rebinding/time-of-check-to-time-of-use gap. This branch replaces that transport with a connection whose lookup is pinned to the checked public IP while retaining hostname/TLS verification. Application controls still do not substitute for independent network egress enforcement.
 
 ### Security and deep scan
 
@@ -136,7 +136,7 @@ These values are intentionally conservative but are still expert-chosen. They ar
 
 - Canonicalizes public scan URLs and drops query strings and fragments before fetching or persistence.
 - Rejects embedded credentials, non-HTTP protocols, non-standard ports, local names, private ranges, link-local ranges, multicast, and documentation-only IP ranges.
-- Revalidates passive targets before each request and redirect hop and applies validation to public-path probes.
+- Resolves and validates every passive target immediately before a request, then pins the socket lookup to that checked public IP while preserving the original hostname for HTTP Host, SNI, and TLS certificate verification. Redirect hops and public-path probes use the same transport.
 - Caps the main response at 2 MB, rejects non-success responses, non-HTML bodies, undersized pages, and recognizable access-denied or bot-challenge pages.
 - Records response status, content type, HTML size, redirect count, and public-path completion counts.
 - Requires content evidence for passive `.env`, JSON configuration, WordPress-admin, and generic-admin findings instead of trusting a 200 status alone.
@@ -156,7 +156,7 @@ These values are intentionally conservative but are still expert-chosen. They ar
 - Applies fail-closed, atomic limits to signup, login, anonymous passive scans, and feedback submission.
 - Reserves free-tier quota atomically and refunds it after a failed scan.
 - Replaces the partial schema with an idempotent migration containing the application tables, missing columns, constraints, indexes, row-level-security enablement, and atomic quota functions.
-- Changes the database default for new scans to private as well as setting private explicitly in application code. Existing public rows still require a consent review before migration.
+- Changes the database default for new scans to private as well as setting private explicitly in application code. Runtime access now treats legacy/mixed-version auto-public rows as private and refuses to republish them; their stored flags still require a consent review and backfill during deployment.
 - Updates consent and product copy to describe bounded read-only requests, owner-controlled publication, and the difference between public provenance evidence and development process.
 
 ### Policy consent and domain-control authorization
@@ -181,20 +181,22 @@ These values are intentionally conservative but are still expert-chosen. They ar
 
 - Removes the artificial 900 ms delay that was added to every progress phase.
 - Requires the initial target request to return a successful response; an unreachable or non-success target now aborts without producing a score.
-- Deduplicates deductions by finding category and uses only that category's worst severity.
-- Caps a result containing a critical finding at `35`, a high finding at `59`, and a medium finding at `79`.
-- Revalidates the public target before every deep-scan request and redirect hop, follows at most five redirects manually, and rejects redirects away from the exact verified hostname. The target is also validated before quota and ownership checks.
+- Deduplicates equivalent evidence by stable rule family rather than collapsing unrelated findings into broad categories; independent rules continue to accumulate, while repeated cookie instances cannot dominate the grade.
+- Uses explicit policy deductions of `42/28/14/4/0` for critical/high/medium/low/info and grade-aligned ceilings of `24/49/74/89` (F/D/C/B). These are conservative heuristic guardrails, not probabilities or calibrated loss estimates.
+- Stores separate deep scanner, scoring, and request-coverage contract versions and withholds legacy/unversioned grades in the UI.
+- Applies one 42-second active-scan deadline and fails without persistence or a grade when a required request, redirect, body read, or execution budget is unavailable; `429`/`5xx` probe responses no longer become green coverage.
+- Resolves, validates, and IP-pins every deep-scan request and redirect hop, follows at most five redirects manually, and rejects redirects away from the exact verified hostname. The target is also validated before quota and domain-control checks.
 - Reserves the free deep-scan allowance atomically, seeds the lifetime counter from existing scans during migration, and refunds the reservation when the scan cannot complete.
 - Requires bounded, type-specific content signatures before reporting a static sensitive-file exposure instead of treating a `200` catch-all response as proof.
 - Tracks request-level attempted, completed, failed, and blocked coverage. Any failed or blocked deep-scan request withholds the score and grade rather than becoming a clean pass.
 - No longer describes wildcard-origin plus credentials as authenticated cross-origin exposure, because browsers reject that combination, and requires actual admin-panel content without a login gate before reporting an exposed admin surface.
-- Surfaces plan lookup, scan-count, ownership lookup, persistence, and quota-refund errors instead of silently continuing.
+- Surfaces plan lookup, scan-count, domain-control lookup, persistence, and quota-refund errors instead of silently continuing, and applies per-account/per-target active-scan burst limits to every plan.
 
 ### Billing containment
 
-- Reuses a stored Stripe customer and an existing open checkout session where possible, blocks checkout for an already active plan, and supplies idempotency keys for new customer, session, and subscription creation.
+- Reuses a stored Stripe customer and an existing open checkout session where possible, checks Stripe's current customer-wide subscription state before checkout, blocks active or recoverable duplicate subscriptions, and supplies idempotency keys for new customer, session, and subscription creation.
 - Derives entitlement from the configured Stripe price and active/trialing subscription status rather than trusting mutable checkout metadata.
-- Handles subscription create, update, and delete events and prevents deletion of an older subscription from downgrading a newer active subscription.
+- Reconciles create, update, delete, pause, resume, and pending-update events against Stripe's current customer-wide state, so delayed/out-of-order events and multiple subscriptions converge on the newest qualifying entitlement.
 - Propagates entitlement-write failures so Stripe retries instead of acknowledging a lost database update.
 
 These changes make the passive result substantially more honest. They do not complete the production hardening below.
@@ -207,7 +209,7 @@ Priority means release risk, not implementation size.
 
 1. **Complete the privacy migration.** The repository now defaults new rows to private, but deployment must inventory and back up existing scans, treat previously auto-published rows as lacking informed publication consent, complete a reviewed visibility backfill, and test every result, metadata, badge, share-card, feed, comment, and like route as owner, other user, and anonymous user.
 2. **Deploy and verify the database migration.** Run it first in a production-shaped staging database, inspect legacy duplicates before unique indexes are created, validate constraints after cleanup, verify no old permissive RLS policies survive, and prove the service-role key is server-only. A SQL file in the repository does not migrate a deployed database.
-3. **Close outbound-request SSRF at the network boundary.** Application checks now revalidate each hop and keep active scans on the exact verified hostname. Also run scanners in an isolated worker with egress allowlisting, block private/link-local/metadata destinations at the network layer, use a resolver/connector that binds the validated IP to the connection, and log the connected address. DNS validation followed by a separate connection remains vulnerable to a rebinding/time-of-check-to-time-of-use race without this control.
+3. **Enforce outbound-request policy at the network boundary.** The application now binds each connection to the validated public IP and keeps active redirects on the exact verified hostname. Also run scanners in an isolated worker with egress allowlisting, block private/link-local/metadata destinations at the network layer, and log the connected address. Transport pinning closes the known application DNS-rebinding race; independent egress enforcement remains necessary defense in depth.
 4. **Finish first-class scan coverage.** Request-level deep coverage now tracks failures and blocks and withholds the score when either occurs. Every individual probe, body read, parse, and semantic check must still return `pass`, `fail`, or `unknown` with a reason. A timeout, DNS error, blocked response, size limit, or parse error must reduce coverage and must never improve a score.
 5. **Keep the deep scan experimental until it passes a fixture corpus and leaves the request path.** Static sensitive-file responses now require bounded content signatures, but some individual body-read, parse, and probe outcomes can still look like absence of a finding. The broader active-check set has not passed a catch-all/WAF/network fixture corpus. Add per-probe coverage, validate and bound every remaining response body, move the scan to a durable queue with cancellation and retry semantics, and keep “full OWASP,” “penetration test,” “no false positives,” and equivalent claims removed.
 6. **Finish authorization regression coverage.** Generated SVG values are escaped and the currently identified result, share, comment, and like paths enforce visibility. Add a route-matrix integration suite covering owner, unrelated user, and anonymous access to every existing and future result, activity, notification, and export surface so later routes cannot regress.
@@ -217,10 +219,10 @@ Priority means release risk, not implementation size.
 
 1. **Build the labelled benchmark and replace hand-set weights.** Use the process described in the next section. Until it exists, keep `heuristic` in the model version and never label the number as a probability.
 2. **Benchmark the header-hardening model.** Focused value validation, CSP `frame-ancestors` equivalence, partial credit, and honest naming now exist. Next, test the accepted policy grammar and hand-set deductions against a representative corpus; add explicit unknown/parse states; keep public exposure and key findings outside that number or define and validate a separate model.
-3. **Finish deep-scan evidence validation.** Use content signatures for every sensitive path, bound all response bodies, deduplicate equivalent routes, include request/response evidence safely, and test redirect, catch-all, WAF, CDN, and intermittent-network cases. Validate the new per-category deductions and severity caps against the fixture corpus rather than treating them as calibrated risk math.
+3. **Finish deep-scan evidence validation.** Use content signatures for every sensitive path, bound all response bodies, deduplicate equivalent routes, include request/response evidence safely, and test redirect, catch-all, WAF, CDN, and intermittent-network cases. Validate the rule-family deductions and grade-aligned severity ceilings against the fixture corpus rather than treating them as calibrated risk math.
 4. **Make database errors impossible to ignore.** Feedback, quota, scan visibility, and several critical writes now inspect errors. Wrap the remaining Supabase access behind helpers that always inspect `{ data, error }`; add transactions/RPCs where multiple writes form one action; and add request IDs without logging secrets.
 5. **Harden authentication and mutations.** Signup/login validation and atomic rate limits now exist. Move email, handle, password, IDs, URLs, sizes, and content types to shared schemas; extend fail-closed abuse controls to the remaining sensitive endpoints; verify that only a trusted proxy can set the client-address headers; define Origin/CSRF protection for cookie-authenticated mutations; rotate sessions when account or plan state changes; and add account recovery and session revocation.
-6. **Finish billing entitlement hardening.** Customer/session reuse, active-plan guards, idempotency keys, price/status-derived entitlement, subscription update/delete handling, and write-failure retries now exist. Add a processed-event ledger, explicitly model pause/unpaid states, reconcile against Stripe on a schedule, and add replay, DB-outage, and out-of-order webhook fixtures.
+6. **Finish billing entitlement hardening.** Customer/session reuse, current-state preflight, active/recoverable-plan guards, idempotency keys, price/status-derived customer-wide reconciliation, and write-failure retries now exist. Add a processed-event ledger, reconcile against Stripe on a schedule, and add signed webhook, replay, DB-outage, and live Stripe fixture coverage.
 7. **Finish application-header hardening.** Production `unsafe-eval` is removed, HSTS and restrictive CSP directives are configured, and the framework-identifying header is disabled. Replace remaining `unsafe-inline` allowances with a tested nonce/hash design where feasible and verify the actual deployed edge response rather than only configuration.
 8. **Make feedback useful for calibration.** Record model version, signal IDs, result ID, reporter relationship to the site, claimed ground truth, evidence/consent status, and adjudication state. Separate “marker is wrong” from “site was AI-assisted but carefully engineered.”
 9. **Add observability and budgets.** Measure fetch latency, bytes, redirects, per-check outcomes, unknown coverage, queue time, false-positive reports, publish rate, and model-version distribution. Alert on latency/unknown-rate regressions without retaining raw page bodies or sensitive URL parameters.
@@ -230,7 +232,7 @@ Priority means release risk, not implementation size.
 1. Move active scans to a durable, rate-limited worker with resumable status rather than a long-lived Route Handler stream.
 2. Add scheduled drift checks for builder metadata, domains, and asset patterns; require fixtures and benchmark results for allowlist changes.
 3. Show uncertainty and coverage prominently in rankings, preserve the latest-result/current-model-only rule, and avoid competitive language that treats the evidence index as an objective quality score.
-4. Add scan deletion, data export, and publication history; document actual retention periods and enforce them with jobs. Verified ownership revocation now exists, but its audit trail and retention behaviour still need documentation.
+4. Add scan deletion, data export, and publication history; document actual retention periods and enforce them with jobs. Domain-control claim revocation now exists, but its audit trail and retention behaviour still need documentation.
 5. Add accessible status announcements, explicit URL input semantics, reduced-motion behaviour, keyboard/browser tests, and truthful indeterminate progress.
 6. Replace hand-maintained detection parsing with a bounded parser only after its runtime compatibility and denial-of-service behaviour are tested; fuzz malformed markup either way.
 7. Document local setup, environment variables, migration order, operating limits, incident response, and rollback procedures.
@@ -241,8 +243,8 @@ Priority means release risk, not implementation size.
 
 Create an owner-consented evaluation set containing:
 
-- owner-verified generative-builder projects, including exported and custom-domain deployments;
-- owner-verified human-written and conventionally AI-assisted projects;
+- operator-attested generative-builder projects, including exported and custom-domain deployments;
+- operator-attested human-written and conventionally AI-assisted projects;
 - matched controls with the same framework, host, component library, industry, language, launch period, and template family;
 - hard negatives that discuss AI builders, intentionally copy marketing language, retain starter content, or run on a builder-adjacent host; and
 - adversarial fixtures with forged, removed, duplicated, or conflicting provenance markers.
@@ -333,12 +335,12 @@ Publish a compact model card with dataset dates, inclusion rules, sample counts,
 
 - Every phase reports pass/fail/unknown and a coverage denominator.
 - Loss of DNS/network access cannot yield `100`, an A grade, or “no findings.”
-- A critical finding enforces the predeclared score/grade cap; duplicate checks in one category cannot overwhelm the score.
+- A critical finding enforces the predeclared F-grade ceiling; duplicate evidence in one rule family cannot overwhelm the score, while independent confirmed rules still accumulate.
 - Redirects to a different or private target are blocked, including DNS-rebinding fixtures.
 - Catch-all HTML never becomes an exposed `.env`, Git, SQL, Docker, or configuration-file finding.
 - Wildcard-origin plus `Access-Control-Allow-Credentials: true` is at most an informational contradiction, while arbitrary credentialed origin reflection remains a finding. A login gate or a generic `200` page is not reported as an exposed admin panel.
 - The full fixture corpus completes within the execution budget with margin, or the scan runs in a durable worker.
-- Only an owner-verified origin can be actively scanned, and authorization is rechecked when a queued job starts.
+- Only an origin with fresh domain-control evidence and explicit scan authorization can be actively scanned, and both are rechecked when a queued job starts.
 - Active scans reject missing or stale terms acceptance, record the exact accepted version and server time, and reject domain verifications older than 30 days.
 - DNS, metadata, and file verification require exact token evidence; verification bodies are bounded; web redirects stay on the exact original HTTPS host; concurrent claim transfers are atomic; and revocation makes the claim unusable.
 
@@ -372,7 +374,7 @@ No required step may be best-effort. Add dependency and secret scanning, lockfil
 2. **Back up and migrate staging.** Apply the idempotent schema to a production-shaped copy. Resolve duplicate users, names, verification claims, and other rows before creating unique indexes or validating deferred constraints. Leave legacy policy version/time fields null unless there is real acceptance evidence; do not manufacture consent during migration.
 3. **Migrate visibility deliberately.** Change the database default to private. Because older scans were auto-published, treat their consent as uncertain: back them up, remove them from public feeds/share artifacts by default, and require an owner to republish where practical.
 4. **Deploy access controls and network isolation.** Verify every read/write matrix and outbound target class in staging before enabling public traffic.
-5. **Complete result version metadata.** Vibe and header model versions, signal evidence, and scoring-version rank snapshots are now stored, and public lists exclude model mismatches. Add an explicit scanner build and coverage-contract version. Legacy results may remain privately readable, but they must display `legacy/unversioned` and must never enter current-model feeds or rankings.
+5. **Complete result version metadata.** Vibe/header model versions, deep scanner/scoring/request-coverage versions, signal evidence, and scoring-version rank snapshots are now stored; public lists exclude model mismatches and deep legacy grades are withheld. Add per-probe semantic-contract versions when first-class check coverage lands. Legacy results may remain privately readable, but they must display `legacy/unversioned` and must never enter current-model feeds or rankings.
 6. **Shadow the empirical model.** Run it beside the heuristic without changing user-visible results. Compare disagreements, inspect false positives, and freeze the holdout before threshold selection.
 7. **Canary by model version.** Release to a small percentage, monitor unknown rate, latency, subgroup false-positive reports, and privacy/security errors, then increase gradually. Never mutate the meaning of an existing version.
 8. **Rescan instead of rewriting history.** A material signal, weight, threshold, parser, or coverage change requires a new model version. Store new results as new observations; do not silently recalculate old published rows.

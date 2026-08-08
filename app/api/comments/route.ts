@@ -2,9 +2,11 @@ import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { randomBytes } from 'crypto';
+import { after } from 'next/server';
 import { createNotification } from '@/lib/notifications';
 import { sendEmail, commentEmailHtml, replyEmailHtml } from '@/lib/email';
 import { getVisibleScan } from '@/lib/scan-access';
+import { usesCurrentScoringResult } from '@/lib/store';
 
 function genId() {
   return randomBytes(8).toString('base64url');
@@ -113,8 +115,18 @@ export async function POST(request: Request) {
   const { error } = await supabase.from('comments').insert(comment);
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
-  // ── Fire notifications (non-blocking) ────────────────────────────────────
-  void fireCommentNotifications(currentUserId, userName, body, scanId, parentId).catch(() => null);
+  // Keep notification delivery inside the request lifetime without delaying
+  // the comment response. Avoid logging the comment body or account details.
+  after(async () => {
+    try {
+      await fireCommentNotifications(currentUserId, userName, body, scanId, parentId);
+    } catch (notificationError) {
+      console.error('[notifications] comment delivery failed', {
+        scanId,
+        error: notificationError instanceof Error ? notificationError.message : 'Unknown error',
+      });
+    }
+  });
 
   return Response.json({
     id: comment.id,
@@ -183,7 +195,9 @@ async function fireCommentNotifications(
   }
 
   // If this is a reply, notify the parent comment's author
-  if (parentId && scanRow?.is_public === true) {
+  const isCurrentlyPublic = scanRow?.is_public === true
+    && usesCurrentScoringResult(scanRow?.result);
+  if (parentId && isCurrentlyPublic) {
     const { data: parentComment } = await supabase
       .from('comments')
       .select('user_id, user_name')

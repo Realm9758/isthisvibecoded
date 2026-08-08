@@ -1,13 +1,16 @@
 import type { DeepFinding, DeepScanResult } from '@/types/deep-scan';
-import { assertPublicTarget } from '@/lib/url-safety';
 import { analyzeSecurityHeaders } from '@/lib/security-headers';
+import { calculateDeepScore, DEEP_SCORING_VERSION } from '@/lib/deep-score';
+import { pinnedFetch } from '@/lib/pinned-fetch';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 const TIMEOUT = 8000;
 const SCAN_BUDGET_MS = 42_000;
 const MAX_REDIRECTS = 5;
 const MAX_PROBE_BODY_BYTES = 512_000;
-const UA = 'VibeScan-DeepScan/1.0 (Security Audit; Owner-Verified)';
+const UA = 'VibeScan-DeepScan/1.0 (Authorized domain-control scan)';
+export const DEEP_SCANNER_VERSION = '2.0.0-experimental';
+export const DEEP_COVERAGE_VERSION = '1.0.0-request';
 
 type RequestCoverage = {
   requestsAttempted: number;
@@ -65,13 +68,12 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
         context.coverage.requestsFailed++;
         return null;
       }
-      // Re-resolve and reject private/reserved addresses immediately before
-      // every request, including each redirect destination.
+      // Resolve, validate, and pin every socket immediately before the request,
+      // including redirects, so DNS rebinding cannot swap in a private address.
       if (context) context.coverage.requestsAttempted++;
-      await assertPublicTarget(currentUrl);
 
       const remainingBudget = context ? Math.max(1, context.deadlineAt - Date.now()) : TIMEOUT;
-      const res = await fetch(currentUrl, {
+      const res = await pinnedFetch(currentUrl, {
         ...requestOptions,
         method,
         body,
@@ -107,6 +109,7 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
         if (context) context.coverage.requestsBlocked++;
         return null;
       }
+      await res.body?.cancel().catch(() => undefined);
       currentUrl = redirectUrl;
 
       // Match fetch redirect semantics for POST responses. The deep scanner
@@ -611,9 +614,9 @@ async function checkInfoDisclosure(res: Response | null): Promise<DeepFinding[]>
     findings.push({
       id: 'info-server-version',
       category: 'info-disclosure',
-      severity: 'low',
+      severity: 'info',
       title: 'Server Version Disclosed',
-      description: `The Server header reveals the exact version: "${server}". Attackers use this to target known CVEs for that version.`,
+      description: `The Server header advertises a version-like value: "${server}". This is reconnaissance context, not evidence that a vulnerable component or code path is present.`,
       evidence: `Server: ${server}`,
       remediation: 'Suppress or genericize the Server header in your web server config.',
     });
@@ -623,9 +626,9 @@ async function checkInfoDisclosure(res: Response | null): Promise<DeepFinding[]>
     findings.push({
       id: 'info-x-powered-by',
       category: 'info-disclosure',
-      severity: 'low',
+      severity: 'info',
       title: 'Technology Disclosed via X-Powered-By',
-      description: `X-Powered-By reveals the technology stack: "${xpb}". Assists targeted attacks.`,
+      description: `X-Powered-By advertises the technology stack: "${xpb}". This is reconnaissance context and does not establish an exploitable condition.`,
       evidence: `X-Powered-By: ${xpb}`,
       remediation: 'Remove the X-Powered-By header.',
     });
@@ -635,9 +638,9 @@ async function checkInfoDisclosure(res: Response | null): Promise<DeepFinding[]>
     findings.push({
       id: 'info-aspnet-version',
       category: 'info-disclosure',
-      severity: 'medium',
+      severity: 'info',
       title: 'ASP.NET Version Disclosed',
-      description: `X-AspNet-Version reveals the exact .NET version: "${aspnet}".`,
+      description: `X-AspNet-Version advertises a .NET version: "${aspnet}". Confirm the deployed runtime and patch status separately; the header alone is not vulnerability evidence.`,
       evidence: `X-AspNet-Version: ${aspnet}`,
       remediation: 'Disable via web.config: <httpRuntime enableVersionHeader="false"/>',
     });
@@ -658,9 +661,9 @@ async function checkHTTPMethods(baseUrl: string): Promise<DeepFinding[]> {
       findings.push({
         id: 'methods-trace',
         category: 'http-methods',
-        severity: 'medium',
-        title: 'HTTP TRACE Method Enabled',
-        description: 'TRACE is enabled. Cross-Site Tracing (XST) attacks can steal cookies even when HttpOnly is set.',
+        severity: 'low',
+        title: 'HTTP TRACE Method Advertised',
+        description: 'The server advertises TRACE. Modern browsers restrict the classic cross-site TRACE technique, so this is unnecessary attack-surface hardening rather than proof of cookie theft.',
         evidence: `Allow: ${allow}`,
         remediation: 'Disable TRACE in your web server configuration.',
       });
@@ -735,7 +738,8 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
   if (!res || res.status !== 200) return [];
 
   const text = await readProbeText(res);
-  // Only flag paths that are genuinely non-obvious and give attackers real info.
+  // Report only non-obvious paths as context; their access controls determine
+  // whether anything is actually exposed.
   // /admin, /login, /dashboard are universally guessed — listing them adds no signal
   // and Disallow: /admin is actually best practice. Focus on specific, unusual paths.
   const sensitiveRe = /\/backup|\/database|\/private|\/secret|\/internal|\/staging|\/\.git|\/config\/|\/api\/internal|\/dev\//i;
@@ -752,9 +756,9 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
     {
       id: 'robots-sensitive-paths',
       category: 'info-disclosure',
-      severity: 'low',
+      severity: 'info',
       title: 'robots.txt Reveals Non-Obvious Sensitive Paths',
-      description: `robots.txt lists specific internal paths that attackers wouldn't otherwise guess: ${disallowed.join(', ')}. While Disallow prevents crawling, it serves as a directory of targets.`,
+      description: `robots.txt lists potentially internal paths: ${disallowed.join(', ')}. These paths are reconnaissance context; they may already be guessable and are not exposures unless their own access controls fail.`,
       evidence: disallowed.map(p => `Disallow: ${p}`).join('\n'),
       remediation: 'Remove non-obvious internal paths from robots.txt. Security should not depend on obscurity — protect these endpoints with authentication instead.',
     },
@@ -867,8 +871,8 @@ async function checkAdminPaths(baseUrl: string): Promise<DeepFinding[]> {
     id: 'admin-paths-exposed',
     category: 'exposed-files',
     severity: 'high',
-    title: `Admin Panel Accessible Without Auth: ${exposed.slice(0, 3).join(', ')}${exposed.length > 3 ? '…' : ''}`,
-    description: `${exposed.length} admin path${exposed.length > 1 ? 's' : ''} returned HTTP 200 with admin panel content and no login gate. Exposed admin panels are high-value targets for attackers.`,
+    title: `Apparent Unauthenticated Admin Content: ${exposed.slice(0, 3).join(', ')}${exposed.length > 3 ? '…' : ''}`,
+    description: `${exposed.length} admin path${exposed.length > 1 ? 's' : ''} returned HTTP 200 with management-interface markers and no visible login gate. Validate in an authorised browser session that functional privileged content is actually available before assigning impact.`,
     evidence: exposed.map(p => `GET ${baseUrl}${p} → 200 OK (admin content confirmed)`).join('\n'),
     remediation: 'Restrict admin paths to specific IP ranges, require authentication, or move them to a non-public subdomain.',
   }];
@@ -1167,7 +1171,7 @@ async function checkSRI(baseUrl: string, html: string): Promise<DeepFinding[]> {
   return [{
     id: 'sri-missing',
     category: 'headers',
-    severity: 'low',
+    severity: 'info',
     title: `${noIntegrity.length} External Resource${noIntegrity.length > 1 ? 's' : ''} Without Subresource Integrity`,
     description: 'External scripts or stylesheets are loaded without fixed integrity hashes. SRI can add supply-chain defence for immutable third-party assets, but it is not suitable for every dynamically versioned resource and its absence is not an exploit by itself.',
     evidence: noIntegrity.map(t => t.substring(0, 120)).join('\n'),
@@ -1309,11 +1313,11 @@ async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
         return [{
           id: 'ssrf-metadata',
           category: 'authentication',
-          severity: 'critical',
-          title: 'SSRF — Cloud Metadata Endpoint Accessible',
-          description: `The ${param.replace('?', '').replace('=', '')} parameter fetched the AWS instance metadata endpoint and returned cloud data. Attackers can steal IAM credentials to gain full cloud account access.`,
-          evidence: `GET ${metaUrl}\n→ Response contains cloud metadata (ami-id / iam credentials)`,
-          remediation: 'Validate and allowlist URLs before fetching. Block requests to 169.254.169.254 and private IP ranges. Use IMDSv2 which requires PUT to acquire tokens.',
+          severity: 'high',
+          title: 'Differential Cloud-Metadata-Like Response',
+          description: `The ${param.replace('?', '').replace('=', '')} parameter produced cloud-metadata markers that were absent from a control request. This is strong SSRF evidence, but confirm server-side egress and returned data in logs or a consented out-of-band test before treating credential access as proven.`,
+          evidence: `GET ${metaUrl}\n→ Response contains metadata-like markers absent from the control response`,
+          remediation: 'Validate and allowlist outbound URLs, resolve and pin approved public addresses, block private/link-local destinations at the egress layer, and require IMDSv2 for AWS workloads.',
           url: metaUrl,
         }];
       }
@@ -1385,7 +1389,7 @@ async function checkOutdatedLibraries(html: string): Promise<DeepFinding[]> {
       re: /jquery[/\-v](3\.[0-4]\.\d+)/i,
       name: 'jQuery',
       versionLabel: '3.x < 3.5',
-      severity: 'low',
+    severity: 'info',
       cve: 'CVE-2020-11022',
       remediation: 'Upgrade to jQuery 3.7+. Versions before 3.5 are vulnerable to XSS via HTML parsing.',
     },
@@ -1741,13 +1745,13 @@ async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
     const text = await readProbeText(res);
     if (text.includes('X-Injected: malicious')) {
       return [{
-        id: 'crlf-injection',
+        id: 'crlf-body-reflection',
         category: 'injection',
-        severity: 'medium',
-        title: 'Potential CRLF Injection — Newline Reflected in Response',
-        description: `A CRLF payload was reflected unencoded in the response body at ${path}. Depending on context, this may allow header injection or HTTP response splitting.`,
-        evidence: `GET ${url}\n→ CRLF payload reflected unencoded in response body`,
-        remediation: 'Strip or encode \\r and \\n from user input used in headers or redirects.',
+        severity: 'info',
+        title: 'Decoded Newline Reflected in Response Body',
+        description: `The decoded test string appeared in the response body at ${path}. Body reflection does not establish response-header injection or HTTP response splitting; retain this only as input-handling context.`,
+        evidence: `GET ${url}\n→ Decoded newline text reflected in response body`,
+        remediation: 'Apply output encoding appropriate to the body context. Separately reject carriage returns/newlines in values used for response headers.',
         url,
       }];
     }
@@ -1756,27 +1760,6 @@ async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
 }
 
 // ── Score calculation ─────────────────────────────────────────────────────
-
-function calculateScore(findings: DeepFinding[]): number {
-  // Only count real vulnerabilities — info is never penalised
-  const WEIGHTS: Record<string, number> = { critical: 30, high: 15, medium: 7, low: 2, info: 0 };
-  // Correlated findings in one category contribute only their worst severity.
-  const worstPerCategory = new Map<string, number>();
-  for (const f of findings) {
-    const w = WEIGHTS[f.severity] ?? 0;
-    worstPerCategory.set(f.category, Math.max(worstPerCategory.get(f.category) ?? 0, w));
-  }
-  const deductions = Array.from(worstPerCategory.values()).reduce((sum, w) => sum + w, 0);
-  let score = Math.max(0, 100 - deductions);
-
-  // A severe confirmed finding must constrain the grade even when it is the
-  // only category affected. These are severity guardrails, not probabilities.
-  if (findings.some(f => f.severity === 'critical')) score = Math.min(score, 35);
-  else if (findings.some(f => f.severity === 'high')) score = Math.min(score, 59);
-  else if (findings.some(f => f.severity === 'medium')) score = Math.min(score, 79);
-
-  return score;
-}
 
 // ── Build checked[] summary ───────────────────────────────────────────────
 
@@ -1962,7 +1945,10 @@ export async function deepScanDomain(
   await run('files',    () => checkSensitiveFiles(baseUrl));
   await run('xss',      () => checkXSS(baseUrl));
   await run('sqli',     () => checkSQLInjection(baseUrl));
-  await run('cors',     () => checkCORS(baseUrl));
+  await run('cors',     async () => [
+    ...await checkCORS(baseUrl),
+    ...await checkCrossdomain(baseUrl),
+  ]);
   await run('headers',  () => checkSecurityHeaders(mainRes));
   await run('cookies',  () => checkCookies(mainRes));
   await run('methods',  () => checkHTTPMethods(baseUrl));
@@ -1972,10 +1958,11 @@ export async function deepScanDomain(
   await run('redirect', () => checkOpenRedirect(baseUrl));
   await run('dirlist',  () => checkDirectoryListing(baseUrl));
   await run('robots',   () => checkRobotsTxt(baseUrl));
-  await run('cors',     () => checkCrossdomain(baseUrl));
-  await run('info',     () => checkServerStatus(baseUrl));
+  await run('info',     async () => [
+    ...await checkServerStatus(baseUrl),
+    ...await checkInfoDisclosure(mainRes),
+  ]);
   await run('sri',        () => checkSRI(baseUrl, mainHtml));
-  await run('info',       () => checkInfoDisclosure(mainRes));
   await run('forced',     () => checkForcedBrowsing(baseUrl));
   await run('idor',       () => checkIDOR(baseUrl));
   await run('ssrf',       () => checkSSRF(baseUrl));
@@ -1999,13 +1986,18 @@ export async function deepScanDomain(
     domain,
     scannedAt: new Date().toISOString(),
     duration: Date.now() - start,
+    versions: {
+      scanner: DEEP_SCANNER_VERSION,
+      scoring: DEEP_SCORING_VERSION,
+      coverage: DEEP_COVERAGE_VERSION,
+    },
     summary: {
       critical: count('critical'),
       high: count('high'),
       medium: count('medium'),
       low: count('low'),
       info: count('info'),
-      score: coverageComplete ? calculateScore(findings) : null,
+      score: coverageComplete ? calculateDeepScore(findings) : null,
     },
     coverage: { ...requestCoverage, complete: coverageComplete },
     findings,
