@@ -1,5 +1,6 @@
 export type ConfidenceLevel = 'Low' | 'Medium' | 'High';
-export type RiskLevel = 'Low Risk' | 'Medium Risk' | 'High Risk';
+/** Legacy field name; values describe only the bounded response-header rubric. */
+export type RiskLevel = 'Few Header Gaps' | 'Some Header Gaps' | 'Major Header Gaps';
 export type VibeLabel =
   | 'Inconclusive'
   | 'Limited supporting evidence'

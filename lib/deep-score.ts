@@ -1,6 +1,5 @@
 import type { DeepFinding, DeepFindingSeverity } from '@/types/deep-scan';
-
-export const DEEP_SCORING_VERSION = '2.0.0-heuristic';
+export { DEEP_SCORING_VERSION } from '@/lib/deep-versions';
 
 // Policy deductions for a bounded heuristic grade. They are neither
 // probabilities nor empirically calibrated loss estimates. The guardrails

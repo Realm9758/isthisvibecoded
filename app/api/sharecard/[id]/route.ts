@@ -1,5 +1,5 @@
 import { getPublicScan } from '@/lib/scan-access';
-import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
+import { getHeaderGapBand, getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 
 type SharecardRouteContext = { params: Promise<{ id: string }> };
 
@@ -28,7 +28,7 @@ export async function GET(_req: Request, ctx: SharecardRouteContext) {
   const safeHostname = escapeXml(hostname.length > 30 ? `${hostname.slice(0, 30)}…` : hostname);
   const vibeScore = escapeXml(vibe.score);
   const securityScore = escapeXml(security.score);
-  const riskLevel = escapeXml(security.riskLevel.replace(/\s+risk$/i, ''));
+  const riskLevel = escapeXml(getHeaderGapBand(security.riskLevel));
 
   const W = 600;
   const H = 315;

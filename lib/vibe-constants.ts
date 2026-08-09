@@ -1,4 +1,15 @@
-export const VIBE_MODEL_VERSION = '2.0.0-heuristic';
+export const VIBE_MODEL_VERSION = '2.1.0-evidence-bands';
+
+/**
+ * Ordinal display values for the four evidence outcomes. These values make
+ * ordering easy to scan; distances between them are not calibrated odds.
+ */
+export const VIBE_EVIDENCE_INDEX = {
+  inconclusive: 0,
+  limited: 35,
+  strong: 70,
+  direct: 100,
+} as const;
 
 /**
  * These bands describe a public evidence index, not an authorship probability.
@@ -28,4 +39,13 @@ export function getSecurityColor(score: number): string {
   if (score >= 80) return '#22c55e';
   if (score >= 50) return '#f59e0b';
   return '#ef4444';
+}
+
+/** Normalize current header-hardening bands and legacy stored `* Risk` values. */
+export function getHeaderGapBand(value: string): 'Few' | 'Some' | 'Major' | 'Unknown' {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'few header gaps' || normalized === 'low risk') return 'Few';
+  if (normalized === 'some header gaps' || normalized === 'medium risk') return 'Some';
+  if (normalized === 'major header gaps' || normalized === 'high risk') return 'Major';
+  return 'Unknown';
 }

@@ -1,6 +1,6 @@
 import type { SecurityHeaderResult, RiskLevel } from '@/types/analysis';
 
-export const SECURITY_MODEL_VERSION = '2.0.0-header-heuristic';
+export const SECURITY_MODEL_VERSION = '2.1.0-header-hardening';
 
 const CHECKED_HEADERS: Array<{
   name: string;
@@ -10,13 +10,13 @@ const CHECKED_HEADERS: Array<{
 }> = [
   {
     name: 'Content-Security-Policy',
-    severity: 'critical',
+    severity: 'medium',
     penalty: 25,
     recommendation: "Add a CSP to restrict which resources the browser can load. Start with: default-src 'self'",
   },
   {
     name: 'Strict-Transport-Security',
-    severity: 'high',
+    severity: 'low',
     penalty: 20,
     recommendation: 'Add HSTS to enforce HTTPS. Use: max-age=31536000; includeSubDomains',
   },
@@ -124,6 +124,9 @@ export function analyzeSecurityHeaders(
       } else if (scriptSources.includes('*')) {
         quality = 0.25;
         details = 'The effective script source includes a wildcard and provides only minimal restriction.';
+      } else if (scriptSources.some(token => /^(?:https?|data):$/i.test(token))) {
+        quality = 0.25;
+        details = 'The effective script source permits a broad URL scheme, so scripts can load from origins the policy does not enumerate.';
       } else if (scriptSources.some(token => token.toLowerCase() === "'unsafe-eval'")) {
         quality = 0.5;
         details = "The CSP restricts sources but allows 'unsafe-eval', which substantially weakens script protection.";
@@ -209,9 +212,9 @@ export function analyzeSecurityHeaders(
   score = Math.max(0, Math.min(100, score));
 
   let riskLevel: RiskLevel;
-  if (score >= 80) riskLevel = 'Low Risk';
-  else if (score >= 50) riskLevel = 'Medium Risk';
-  else riskLevel = 'High Risk';
+  if (score >= 80) riskLevel = 'Few Header Gaps';
+  else if (score >= 50) riskLevel = 'Some Header Gaps';
+  else riskLevel = 'Major Header Gaps';
 
   return { score: Math.round(score), riskLevel, headers, modelVersion: SECURITY_MODEL_VERSION };
 }

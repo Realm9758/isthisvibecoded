@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { OwnershipVerify } from '@/components/OwnershipVerify';
 import type { DeepScanResult, DeepFinding } from '@/types/deep-scan';
-import { DEEP_SCORING_VERSION } from '@/lib/deep-score';
+import { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION, DEEP_SCORING_VERSION } from '@/lib/deep-versions';
 import type { ScanPhase } from '@/lib/deep-scanner';
 import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 import { ACCOUNT_POLICY_VERSION, DEEP_SCAN_TERMS_VERSION, isValidDisplayHandle } from '@/lib/policy';
@@ -453,7 +453,9 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
   const { summary, findings, checked } = result;
   const scoreAvailable = summary.score !== null
     && result.coverage?.complete === true
-    && result.versions?.scoring === DEEP_SCORING_VERSION;
+    && result.versions?.scanner === DEEP_SCANNER_VERSION
+    && result.versions?.scoring === DEEP_SCORING_VERSION
+    && result.versions?.coverage === DEEP_COVERAGE_VERSION;
   const grade = scoreAvailable ? GRADE(summary.score as number) : '—';
   const gradeColor = GRADE_COLOR(grade);
   const order: DeepFinding['severity'][] = ['critical', 'high', 'medium', 'low', 'info'];
@@ -1029,7 +1031,9 @@ function DeepScanHistoryCard({ entry }: { entry: DeepScanEntry }) {
   const { summary, findings } = entry.result;
   const scoreAvailable = summary.score !== null
     && entry.result.coverage?.complete === true
-    && entry.result.versions?.scoring === DEEP_SCORING_VERSION;
+    && entry.result.versions?.scanner === DEEP_SCANNER_VERSION
+    && entry.result.versions?.scoring === DEEP_SCORING_VERSION
+    && entry.result.versions?.coverage === DEEP_COVERAGE_VERSION;
   const grade = scoreAvailable ? GRADE(summary.score as number) : '—';
   const gradeColor = GRADE_COLOR(grade);
   const criticalCount = summary.critical ?? 0;

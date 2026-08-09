@@ -804,7 +804,7 @@ function OnboardingNote() {
           {[
             ['Evidence Index', '0–100 summarizes allowlisted public provenance markers. It is not a probability or proof of authorship.'],
             ['Header Hardening', '0–100 measures a limited set of HTTPS and response-header controls, not overall application security.'],
-            ['Key Risks', 'Issues visible without authentication. Expand each to see fix instructions and code examples.'],
+            ['Review findings', 'Publicly observable hardening gaps and potential exposures. Validate each before making changes.'],
             ['Next step', 'Sign up and verify domain control to run the experimental set of active checks.'],
           ].map(([term, desc]) => (
             <li key={term} className="text-[11px] text-white/40">
@@ -1177,7 +1177,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
         </div>
       </div>
 
-      {/* ══ SECTION 2: KEY RISKS ════════════════════════════════════════════ */}
+      {/* ══ SECTION 2: REVIEW FINDINGS ══════════════════════════════════════ */}
       <div className="rounded-2xl border border-white/7 overflow-hidden" style={{ background: 'rgba(255,255,255,0.01)' }}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/6">
           <div className="flex items-center gap-2.5">
@@ -1187,7 +1187,7 @@ export function ResultsDashboard({ result, onReset, defaultRoastMode = false }: 
               </svg>
             </div>
             <div>
-              <p className="text-sm font-bold text-white/80">Key Risks</p>
+              <p className="text-sm font-bold text-white/80">Review Findings</p>
               <p className="text-[10px] text-white/35">From publicly visible data — no exploitation</p>
             </div>
           </div>

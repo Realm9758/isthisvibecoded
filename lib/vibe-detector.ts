@@ -5,7 +5,7 @@ import type {
   VibeLabel,
   VibeScoreBreakdown,
 } from '@/types/analysis';
-import { VIBE_MODEL_VERSION, VIBE_SCORE_BANDS } from './vibe-constants';
+import { VIBE_EVIDENCE_INDEX, VIBE_MODEL_VERSION, VIBE_SCORE_BANDS } from './vibe-constants';
 
 type DetectorResult = {
   score: number;
@@ -20,19 +20,12 @@ type DetectorResult = {
 
 type SignalInput = Omit<VibeEvidenceSignal, 'points'> & { points: number };
 
-const CATEGORY_CAPS: Record<Exclude<VibeEvidenceCategory, 'conflict'>, number> = {
-  provenance: 80,
-  scaffold: 22,
-  stack: 14,
-  content: 6,
-};
-
 const CONFLICT_CAP = 35;
 
 const AI_GENERATORS: Array<{ id: string; name: string; generatorPattern: RegExp; mentionPattern: RegExp }> = [
   { id: 'lovable', name: 'Lovable', generatorPattern: /^(?:lovable|gpt[ -]?engineer)(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\blovable\b|gpt[ -]?engineer/i },
   { id: 'v0', name: 'v0 by Vercel', generatorPattern: /^v0(?:\.dev)?(?: by vercel)?(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bv0(?:\.dev| by vercel)\b/i },
-  { id: 'bolt', name: 'Bolt', generatorPattern: /^(?:bolt|bolt\.new|bolt by stackblitz)(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bbolt(?:\.new| by stackblitz)\b/i },
+  { id: 'bolt', name: 'Bolt', generatorPattern: /^(?:bolt\.new|bolt by stackblitz)(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bbolt(?:\.new| by stackblitz)\b/i },
   { id: 'replit-agent', name: 'Replit Agent', generatorPattern: /^replit agent(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\breplit agent\b/i },
   { id: 'base44', name: 'Base44', generatorPattern: /^base44(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bbase44\b/i },
   { id: 'wix-ai', name: 'Wix AI', generatorPattern: /^(?:wix ai|wix artificial design intelligence)(?:[ /-]+v?\d+(?:\.\d+){0,3})?$/i, mentionPattern: /\bwix ai\b|artificial design intelligence/i },
@@ -194,7 +187,7 @@ function clamp(value: number, min: number, max: number): number {
  * underlying fact. Taking only the strongest prevents a hostname, attribution,
  * and asset URL from one builder being counted as three independent facts.
  */
-function cappedCategoryScore(
+function strongestCategoryScore(
   signals: VibeEvidenceSignal[],
   category: Exclude<VibeEvidenceCategory, 'conflict'>,
 ): number {
@@ -204,8 +197,7 @@ function cappedCategoryScore(
     const key = signal.correlationKey ?? signal.id;
     strongestByCorrelation.set(key, Math.max(strongestByCorrelation.get(key) ?? 0, signal.points));
   }
-  const sum = [...strongestByCorrelation.values()].reduce((total, points) => total + points, 0);
-  return Math.min(CATEGORY_CAPS[category], sum);
+  return Math.max(0, ...strongestByCorrelation.values());
 }
 
 function conflictScore(signals: VibeEvidenceSignal[]): number {
@@ -253,7 +245,7 @@ export function detectVibe(
       category: 'provenance',
       direction: 'supports',
       strength: 'direct',
-      points: 80,
+      points: VIBE_EVIDENCE_INDEX.direct,
       correlationKey: `builder-${candidate.id}`,
       source: 'metadata',
       description: `Generator metadata explicitly names ${candidate.name}`,
@@ -288,7 +280,7 @@ export function detectVibe(
       category: 'provenance',
       direction: 'supports',
       strength: 'strong',
-      points: 52,
+      points: VIBE_EVIDENCE_INDEX.strong,
       correlationKey: `builder-${candidate.id}`,
       source: 'markup',
       description: `An HTML comment contains a ${candidate.name} provenance marker`,
@@ -301,8 +293,6 @@ export function detectVibe(
     host: (value: string) => boolean;
     attributionHostnames: string[];
     assetPatterns: RegExp[];
-    hostPoints: number;
-    sourcePoints: number;
   }> = [
     {
       id: 'lovable',
@@ -310,8 +300,6 @@ export function detectVibe(
       host: value => ['.lovable.app', '.lovableproject.com', '.gptengineer.app'].some(suffix => value.endsWith(suffix)),
       attributionHostnames: ['lovable.app', 'lovable.dev', 'lovableproject.com'],
       assetPatterns: [/lovable-uploads/i],
-      hostPoints: 58,
-      sourcePoints: 60,
     },
     {
       id: 'v0',
@@ -319,8 +307,6 @@ export function detectVibe(
       host: () => false,
       attributionHostnames: ['v0.dev'],
       assetPatterns: [],
-      hostPoints: 0,
-      sourcePoints: 52,
     },
     {
       id: 'bolt',
@@ -328,8 +314,6 @@ export function detectVibe(
       host: value => value.endsWith('.bolt.host'),
       attributionHostnames: ['bolt.new'],
       assetPatterns: [],
-      hostPoints: 52,
-      sourcePoints: 52,
     },
     {
       id: 'base44',
@@ -337,8 +321,6 @@ export function detectVibe(
       host: value => value.endsWith('.base44.app'),
       attributionHostnames: ['base44.app', 'base44.com'],
       assetPatterns: [/base44-cdn/i],
-      hostPoints: 55,
-      sourcePoints: 50,
     },
   ];
 
@@ -349,7 +331,7 @@ export function detectVibe(
         category: 'provenance',
         direction: 'supports',
         strength: 'strong',
-        points: platform.hostPoints,
+        points: VIBE_EVIDENCE_INDEX.strong,
         correlationKey: `builder-${platform.id}`,
         source: 'hostname',
         description: `The site is hosted on a ${platform.name} project domain`,
@@ -371,18 +353,27 @@ export function detectVibe(
     const builderAsset = getResourceUrls(html).some(value => {
       return platform.assetPatterns.some(pattern => pattern.test(value));
     });
-    if (attributed || builderAsset) {
+    if (attributed) {
       add({
         id: `${platform.id}-source-marker`,
         category: 'provenance',
         direction: 'supports',
         strength: 'strong',
-        points: platform.sourcePoints,
+        points: VIBE_EVIDENCE_INDEX.strong,
         correlationKey: `builder-${platform.id}`,
         source: 'markup',
-        description: attributed
-          ? `A public “built with” attribution links to ${platform.name}`
-          : `${platform.name}-specific project assets appear in the public source`,
+        description: `A public “built with” attribution links to ${platform.name}`,
+      });
+    } else if (builderAsset) {
+      add({
+        id: `${platform.id}-asset-marker`,
+        category: 'provenance',
+        direction: 'supports',
+        strength: 'moderate',
+        points: VIBE_EVIDENCE_INDEX.limited,
+        correlationKey: `builder-${platform.id}`,
+        source: 'markup',
+        description: `${platform.name}-specific project assets appear in the public source`,
       });
     }
   }
@@ -396,7 +387,7 @@ export function detectVibe(
       category: 'provenance',
       direction: 'supports',
       strength: 'strong',
-      points: 50,
+      points: VIBE_EVIDENCE_INDEX.strong,
       correlationKey: 'builder-replit-agent',
       source: 'markup',
       description: 'A Replit Agent provenance marker appears in the public source',
@@ -579,20 +570,28 @@ export function detectVibe(
     });
   }
 
-  const provenance = cappedCategoryScore(signals, 'provenance');
-  const scaffold = cappedCategoryScore(signals, 'scaffold');
-  const stack = cappedCategoryScore(signals, 'stack');
-  const content = cappedCategoryScore(signals, 'content');
+  const provenance = strongestCategoryScore(signals, 'provenance');
+  const scaffold = strongestCategoryScore(signals, 'scaffold');
+  const stack = strongestCategoryScore(signals, 'stack');
+  const content = strongestCategoryScore(signals, 'content');
   const conflicts = conflictScore(signals);
 
   const directSignal = signals.some(signal => signal.direction === 'supports' && signal.strength === 'direct');
   const strongProvenance = signals.some(
-    signal => signal.direction === 'supports' && signal.category === 'provenance' && signal.points >= 45,
+    signal => signal.direction === 'supports' && signal.category === 'provenance' && signal.strength === 'strong',
   );
-  const conflictAttenuation = directSignal ? 0.2 : strongProvenance ? 0.45 : 1;
-  const conflictPenalty = Math.round(conflicts * conflictAttenuation);
-  const positiveTotal = provenance + scaffold + stack + content;
-  const score = clamp(Math.round(positiveTotal - conflictPenalty), 0, 100);
+  const moderateProvenance = signals.some(
+    signal => signal.direction === 'supports' && signal.category === 'provenance' && signal.strength === 'moderate',
+  );
+
+  // This is deliberately ordinal rather than pseudo-probabilistic. A strong
+  // alternative generator declaration downgrades supporting provenance by one
+  // band; it never manufactures evidence of human authorship.
+  let score: number = VIBE_EVIDENCE_INDEX.inconclusive;
+  if (directSignal) score = VIBE_EVIDENCE_INDEX.direct;
+  else if (strongProvenance) score = conflicts > 0 ? VIBE_EVIDENCE_INDEX.limited : VIBE_EVIDENCE_INDEX.strong;
+  else if (moderateProvenance && conflicts === 0) score = VIBE_EVIDENCE_INDEX.limited;
+  const conflictPenalty = Math.max(0, provenance - score);
 
   const supportingCategories = new Set(
     signals
@@ -603,7 +602,7 @@ export function detectVibe(
   const label = getVibeLabel(score, directSignal);
   let confidence: ConfidenceLevel = 'Low';
   if (directSignal) confidence = 'High';
-  else if (strongProvenance || (score >= VIBE_SCORE_BANDS.strong && supportingCategories.size >= 2)) confidence = 'Medium';
+  else if (strongProvenance && conflicts === 0) confidence = 'Medium';
 
   const breakdown: VibeScoreBreakdown = {
     provenance,

@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
+import { getHeaderGapBand, getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 
 interface UserScan {
   id: string;
@@ -25,10 +25,10 @@ interface PublicProfile {
 
 const vibeColor = getVibeColor;
 const secColor = getSecurityColor;
-const headerRiskBand = (value: string) => value.replace(/\s+risk$/i, '') || 'Unknown';
+const headerRiskBand = getHeaderGapBand;
 
 const RISK_COLOR: Record<string, string> = {
-  Low: '#22c55e', Medium: '#f59e0b', High: '#f97316', Critical: '#ef4444',
+  Few: '#22c55e', Some: '#f59e0b', Major: '#f97316', Unknown: '#94a3b8',
 };
 
 function timeAgo(ms: number) {
@@ -165,7 +165,7 @@ export default function PublicProfilePage() {
                           className="text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0"
                           style={{ color: RISK_COLOR[headerRiskBand(scan.riskLevel)] ?? '#fff', background: `${RISK_COLOR[headerRiskBand(scan.riskLevel)] ?? '#fff'}15` }}
                         >
-                          {headerRiskBand(scan.riskLevel)} header gaps
+                          {headerRiskBand(scan.riskLevel)} observed header gaps
                         </span>
                       </div>
 

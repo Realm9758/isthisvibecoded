@@ -1,6 +1,8 @@
 import type { DeepFinding, DeepScanResult } from '@/types/deep-scan';
 import { analyzeSecurityHeaders } from '@/lib/security-headers';
-import { calculateDeepScore, DEEP_SCORING_VERSION } from '@/lib/deep-score';
+import { calculateDeepScore } from '@/lib/deep-score';
+import { findStripeSecretEvidence, validateSensitiveFileEvidence } from '@/lib/deep-evidence';
+import { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION, DEEP_SCORING_VERSION } from '@/lib/deep-versions';
 import { pinnedFetch } from '@/lib/pinned-fetch';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
@@ -9,8 +11,7 @@ const SCAN_BUDGET_MS = 42_000;
 const MAX_REDIRECTS = 5;
 const MAX_PROBE_BODY_BYTES = 512_000;
 const UA = 'VibeScan-DeepScan/1.0 (Authorized domain-control scan)';
-export const DEEP_SCANNER_VERSION = '2.0.0-experimental';
-export const DEEP_COVERAGE_VERSION = '1.0.0-request';
+export { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION } from '@/lib/deep-versions';
 
 type RequestCoverage = {
   requestsAttempted: number;
@@ -334,68 +335,6 @@ async function readBoundedBody(response: Response): Promise<string | null> {
   return readBoundedProbeText(response, MAX_SENSITIVE_FILE_BYTES);
 }
 
-function validateSensitiveFile(path: string, body: string, contentType: string): string | null {
-  const trimmed = body.trim();
-  if (!trimmed) return null;
-  const looksHtml = contentType.toLowerCase().includes('text/html')
-    || /<!doctype\s+html|<html\b|<body\b/i.test(trimmed.slice(0, 4_000));
-
-  if (path === '/phpinfo.php' || path === '/info.php') {
-    return /phpinfo\(\)|<title>php\s*\d|PHP Version/i.test(trimmed)
-      ? 'phpinfo output markers detected'
-      : null;
-  }
-  if (looksHtml) return null;
-
-  if (path.startsWith('/.env')) {
-    const assignments = trimmed.match(/^[A-Z_][A-Z0-9_]*\s*=.+$/gm) ?? [];
-    return assignments.length >= 2 ? `${assignments.length} environment assignments detected` : null;
-  }
-  if (path === '/.git/config') {
-    return /^\s*\[core\]/m.test(trimmed) && /repositoryformatversion|\[remote\s+"origin"\]/i.test(trimmed)
-      ? 'Git configuration syntax detected'
-      : null;
-  }
-  if (path === '/.git/HEAD') {
-    return /^(?:ref:\s+refs\/(?:heads|tags)\/[^\s]+|[a-f0-9]{40})$/i.test(trimmed)
-      ? 'Git HEAD reference detected'
-      : null;
-  }
-  if (path === '/wp-config.php') {
-    return /<\?php/i.test(trimmed) && /DB_(?:NAME|USER|PASSWORD|HOST)|AUTH_KEY|SECURE_AUTH_KEY/i.test(trimmed)
-      ? 'WordPress configuration constants detected'
-      : null;
-  }
-  if (path.endsWith('.sql')) {
-    return /(?:--\s+(?:MySQL|PostgreSQL).*dump|CREATE\s+TABLE|INSERT\s+INTO|COPY\s+[^\s]+\s+FROM)/i.test(trimmed)
-      ? 'SQL dump syntax detected'
-      : null;
-  }
-  if (path === '/.htaccess') {
-    return /^(?:RewriteEngine|RewriteRule|Options|AuthType|Require|Deny\s+from)\b/im.test(trimmed)
-      ? 'Apache configuration directives detected'
-      : null;
-  }
-  if (path === '/config.json' || path === '/storage.json') {
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (!parsed || typeof parsed !== 'object') return null;
-      return /["'](?:password|passwd|secret|private[_-]?key|access[_-]?token|credential|database[_-]?(?:url|uri))["']\s*:/i.test(trimmed)
-        ? 'Sensitive-looking JSON configuration keys detected'
-        : null;
-    } catch {
-      return null;
-    }
-  }
-  if (path === '/.DS_Store') return body.includes('Bud1') ? 'DS_Store binary signature detected' : null;
-  if (path === '/.npmrc') return /(?:_authToken|_auth|password)\s*=/i.test(trimmed) ? 'npm credential directive detected' : null;
-  if (path === '/docker-compose.yml') return /^\s*services\s*:/m.test(trimmed) && /^\s+(?:image|build)\s*:/m.test(trimmed) ? 'Docker Compose structure detected' : null;
-  if (path === '/Dockerfile') return /^\s*FROM\s+\S+/im.test(trimmed) ? 'Dockerfile FROM instruction detected' : null;
-  if (path === '/.travis.yml') return /^\s*(?:language|script|deploy)\s*:/m.test(trimmed) ? 'Travis CI configuration detected' : null;
-  if (path === '/config/database.yml') return /^\s*adapter\s*:/m.test(trimmed) && /^\s*(?:database|username|password)\s*:/m.test(trimmed) ? 'Rails database configuration detected' : null;
-  return null;
-}
-
 async function checkSensitiveFiles(baseUrl: string): Promise<DeepFinding[]> {
   const results = await Promise.allSettled(
     SENSITIVE_FILES.map(async (file) => {
@@ -412,15 +351,15 @@ async function checkSensitiveFiles(baseUrl: string): Promise<DeepFinding[]> {
     if (res?.status === 200) {
       const body = await readBoundedBody(res);
       if (body === null) continue;
-      const validation = validateSensitiveFile(file.path, body, res.headers.get('content-type') ?? '');
+      const validation = validateSensitiveFileEvidence(file.path, body, res.headers.get('content-type') ?? '');
       if (!validation) continue;
       findings.push({
         id: `exposed-${file.path}`,
         category: 'exposed-files',
-        severity: file.severity,
+        severity: validation.severity ?? file.severity,
         title: file.title,
-        description: file.description,
-        evidence: `GET ${url} → HTTP 200; ${validation}`,
+        description: validation.description ?? file.description,
+        evidence: `GET ${url} → HTTP 200; ${validation.evidence}`,
         remediation: file.remediation,
         url,
       });
@@ -1067,15 +1006,15 @@ async function checkVibeCodePatterns(baseUrl: string, html: string): Promise<Dee
   }
 
   // Exposed Stripe publishable key (fine) vs secret key (not fine)
-  const stripeSecret = html.match(/sk_(?:live|test)_[A-Za-z0-9]{24,}/);
+  const stripeSecret = findStripeSecretEvidence(html);
   if (stripeSecret) {
     findings.push({
       id: 'vibe-stripe-secret',
       category: 'exposed-files',
-      severity: 'critical',
-      title: 'Stripe Secret Key Exposed in Client HTML',
-      description: 'A Stripe SECRET key is embedded in the client-side HTML. Anyone can use this to read your customers, create charges, issue refunds, and access all payment data.',
-      evidence: `sk_...${stripeSecret[0].slice(-6)} found in page source`,
+      severity: stripeSecret.severity,
+      title: stripeSecret.title,
+      description: stripeSecret.description,
+      evidence: `${stripeSecret.redacted} found in page source`,
       remediation: '1. Rotate the key immediately at dashboard.stripe.com → Developers → API Keys.\n2. Move all Stripe secret key usage to server-side API routes only.\n3. The publishable key (pk_...) is safe for client use.',
     });
   }

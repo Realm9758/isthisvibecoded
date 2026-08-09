@@ -2,10 +2,15 @@ import 'server-only';
 import { request as requestHttp } from 'node:http';
 import { request as requestHttps } from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
-import { Readable } from 'node:stream';
 import { resolvePublicTarget, type PublicTargetAddress } from './url-safety';
 
 const ALLOWED_PORTS = new Set(['', '80', '443']);
+const DEFAULT_MAX_RESPONSE_BYTES = 2_000_000;
+
+export type PinnedFetchInit = RequestInit & {
+  /** Hard transport-level cap; callers may impose a smaller semantic limit. */
+  maxResponseBytes?: number;
+};
 
 async function abortable<T>(operation: Promise<T>, signal?: AbortSignal | null): Promise<T> {
   if (!signal) return operation;
@@ -52,7 +57,7 @@ async function requestBody(body: RequestInit['body']): Promise<string | Uint8Arr
 async function requestPinnedAddress(
   url: URL,
   target: PublicTargetAddress,
-  init: RequestInit,
+  init: PinnedFetchInit,
   body: string | Uint8Array | undefined,
 ): Promise<Response> {
   const method = (init.method ?? 'GET').toUpperCase();
@@ -95,14 +100,38 @@ async function requestPinnedAddress(
       }
 
       const statusHasNoBody = method === 'HEAD' || status === 204 || status === 205 || status === 304;
-      const responseBody = statusHasNoBody
-        ? null
-        : Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>;
-      resolve(new Response(responseBody, {
-        status,
-        statusText: incoming.statusMessage,
-        headers: responseHeaders,
-      }));
+      const chunks: Buffer[] = [];
+      let received = 0;
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        incoming.destroy();
+        reject(error);
+      };
+
+      incoming.on('data', (chunk: Buffer) => {
+        if (statusHasNoBody || settled) return;
+        received += chunk.byteLength;
+        if (received > (init.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES)) {
+          fail(new Error('Outbound response exceeded the configured byte limit'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      incoming.on('error', error => fail(error));
+      incoming.on('end', () => {
+        if (settled) return;
+        settled = true;
+        resolve(new Response(statusHasNoBody ? null : Buffer.concat(chunks), {
+          status,
+          statusText: incoming.statusMessage,
+          headers: responseHeaders,
+        }));
+      });
+      // Flow the IncomingMessage even when the protocol says no body. This
+      // releases the socket deterministically instead of leaving it paused.
+      incoming.resume();
     });
     req.on('error', reject);
     req.end(body);
@@ -114,7 +143,7 @@ async function requestPinnedAddress(
  * answer is checked, and the socket lookup is then pinned to one checked IP.
  * Redirect handling remains the caller's responsibility.
  */
-export async function pinnedFetch(urlInput: URL | string, init: RequestInit = {}): Promise<Response> {
+export async function pinnedFetch(urlInput: URL | string, init: PinnedFetchInit = {}): Promise<Response> {
   const url = urlInput instanceof URL ? new URL(urlInput.href) : new URL(urlInput);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('Only HTTP and HTTPS URLs can be fetched');

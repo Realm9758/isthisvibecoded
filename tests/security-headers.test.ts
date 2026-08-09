@@ -77,6 +77,19 @@ test('wildcard CSP directives earn no script or clickjacking credit', () => {
   assert.equal(frame?.penaltyApplied, 5);
 });
 
+test('broad script URL schemes do not receive full CSP credit', () => {
+  for (const source of ['https:', 'http:', 'data:']) {
+    const result = analyzeSecurityHeaders({
+      ...VALID_HEADERS,
+      'content-security-policy': `default-src 'self'; script-src 'self' ${source}`,
+    }, true);
+    const csp = result.headers.find(header => header.name === 'Content-Security-Policy');
+    assert.equal(csp?.valid, false);
+    assert.equal(csp?.penaltyApplied, 19);
+    assert.match(csp?.details ?? '', /broad URL scheme/);
+  }
+});
+
 test('a nonce on a different CSP directive does not excuse unsafe inline scripts', () => {
   const result = analyzeSecurityHeaders({
     ...VALID_HEADERS,

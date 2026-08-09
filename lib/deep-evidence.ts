@@ -1,0 +1,188 @@
+import type { DeepFindingSeverity } from '@/types/deep-scan';
+
+export interface SensitiveFileEvidence {
+  evidence: string;
+  severity?: DeepFindingSeverity;
+  description?: string;
+}
+
+export interface StripeSecretEvidence {
+  redacted: string;
+  severity: 'critical' | 'high';
+  title: string;
+  description: string;
+}
+
+const SECRET_ENV_NAME = /^(?:JWT_SECRET|API_SECRET|SECRET_KEY|PRIVATE_KEY|STRIPE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY|[A-Z0-9_]*(?:PASSWORD|PRIVATE_KEY|CLIENT_SECRET|ACCESS_TOKEN|AUTH_TOKEN|SERVICE_ROLE_KEY))$/;
+const PLACEHOLDER_VALUE = /^(?:change-?me|example|placeholder|replace-?me|test|your[-_].*|x{8,}|\$\{[^}]+\})$/i;
+
+function meaningfulValue(rawValue: string): string | null {
+  const value = rawValue.replace(/^["']|["']$/g, '').trim();
+  return value.length >= 8 && !PLACEHOLDER_VALUE.test(value) ? value : null;
+}
+
+function environmentEvidence(body: string): SensitiveFileEvidence | null {
+  let assignments = 0;
+  let infrastructureValue = false;
+  for (const line of body.split(/\r?\n/)) {
+    const match = line.match(/^([A-Z_][A-Z0-9_]*)\s*=\s*(.+?)\s*$/);
+    if (!match) continue;
+    assignments++;
+    const value = meaningfulValue(match[2]);
+    if (!value) continue;
+    if (SECRET_ENV_NAME.test(match[1])) {
+      return { evidence: `${assignments} or more environment assignments including a non-placeholder secret value detected` };
+    }
+    if (match[1] === 'DATABASE_URL') {
+      try {
+        const databaseUrl = new URL(value);
+        if (databaseUrl.username || databaseUrl.password) {
+          return { evidence: 'A database URL containing embedded credentials was detected' };
+        }
+        infrastructureValue = true;
+      } catch {
+        // An unparseable value is not enough to claim a credential exposure.
+      }
+    }
+  }
+  if (infrastructureValue) {
+    return {
+      evidence: 'An uncredentialed database endpoint was detected; no password or token was confirmed',
+      severity: 'medium',
+      description: 'An environment file reveals database connection metadata, but this response did not confirm embedded database credentials.',
+    };
+  }
+  if (assignments >= 2) {
+    return {
+      evidence: `${assignments} non-secret environment assignments detected`,
+      severity: 'info',
+      description: 'An environment-shaped configuration file is public, but no non-placeholder secret value was confirmed.',
+    };
+  }
+  return null;
+}
+
+/** Pure content validation used by the active scanner and its fixtures. */
+export function validateSensitiveFileEvidence(
+  path: string,
+  body: string,
+  contentType: string,
+): SensitiveFileEvidence | null {
+  const trimmed = body.trim();
+  if (!trimmed) return null;
+  const looksHtml = contentType.toLowerCase().includes('text/html')
+    || /<!doctype\s+html|<html\b|<body\b/i.test(trimmed.slice(0, 4_000));
+
+  if (path === '/phpinfo.php' || path === '/info.php') {
+    return /phpinfo\(\)|<title>php\s*\d|PHP Version/i.test(trimmed)
+      ? { evidence: 'phpinfo output markers detected' }
+      : null;
+  }
+  if (looksHtml) return null;
+
+  if (path.startsWith('/.env')) {
+    return environmentEvidence(trimmed);
+  }
+  if (path === '/.git/config') {
+    return /^\s*\[core\]/m.test(trimmed) && /repositoryformatversion|\[remote\s+"origin"\]/i.test(trimmed)
+      ? { evidence: 'Git configuration syntax detected' }
+      : null;
+  }
+  if (path === '/.git/HEAD') {
+    return /^(?:ref:\s+refs\/(?:heads|tags)\/[^\s]+|[a-f0-9]{40})$/i.test(trimmed)
+      ? { evidence: 'Git HEAD reference detected' }
+      : null;
+  }
+  if (path === '/wp-config.php') {
+    return /<\?php/i.test(trimmed) && /DB_(?:NAME|USER|PASSWORD|HOST)|AUTH_KEY|SECURE_AUTH_KEY/i.test(trimmed)
+      ? { evidence: 'WordPress configuration constants detected' }
+      : null;
+  }
+  if (path.endsWith('.sql')) {
+    const dumpHeader = /--\s+(?:MySQL|PostgreSQL).*dump/i.test(trimmed);
+    const containsRows = /(?:INSERT\s+INTO|COPY\s+[^\s]+\s+FROM)/i.test(trimmed);
+    if (containsRows) {
+      return { evidence: 'SQL dump or data-row syntax detected' };
+    }
+    if (/CREATE\s+TABLE/i.test(trimmed)) {
+      return {
+        evidence: 'SQL schema syntax detected; no data rows were confirmed',
+        severity: 'medium',
+        description: 'A database schema file is publicly accessible. It can reveal table and column structure, but this response did not confirm exposed database rows or credentials.',
+      };
+    }
+    if (dumpHeader) {
+      return {
+        evidence: 'A database-dump header was detected; no schema or data rows were confirmed',
+        severity: 'info',
+        description: 'A response resembles the header of a database dump, but this bounded response did not confirm schema or row exposure.',
+      };
+    }
+    return null;
+  }
+  if (path === '/.htaccess') {
+    return /^(?:RewriteEngine|RewriteRule|Options|AuthType|Require|Deny\s+from)\b/im.test(trimmed)
+      ? { evidence: 'Apache configuration directives detected' }
+      : null;
+  }
+  if (path === '/config.json' || path === '/storage.json') {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (!parsed || typeof parsed !== 'object') return null;
+      const hasMeaningfulSensitiveValue = (value: unknown): boolean => {
+        if (Array.isArray(value)) return value.some(hasMeaningfulSensitiveValue);
+        if (!value || typeof value !== 'object') return false;
+        return Object.entries(value).some(([key, child]) => {
+          const sensitiveKey = /^(?:password|passwd|secret|private[_-]?key|access[_-]?token|credential|database[_-]?(?:url|uri))$/i.test(key);
+          if (sensitiveKey && typeof child === 'string' && meaningfulValue(child)) return true;
+          return hasMeaningfulSensitiveValue(child);
+        });
+      };
+      return hasMeaningfulSensitiveValue(parsed)
+        ? { evidence: 'A sensitive configuration key with a non-placeholder value was detected' }
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  if (path === '/.DS_Store') return body.includes('Bud1') ? { evidence: 'DS_Store binary signature detected' } : null;
+  if (path === '/.npmrc') {
+    const credential = /(?:_authToken|_auth|password)\s*=\s*([^\s#]+)/i.exec(trimmed)?.[1];
+    return credential && meaningfulValue(credential) ? { evidence: 'npm credential directive with a non-placeholder value detected' } : null;
+  }
+  if (path === '/docker-compose.yml') return /^\s*services\s*:/m.test(trimmed) && /^\s+(?:image|build)\s*:/m.test(trimmed) ? { evidence: 'Docker Compose structure detected' } : null;
+  if (path === '/Dockerfile') return /^\s*FROM\s+\S+/im.test(trimmed) ? { evidence: 'Dockerfile FROM instruction detected' } : null;
+  if (path === '/.travis.yml') return /^\s*(?:language|script|deploy)\s*:/m.test(trimmed) ? { evidence: 'Travis CI configuration detected' } : null;
+  if (path === '/config/database.yml') return /^\s*adapter\s*:/m.test(trimmed) && /^\s*(?:database|username|password)\s*:/m.test(trimmed) ? { evidence: 'Rails database configuration detected' } : null;
+  return null;
+}
+
+function isObviousPlaceholder(value: string): boolean {
+  const suffix = value.replace(/^sk_(?:live|test)_/, '');
+  return /^(?:x+|0+|1+|a+|test+|example+|placeholder+)$/i.test(suffix)
+    || /(?:replace|your[_-]?key|example|placeholder)/i.test(suffix);
+}
+
+/** Classify client-visible Stripe secrets without conflating test and live access. */
+export function findStripeSecretEvidence(html: string): StripeSecretEvidence | null {
+  const match = html.match(/sk_(live|test)_[A-Za-z0-9]{24,}/);
+  if (!match || isObviousPlaceholder(match[0])) return null;
+
+  const mode = match[1];
+  const redacted = `sk_${mode}_...${match[0].slice(-6)}`;
+  if (mode === 'live') {
+    return {
+      redacted,
+      severity: 'critical',
+      title: 'Stripe Live Secret Key Exposed in Client HTML',
+      description: 'A Stripe live-mode secret key appears in client HTML. It can authenticate live-mode API calls within the key permissions, potentially exposing or changing customer and payment data.',
+    };
+  }
+
+  return {
+    redacted,
+    severity: 'high',
+    title: 'Stripe Test Secret Key Exposed in Client HTML',
+    description: 'A Stripe test-mode secret key appears in client HTML. It can expose or change test-mode resources, but it does not by itself grant access to live customers or charges.',
+  };
+}

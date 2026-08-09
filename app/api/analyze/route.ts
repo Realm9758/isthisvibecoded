@@ -103,12 +103,21 @@ export async function POST(request: Request) {
       }
     }
     const message = err instanceof Error ? err.message : 'Unknown error';
+    const errorName = err instanceof Error ? err.name : '';
+    const errorCode = typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code ?? '')
+      : '';
     let status = 500;
     let error = `Analysis failed: ${message}`;
     if (message.includes('ENOTFOUND') || message.includes('fetch')) {
       status = 422;
       error = `Could not reach the website: ${message}`;
-    } else if (message.includes('timeout') || message.includes('AbortError')) {
+    } else if (
+      /timeout|timed out|operation was aborted/i.test(message)
+      || errorName === 'AbortError'
+      || errorName === 'TimeoutError'
+      || errorCode === 'ABORT_ERR'
+    ) {
       status = 408;
       error = 'Website took too long to respond within the bounded scan window';
     } else if (

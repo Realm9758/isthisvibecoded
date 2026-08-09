@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import type { AnalysisResult } from '@/types/analysis';
 import { Confetti } from './Confetti';
-import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
+import { getHeaderGapBand, getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 
 interface Props {
   result: AnalysisResult & { scanId?: string };
@@ -15,7 +15,7 @@ function buildSummary(result: AnalysisResult, domain: string): string {
   const techPart = tech ? ` Built with ${tech}.` : '';
   return (
     `${domain} has a ${result.vibe.score}/100 public provenance evidence index (${result.vibe.label}; not a probability). ` +
-    `Header hardening: ${result.security.score}/100 — ${result.security.riskLevel}.` +
+    `Header hardening: ${result.security.score}/100 — ${getHeaderGapBand(result.security.riskLevel).toLowerCase()} observed gaps.` +
     `${techPart} Check yours at isthisvibecoded.com`
   );
 }
@@ -147,7 +147,7 @@ export function ShareModal({ result, onClose }: Props) {
                 <div className="flex-1 rounded-lg bg-white/5 border border-white/8 px-2.5 py-2">
                   <p className="text-[9px] text-white/30 uppercase tracking-wider">Header gaps</p>
                   <p className="text-sm font-bold mt-0.5 capitalize" style={{ color: secColor }}>
-                    {result.security.riskLevel.replace(/\s+risk$/i, '')}
+                    {getHeaderGapBand(result.security.riskLevel)}
                   </p>
                 </div>
                 {tech.length > 0 && (

@@ -18,6 +18,8 @@ test('private, link-local, metadata, and documentation addresses are rejected', 
     '192.0.2.1',
     '[::1]',
     '[fd00::1]',
+    '[fec0::1]',
+    '[feff::1]',
     '[2001:db8::1]',
   ]) {
     await assert.rejects(

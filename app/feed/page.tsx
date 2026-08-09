@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
-import { getSecurityColor, getVibeColor, VIBE_SCORE_BANDS } from '@/lib/vibe-constants';
+import { getHeaderGapBand, getSecurityColor, getVibeColor, VIBE_SCORE_BANDS } from '@/lib/vibe-constants';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@ type TimeFilter = 'today' | 'week' | 'all';
 
 const getSecColor = getSecurityColor;
 function hostname(url: string)   { try { return new URL(url).hostname; } catch { return url; } }
-function headerRiskBand(value: string) { return value.replace(/\s+risk$/i, '') || 'Unknown'; }
+const headerRiskBand = getHeaderGapBand;
 
 function timeAgo(ms: number) {
   const s = Math.floor((Date.now() - ms) / 1000);
@@ -119,13 +119,13 @@ function timeUntilReset(): string {
 }
 
 const RISK_COLOR: Record<string, string> = {
-  Low: '#22c55e', Medium: '#f59e0b', High: '#f97316', Critical: '#ef4444',
+  Few: '#22c55e', Some: '#f59e0b', Major: '#f97316', Unknown: '#94a3b8',
 };
 const RISK_BG: Record<string, string> = {
-  Low: 'rgba(34,197,94,0.1)', Medium: 'rgba(245,158,11,0.1)', High: 'rgba(249,115,22,0.1)', Critical: 'rgba(239,68,68,0.1)',
+  Few: 'rgba(34,197,94,0.1)', Some: 'rgba(245,158,11,0.1)', Major: 'rgba(249,115,22,0.1)', Unknown: 'rgba(148,163,184,0.08)',
 };
 const RISK_BORDER: Record<string, string> = {
-  Low: 'rgba(34,197,94,0.25)', Medium: 'rgba(245,158,11,0.25)', High: 'rgba(249,115,22,0.25)', Critical: 'rgba(239,68,68,0.25)',
+  Few: 'rgba(34,197,94,0.25)', Some: 'rgba(245,158,11,0.25)', Major: 'rgba(249,115,22,0.25)', Unknown: 'rgba(148,163,184,0.18)',
 };
 
 const PODIUM = {
@@ -997,7 +997,7 @@ function MoreInfoModal({ item, onClose }: { item: LeaderboardItem; onClose: () =
           )}
 
           <div>
-            <SectionHeader label="Risk Breakdown" icon={<IconShield />} />
+            <SectionHeader label="Index Breakdown" icon={<IconShield />} />
             <div className="rounded-xl border border-white/8 overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)' }}>
               <div className="divide-y divide-white/5">
                 <div className="px-4 py-3 flex items-center gap-4">

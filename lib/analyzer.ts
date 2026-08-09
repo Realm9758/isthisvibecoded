@@ -65,7 +65,11 @@ async function fetchWithSafeRedirects(
       return { response, finalUrl: currentUrl, redirectsFollowed: i };
     }
 
-    const nextUrl = normalizePublicUrl(new URL(location, currentUrl).href);
+    const rawNextUrl = new URL(location, currentUrl);
+    const nextUrl = normalizePublicUrl(rawNextUrl.href);
+    // Redirect query parameters can be required for routing. Use them only for
+    // this outbound hop; they are stripped again before persistence.
+    nextUrl.search = rawNextUrl.search;
     await response.body?.cancel().catch(() => undefined);
     currentUrl = nextUrl;
   }
@@ -131,6 +135,7 @@ export async function analyzeUrl(rawUrl: string): Promise<AnalysisResult> {
 
   const html = await readLimitedText(response);
   assertUsableHtml(response, html);
+  const publicFinalUrl = normalizePublicUrl(finalUrl.href);
 
   // Normalize response headers to lowercase keys
   const headers: Record<string, string> = {};
@@ -143,16 +148,16 @@ export async function analyzeUrl(rawUrl: string): Promise<AnalysisResult> {
   // Run all detectors concurrently
   const [vibeRaw, securityResult, techStack, hosting, publicKeys, publicFiles] =
     await Promise.all([
-      Promise.resolve(detectVibe(html, headers, finalUrl.href)),
+      Promise.resolve(detectVibe(html, headers, publicFinalUrl.href)),
       Promise.resolve(analyzeSecurityHeaders(headers, httpsEnabled)),
       Promise.resolve(detectTechStack(html, headers)),
-      Promise.resolve(detectHosting(html, headers, finalUrl.href)),
+      Promise.resolve(detectHosting(html, headers, publicFinalUrl.href)),
       Promise.resolve(scanForPublicKeys(html)),
-      checkPublicFiles(finalUrl.href),
+      checkPublicFiles(publicFinalUrl.href),
     ]);
 
   return {
-    url: finalUrl.href,
+    url: publicFinalUrl.href,
     scannedAt: new Date().toISOString(),
     // Keep the structured evidence and model metadata intact. Reconstructing the
     // legacy four-field shape here would silently discard the audit trail.

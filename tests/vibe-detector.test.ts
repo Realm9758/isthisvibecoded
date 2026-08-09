@@ -55,7 +55,7 @@ test('an alternative CMS generator is conflicting context, not AI evidence', () 
 test('explicit AI-builder generator metadata is direct provenance', () => {
   const html = '<html><head><meta name="generator" content="Lovable"></head><body></body></html>';
   const result = detectVibe(html, {}, 'https://custom.example');
-  assert.equal(result.score, 80);
+  assert.equal(result.score, 100);
   assert.equal(result.label, 'Direct AI-builder provenance');
   assert.equal(result.confidence, 'High');
   assert.equal(result.declaredGenerator, 'Lovable');
@@ -68,16 +68,20 @@ test('a generator field that merely mentions a builder is not direct provenance'
   assert.equal(result.label, 'Inconclusive');
 });
 
-test('generator metadata must be an exact builder declaration, not a builder-themed product name', () => {
+test('generator metadata must be an exact unambiguous builder declaration', () => {
   const html = '<html><head><meta name="generator" content="Lovable WordPress theme"></head><body></body></html>';
   const result = detectVibe(html, {}, 'https://custom.example');
   assert.equal(result.score, 0);
   assert.equal(result.label, 'Inconclusive');
+
+  const boltCms = detectVibe('<meta name="generator" content="Bolt">', {}, 'https://cms.example');
+  assert.equal(boltCms.score, 0);
+  assert.equal(boltCms.label, 'Inconclusive');
 });
 
 test('an AI-builder project hostname is strong evidence but not direct declaration', () => {
   const result = detectVibe(BASIC_HTML, {}, 'https://demo.lovable.app');
-  assert.equal(result.score, 58);
+  assert.equal(result.score, 70);
   assert.equal(result.label, 'Strong supporting evidence');
   assert.equal(result.confidence, 'Medium');
 });
@@ -93,7 +97,7 @@ test('a real built-with attribution is accepted while a plain link is not', () =
     {},
     'https://example.com',
   );
-  assert.equal(attributed.score, 60);
+  assert.equal(attributed.score, 70);
   assert.equal(plainLink.score, 0);
 });
 
@@ -103,8 +107,8 @@ test('correlated observations from one builder do not double count', () => {
     <img src="https://cdn.example/lovable-uploads/hero.png" alt="hero">
   </body></html>`;
   const result = detectVibe(html, {}, 'https://demo.lovable.app');
-  assert.equal(result.breakdown.provenance, 80);
-  assert.equal(result.score, 80);
+  assert.equal(result.breakdown.provenance, 100);
+  assert.equal(result.score, 100);
 });
 
 test('Bolt comment, hostname, and attribution share one correlation family', () => {
@@ -113,8 +117,8 @@ test('Bolt comment, hostname, and attribution share one correlation family', () 
     <a href="https://bolt.new/project/abc">Built with Bolt</a>
   </body></html>`;
   const result = detectVibe(html, {}, 'https://demo.bolt.host');
-  assert.equal(result.breakdown.provenance, 52);
-  assert.equal(result.score, 52);
+  assert.equal(result.breakdown.provenance, 70);
+  assert.equal(result.score, 70);
 });
 
 test('a builder mention elsewhere in a provenance-style comment does not score', () => {
@@ -133,7 +137,7 @@ test('a comment-only exact builder attribution is strong provenance', () => {
     {},
     'https://example.com',
   );
-  assert.equal(result.score, 52);
+  assert.equal(result.score, 70);
   assert.equal(result.label, 'Strong supporting evidence');
 });
 

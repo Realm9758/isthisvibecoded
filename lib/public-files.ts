@@ -1,5 +1,6 @@
 import type { PublicFile } from '@/types/analysis';
 import { pinnedFetch } from './pinned-fetch';
+import { validateSensitiveFileEvidence } from './deep-evidence';
 
 const UA = 'Mozilla/5.0 (compatible; VibeCheck/1.0; +https://github.com/vibecoded)';
 const MAX_PUBLIC_FILE_BYTES = 256_000;
@@ -54,14 +55,14 @@ const SENSITIVE_PATHS: Array<{
     path: '/.env',
     note: 'Environment file (should NOT be public)',
     verify: (body, ct) => {
-      const assignments = body.match(/^[A-Z_][A-Z0-9_]*\s*=.+$/gm) ?? [];
-      const hasSensitiveAssignment = /^(?:DATABASE_URL|JWT_SECRET|API_SECRET|SECRET_KEY|PRIVATE_KEY|STRIPE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY)\s*=.+$/m.test(body);
-      // A generic environment-shaped file can contain deliberately public
-      // build metadata. Only elevate it to a critical exposure when a
-      // sensitive variable name and value are actually present.
-      const accessible = !ct.includes('text/html') && hasSensitiveAssignment;
+      const validation = validateSensitiveFileEvidence('/.env', body, ct);
+      // The passive result card treats this path as critical, so expose it
+      // only when content validation confirmed a credential/secret (no
+      // severity override). Lower-impact configuration remains deep-scan
+      // context and is not silently promoted here.
+      const accessible = validation !== null && validation.severity === undefined;
       return accessible
-        ? { accessible, evidence: `${assignments.length} environment assignment${assignments.length === 1 ? '' : 's'} detected` }
+        ? { accessible, evidence: validation.evidence }
         : { accessible };
     },
   },
@@ -69,17 +70,10 @@ const SENSITIVE_PATHS: Array<{
     path: '/config.json',
     note: 'Config file',
     verify: (body, ct) => {
-      if (ct.includes('text/html')) return { accessible: false };
-      try {
-        const parsed = JSON.parse(body) as unknown;
-        if (!parsed || typeof parsed !== 'object') return { accessible: false };
-        const hasSensitiveKey = /["'](?:password|passwd|secret|private[_-]?key|service[_-]?role|access[_-]?token|client[_-]?secret|database[_-]?(?:url|uri))["']\s*:/i.test(body);
-        return hasSensitiveKey
-          ? { accessible: true, evidence: 'Sensitive-looking configuration keys detected' }
-          : { accessible: false };
-      } catch {
-        return { accessible: false };
-      }
+      const validation = validateSensitiveFileEvidence('/config.json', body, ct);
+      return validation
+        ? { accessible: true, evidence: validation.evidence }
+        : { accessible: false };
     },
   },
   {
@@ -130,7 +124,7 @@ export async function checkPublicFiles(baseUrl: string): Promise<PublicFile[]> {
         signal: AbortSignal.timeout(5000),
         headers: { 'User-Agent': UA },
       });
-      return { path, accessible: res.status >= 200 && res.status < 400, status: res.status } as PublicFile;
+      return { path, accessible: res.status >= 200 && res.status < 300, status: res.status } as PublicFile;
     } catch {
       return { path, accessible: false, status: 0 } as PublicFile;
     }
