@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers';
-import { consumeUsage, createUser, getUserByEmail, StoreError } from '@/lib/store';
+import { createUser, getUserByEmail, reserveUsage, StoreError } from '@/lib/store';
 import { hashPassword, signToken, AUTH_COOKIE, COOKIE_OPTIONS } from '@/lib/auth';
 import { ACCOUNT_POLICY_VERSION, isValidDisplayHandle } from '@/lib/policy';
 import { getAnonymousRateLimitKey } from '@/lib/rate-limit';
@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   const rateKey = getAnonymousRateLimitKey(request);
   if (!rateKey) return Response.json({ error: 'Account creation is not configured' }, { status: 503 });
   const hourWindow = new Date().toISOString().slice(0, 13);
-  const remaining = await consumeUsage(`auth-signup:${rateKey}:${hourWindow}`, 5).catch(() => null);
+  const remaining = await reserveUsage(`auth-signup:${rateKey}:${hourWindow}`, 5, 'auth:signup');
   if (remaining === null) return Response.json({ error: 'Could not verify signup allowance' }, { status: 503 });
   if (remaining < 0) return Response.json({ error: 'Too many signup attempts. Try again later.' }, { status: 429 });
 

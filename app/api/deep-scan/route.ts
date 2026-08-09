@@ -110,6 +110,10 @@ export async function POST(request: Request) {
     }),
   ]);
   if (userBurstError || targetBurstError) {
+    console.error('Usage reservation failed', {
+      tag: 'deep-scan:burst',
+      reason: (userBurstError ?? targetBurstError)?.message,
+    });
     return Response.json({ error: 'Could not reserve the active-scan rate allowance' }, { status: 503 });
   }
   if (Number(userBurst) < 0 || Number(targetBurst) < 0) {
@@ -127,6 +131,10 @@ export async function POST(request: Request) {
       usage_limit: 2,
     });
     if (countError) {
+      console.error('Usage reservation failed', {
+        tag: 'deep-scan:lifetime',
+        reason: countError.message,
+      });
       return Response.json({ error: 'Could not reserve deep scan allowance' }, { status: 503 });
     }
     if (Number(remaining) < 0) {

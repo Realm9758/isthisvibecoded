@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { normalizePublicUrl } from '@/lib/url-safety';
-import { consumeUsage } from '@/lib/store';
+import { reserveUsage } from '@/lib/store';
 import { getAnonymousRateLimitKey } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   if (!anonymousKey) {
     return Response.json({ error: 'Feedback is unavailable until server rate limiting is configured' }, { status: 503 });
   }
-  const remaining = await consumeUsage(`feedback:${anonymousKey}`, 10).catch(() => null);
+  const remaining = await reserveUsage(`feedback:${anonymousKey}`, 10, 'feedback');
   if (remaining === null) {
     return Response.json({ error: 'Could not reserve feedback allowance' }, { status: 503 });
   }

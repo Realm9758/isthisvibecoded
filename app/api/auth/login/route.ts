@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers';
-import { consumeUsage, getUserByEmail } from '@/lib/store';
+import { getUserByEmail, reserveUsage } from '@/lib/store';
 import { verifyPassword, signToken, AUTH_COOKIE, COOKIE_OPTIONS } from '@/lib/auth';
 import { getAnonymousRateLimitKey } from '@/lib/rate-limit';
 
@@ -7,7 +7,7 @@ export async function POST(request: Request) {
   const rateKey = getAnonymousRateLimitKey(request);
   if (!rateKey) return Response.json({ error: 'Authentication is not configured' }, { status: 503 });
   const minuteWindow = new Date().toISOString().slice(0, 16);
-  const remaining = await consumeUsage(`auth-login:${rateKey}:${minuteWindow}`, 20).catch(() => null);
+  const remaining = await reserveUsage(`auth-login:${rateKey}:${minuteWindow}`, 20, 'auth:login');
   if (remaining === null) return Response.json({ error: 'Could not verify login allowance' }, { status: 503 });
   if (remaining < 0) return Response.json({ error: 'Too many login attempts. Try again shortly.' }, { status: 429 });
 

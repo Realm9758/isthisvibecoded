@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { analyzeUrl } from '@/lib/analyzer';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
-import { consumeUsage, getDailyCount, getUserById, refundUsage, saveScan } from '@/lib/store';
+import { getDailyCount, getUserById, refundUsage, reserveUsage, saveScan } from '@/lib/store';
 import { generateRoasts } from '@/lib/roast';
 import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
 import { getAnonymousRateLimitKey } from '@/lib/rate-limit';
@@ -45,10 +45,11 @@ export async function POST(request: Request) {
   const user = payload ? await getUserById(payload.userId) : null;
   const plan = user?.plan ?? 'free';
   const minuteWindow = new Date().toISOString().slice(0, 16);
-  const burstRemaining = await consumeUsage(
+  const burstRemaining = await reserveUsage(
     `passive-burst:${limitKey}:${minuteWindow}`,
     plan === 'free' ? 3 : 10,
-  ).catch(() => null);
+    'analyze',
+  );
   if (burstRemaining === null) {
     return Response.json({ error: 'Could not reserve the scan-rate allowance' }, { status: 503 });
   }
@@ -59,7 +60,10 @@ export async function POST(request: Request) {
   let scansRemaining: number | null = null;
 
   if (plan === 'free') {
-    scansRemaining = await consumeUsage(limitKey, 5);
+    scansRemaining = await reserveUsage(limitKey, 5, 'analyze:daily');
+    if (scansRemaining === null) {
+      return Response.json({ error: 'Could not reserve the scan-rate allowance' }, { status: 503 });
+    }
     if (scansRemaining < 0) {
       const used = await getDailyCount(limitKey);
       return Response.json({

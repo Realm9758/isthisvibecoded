@@ -4,7 +4,7 @@ import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
 import { VERIFICATION_MAX_AGE_MS } from '@/lib/policy';
-import { consumeUsage } from '@/lib/store';
+import { reserveUsage } from '@/lib/store';
 import { pinnedFetch } from '@/lib/pinned-fetch';
 import type { VerificationToken } from '@/types/analysis';
 
@@ -142,7 +142,7 @@ export async function POST(request: Request) {
   }
 
   const hourWindow = new Date().toISOString().slice(0, 13);
-  const remaining = await consumeUsage(`domain-token:${userId}:${hourWindow}`, 30).catch(() => null);
+  const remaining = await reserveUsage(`domain-token:${userId}:${hourWindow}`, 30, 'verify:token');
   if (remaining === null) {
     return Response.json({ error: 'Could not verify the token-generation allowance' }, { status: 503 });
   }
@@ -394,7 +394,7 @@ export async function GET(request: Request) {
   }
 
   const hourWindow = new Date().toISOString().slice(0, 13);
-  const remaining = await consumeUsage(`domain-verify:${userId}:${hourWindow}`, 30).catch(() => null);
+  const remaining = await reserveUsage(`domain-verify:${userId}:${hourWindow}`, 30, 'verify:check');
   if (remaining === null) {
     return Response.json({ error: 'Could not verify the domain-check allowance' }, { status: 503 });
   }

@@ -417,6 +417,26 @@ export async function consumeUsage(id: string, limit: number): Promise<number> {
   return typeof data === 'number' ? data : Number(data ?? -1);
 }
 
+/**
+ * Reserves one allowance unit, returning the remaining count, or null when the
+ * reservation could not be evaluated at all. A null means the limiter itself is
+ * broken — an unapplied migration or an unreachable database — not that the
+ * caller is over quota, so callers answer 503 rather than 429. The underlying
+ * cause is logged here because every caller discards it to avoid leaking
+ * database internals to the client.
+ */
+export async function reserveUsage(id: string, limit: number, tag: string): Promise<number | null> {
+  try {
+    return await consumeUsage(id, limit);
+  } catch (error) {
+    console.error('Usage reservation failed', {
+      tag,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
 export async function refundUsage(id: string): Promise<void> {
   const { error } = await supabase.rpc('refund_usage', { usage_key: todayKey(id) });
   if (error) throw new Error(error.message);
