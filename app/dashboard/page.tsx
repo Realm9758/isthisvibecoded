@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { OwnershipVerify } from '@/components/OwnershipVerify';
 import type { DeepScanResult, DeepFinding } from '@/types/deep-scan';
 import { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION, DEEP_SCORING_VERSION } from '@/lib/deep-versions';
-import type { ScanPhase } from '@/lib/deep-scanner';
+import { ScanRunner } from '@/components/ScanRunner';
 import { getSecurityColor, getVibeColor } from '@/lib/vibe-constants';
 import { ACCOUNT_POLICY_VERSION, DEEP_SCAN_TERMS_VERSION, isValidDisplayHandle } from '@/lib/policy';
 
@@ -594,231 +594,6 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
 
 // ── Deep scan panel ────────────────────────────────────────────────────────
 
-// ── Terminal scan UI ──────────────────────────────────────────────────────
-
-type PhaseState = {
-  phase: ScanPhase;
-  status: 'pending' | 'running' | 'done' | 'found';
-  findingCount: number;
-};
-
-function TerminalScan({ domain, authorizationAccepted, onResult, onError }: {
-  domain: string;
-  authorizationAccepted: boolean;
-  onResult: (r: DeepScanResultWithId) => void;
-  onError: (e: string) => void;
-}) {
-  const [phases, setPhases] = useState<PhaseState[]>([]);
-  const [currentDetail, setCurrentDetail] = useState('Initialising scanner…');
-  const [log, setLog] = useState<string[]>([]);
-  const logRef = useRef<HTMLDivElement>(null);
-
-  function addLog(line: string) {
-    setLog(prev => [...prev.slice(-60), line]);
-  }
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-
-    (async () => {
-      addLog(`$ vibescanner --target ${domain} --mode deep`);
-      addLog(`Starting active vulnerability scan…`);
-
-      const res = await fetch('/api/deep-scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          domain,
-          authorizationAccepted,
-          termsVersion: DEEP_SCAN_TERMS_VERSION,
-        }),
-        signal: ctrl.signal,
-      }).catch(() => null);
-
-      if (!res?.ok || !res.body) {
-        const err = res ? (await res.json().catch(() => ({}))).error ?? 'Scan failed' : 'Connection failed';
-        onError(err);
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      let terminalEventReceived = false;
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const events = buf.split('\n\n');
-          buf = events.pop() ?? '';
-
-          for (const block of events) {
-            const lines = block.split('\n');
-            const eventLine = lines.find(l => l.startsWith('event:'));
-            const dataLine = lines.find(l => l.startsWith('data:'));
-            if (!eventLine || !dataLine) continue;
-
-            const event = eventLine.replace('event:', '').trim();
-            const data = JSON.parse(dataLine.replace('data:', '').trim());
-
-            if (event === 'phases') {
-              setPhases((data as ScanPhase[]).map(p => ({ phase: p, status: 'pending', findingCount: 0 })));
-            }
-
-            if (event === 'phase') {
-              const { id, label, detail, findings, status } = data as ScanPhase & { findings: DeepFinding[]; status: 'start' | 'complete' };
-
-            setCurrentDetail(detail);
-
-            if (status === 'start') {
-              addLog(`[>] ${label}: ${detail}`);
-              setPhases(prev => prev.map(p =>
-                p.phase.id === id ? { ...p, status: 'running' } : p
-              ));
-            } else {
-              const count = findings.length;
-              if (count > 0) {
-                addLog(`[!] ${label}: ${count} finding${count > 1 ? 's' : ''} — ${findings.map(f => f.severity.toUpperCase()).join(', ')}`);
-              } else {
-                addLog(`[✓] ${label}: no matching finding`);
-              }
-              setPhases(prev => prev.map(p =>
-                p.phase.id === id ? { ...p, status: count > 0 ? 'found' : 'done', findingCount: count } : p
-              ));
-            }
-            }
-
-            if (event === 'result') {
-              terminalEventReceived = true;
-              const completed = data as DeepScanResultWithId;
-              addLog(`[✓] Scan complete — ${completed.findings.length} findings, ${completed.summary.score === null ? 'score withheld (incomplete coverage)' : `index ${completed.summary.score}/100`}`);
-              onResult(completed);
-            }
-
-            if (event === 'error') {
-              terminalEventReceived = true;
-              onError(data.error ?? 'Scan failed');
-            }
-          }
-        }
-      } catch {
-        if (!ctrl.signal.aborted) {
-          terminalEventReceived = true;
-          onError('The scan stream was interrupted before a complete result was received.');
-        }
-      }
-
-      if (!terminalEventReceived && !ctrl.signal.aborted) {
-        onError('The scan ended without a complete result. No grade was produced.');
-      }
-    })();
-
-    return () => ctrl.abort();
-  }, [authorizationAccepted, domain, onResult, onError]);
-
-  // Auto-scroll log
-  useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' });
-  }, [log]);
-
-  const doneCount = phases.filter(p => p.status === 'done' || p.status === 'found').length;
-  const progress = phases.length ? Math.round((doneCount / phases.length) * 100) : 0;
-
-  return (
-    <div className="space-y-4">
-      {/* Terminal */}
-      <div className="rounded-xl border border-white/8 bg-black/60 overflow-hidden font-mono">
-        {/* Terminal header bar */}
-        <div className="flex items-center gap-1.5 px-3 py-2.5 border-b border-white/5 bg-white/2">
-          <div className="w-2.5 h-2.5 rounded-full bg-red-500/60" />
-          <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/60" />
-          <div className="w-2.5 h-2.5 rounded-full bg-green-500/60" />
-          <span className="ml-2 text-[10px] text-white/25">vibescanner — {domain}</span>
-          <div className="ml-auto flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-[9px] text-red-400/70 uppercase tracking-wider">Live</span>
-          </div>
-        </div>
-
-        {/* Log output */}
-        <div ref={logRef} className="h-40 overflow-y-auto p-3 space-y-0.5">
-          {log.map((line, i) => {
-            const isFound = line.startsWith('[!]');
-            const isClean = line.startsWith('[✓]');
-            const isRunning = line.startsWith('[>]');
-            const isCmd = line.startsWith('$');
-            return (
-              <div
-                key={i}
-                className="text-[11px] leading-5"
-                style={{
-                  color: isFound ? '#f97316' : isClean ? '#4ade80' : isRunning ? '#38bdf8' : isCmd ? '#a78bfa' : 'rgba(255,255,255,0.4)',
-                }}
-              >
-                {line}
-              </div>
-            );
-          })}
-          {/* Blinking cursor */}
-          <div className="text-[11px] text-white/30">
-            <span className="inline-block w-1.5 h-3 bg-white/30 animate-pulse align-middle" />
-          </div>
-        </div>
-      </div>
-
-      {/* Progress bar */}
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-xs text-white/40 truncate max-w-xs">{currentDetail}</span>
-          <span className="text-xs font-bold text-white/50 shrink-0 ml-2">{progress}%</span>
-        </div>
-        <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
-          <div
-            className="h-full rounded-full transition-all duration-700"
-            style={{
-              width: `${progress}%`,
-              background: 'linear-gradient(90deg, #dc2626, #f97316)',
-              boxShadow: '0 0 8px rgba(220,38,38,0.5)',
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Phase grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {phases.map(({ phase, status, findingCount }) => (
-          <div
-            key={phase.id}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all"
-            style={{
-              background: status === 'found' ? 'rgba(249,115,22,0.08)' : status === 'done' ? 'rgba(34,197,94,0.06)' : status === 'running' ? 'rgba(56,189,248,0.08)' : 'rgba(255,255,255,0.02)',
-              borderColor: status === 'found' ? 'rgba(249,115,22,0.25)' : status === 'done' ? 'rgba(34,197,94,0.2)' : status === 'running' ? 'rgba(56,189,248,0.3)' : 'rgba(255,255,255,0.06)',
-            }}
-          >
-            {status === 'running' && (
-              <div className="w-3 h-3 rounded-full border border-sky-400/60 border-t-sky-400 animate-spin shrink-0" />
-            )}
-            {status === 'done' && <span className="text-emerald-400 shrink-0 text-[10px]">✓</span>}
-            {status === 'found' && <span className="text-orange-400 shrink-0 text-[10px]">!</span>}
-            {status === 'pending' && <span className="text-white/15 shrink-0 text-[10px]">○</span>}
-            <span
-              className="truncate"
-              style={{ color: status === 'found' ? '#fb923c' : status === 'done' ? '#4ade80' : status === 'running' ? '#38bdf8' : 'rgba(255,255,255,0.3)' }}
-            >
-              {phase.label}
-            </span>
-            {status === 'found' && findingCount > 0 && (
-              <span className="ml-auto shrink-0 text-[9px] font-bold text-orange-400/80">{findingCount}</span>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function DeepScanPanel() {
   const [step, setStep] = useState<DeepStep>('idle');
   const [inputUrl, setInputUrl] = useState('');
@@ -1005,9 +780,14 @@ function DeepScanPanel() {
         )}
 
         {step === 'scanning' && (
-          <TerminalScan
-            domain={scanDomain}
-            authorizationAccepted={authorizationAccepted}
+          <ScanRunner
+            endpoint="/api/deep-scan"
+            label={scanDomain}
+            body={{
+              domain: scanDomain,
+              authorizationAccepted,
+              termsVersion: DEEP_SCAN_TERMS_VERSION,
+            }}
             onResult={r => { setScanResult(r); setStep('results'); }}
             onError={e => {
               setAuthorizationAccepted(false);
