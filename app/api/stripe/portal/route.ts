@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
 import { getUserById } from '@/lib/store';
+import { absoluteUrl } from '@/lib/site';
 
 export async function POST() {
   if (!stripe) return Response.json({ error: 'Stripe not configured' }, { status: 503 });
@@ -16,10 +17,9 @@ export async function POST() {
     return Response.json({ error: 'No billing account found' }, { status: 400 });
   }
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
   const session = await stripe.billingPortal.sessions.create({
     customer: user.stripeCustomerId,
-    return_url: `${appUrl}/pricing`,
+    return_url: absoluteUrl('/pricing'),
   });
 
   return Response.json({ url: session.url });

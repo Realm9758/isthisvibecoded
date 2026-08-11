@@ -1,7 +1,11 @@
 import { randomBytes } from 'crypto';
 import { supabase } from './supabase';
 
-export type NotificationType = 'comment' | 'reply' | 'popular' | 'security' | 'system';
+/**
+ * Findings on a domain you control, and service notices. The feed-era types
+ * (comment, reply, popular) went with the feed.
+ */
+export type NotificationType = 'security' | 'system';
 
 export interface AppNotification {
   id: string;

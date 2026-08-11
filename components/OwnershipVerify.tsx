@@ -35,7 +35,7 @@ function CopyButton({ text }: { text: string }) {
 function Step({ n, text }: { n: number; text: React.ReactNode }) {
   return (
     <div className="flex gap-3 items-start">
-      <div className="w-5 h-5 rounded-full bg-violet-500/20 border border-violet-500/30 flex items-center justify-center text-[10px] font-bold text-violet-400 shrink-0 mt-0.5">
+      <div className="w-5 h-5 rounded-full bg-[color:var(--accent)]/20 border border-transparent flex items-center justify-center text-[10px] font-bold text-[color:var(--accent)] shrink-0 mt-0.5">
         {n}
       </div>
       <div className="text-xs text-white/55 leading-relaxed">{text}</div>
@@ -290,11 +290,11 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
   ];
 
   return (
-    <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 overflow-hidden">
+    <div className="rounded-xl border border-[color:var(--accent-line)] bg-[color:var(--accent)]/5 overflow-hidden">
       {/* Header */}
-      <div className="px-5 py-4 border-b border-violet-500/15 flex items-center gap-2">
-        <div className="w-2 h-2 rounded-full bg-violet-400" />
-        <h3 className="text-sm font-semibold text-violet-300">Verify domain control for {domain}</h3>
+      <div className="px-5 py-4 border-b border-transparent flex items-center gap-2">
+        <div className="w-2 h-2 rounded-full bg-transparent" />
+        <h3 className="text-sm font-semibold text-[color:var(--accent)]">Verify domain control for {domain}</h3>
       </div>
 
       <div className="p-5">
@@ -313,7 +313,7 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
             <div className="flex items-center gap-3">
               <button
                 onClick={() => onVerified?.()}
-                className="px-5 py-2.5 text-sm font-bold rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-colors"
+                className="px-5 py-2.5 text-sm font-bold rounded-xl bg-[color:var(--accent)] hover:bg-[color:var(--accent)] text-white transition-colors"
               >
                 Continue to authorisation
               </button>
@@ -337,7 +337,7 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
             <button
               onClick={generate}
               disabled={status === 'generating'}
-              className="px-5 py-2.5 text-sm font-semibold rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-50"
+              className="px-5 py-2.5 text-sm font-semibold rounded-xl bg-[color:var(--accent)] hover:bg-[color:var(--accent)] text-white transition-colors disabled:opacity-50"
             >
               {status === 'generating' ? 'Generating token…' : 'Generate Verification Token'}
             </button>
@@ -389,7 +389,7 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
               <button
                 onClick={verify}
                 disabled={status === 'checking'}
-                className="px-5 py-2.5 text-sm font-bold rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-50 flex items-center gap-2"
+                className="px-5 py-2.5 text-sm font-bold rounded-xl bg-[color:var(--accent)] hover:bg-[color:var(--accent)] text-white transition-colors disabled:opacity-50 flex items-center gap-2"
               >
                 {status === 'checking' && (
                   <div className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />

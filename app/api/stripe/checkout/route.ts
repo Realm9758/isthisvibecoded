@@ -7,6 +7,7 @@ import {
   selectEntitlingSubscription,
   subscriptionBlocksNewCheckout,
 } from '@/lib/stripe-entitlements';
+import { absoluteUrl } from '@/lib/site';
 
 export async function POST(request: Request) {
   if (!stripe) {
@@ -85,7 +86,6 @@ export async function POST(request: Request) {
   const existingSession = existingSessions.data.find(session => session.metadata?.plan === plan && session.url);
   if (existingSession?.url) return Response.json({ url: existingSession.url });
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
 
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
@@ -95,8 +95,8 @@ export async function POST(request: Request) {
     client_reference_id: user.id,
     metadata: { userId: payload.userId, plan },
     subscription_data: { metadata: { userId: payload.userId, plan } },
-    success_url: `${appUrl}/pricing?success=true`,
-    cancel_url: `${appUrl}/pricing?canceled=true`,
+    success_url: absoluteUrl('/pricing?success=true'),
+    cancel_url: absoluteUrl('/pricing?canceled=true'),
   }, {
     // Coalesce concurrent/repeated clicks while still allowing a fresh session
     // shortly after a cancellation or expiry.

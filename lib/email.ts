@@ -1,7 +1,9 @@
+import { SITE_ORIGIN } from '@/lib/site';
 /**
  * Email sender via Resend (https://resend.com).
  * Set RESEND_API_KEY in .env.local to enable.
- * Set EMAIL_FROM to your verified sender (e.g. "Ironclad <hi@ironclad.dev>").
+ * Set EMAIL_FROM to a sender on a domain verified in Resend, for example
+ * "Ironclad <notifications@bhopstudio.com>". Unverified senders are rejected.
  * If not configured, emails are silently skipped.
  */
 
@@ -15,7 +17,7 @@ export async function sendEmail(
   const key = process.env.RESEND_API_KEY;
   if (!key) return; // email not configured, so skip silently
 
-  const from = process.env.EMAIL_FROM ?? 'Ironclad <notifications@ironclad.dev>';
+  const from = process.env.EMAIL_FROM ?? 'Ironclad <notifications@bhopstudio.com>';
 
   try {
     const res = await fetch(RESEND_API, {
@@ -36,7 +38,7 @@ export async function sendEmail(
 }
 
 function baseTemplate(title: string, body: string, ctaLabel: string, ctaUrl: string): string {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://ironclad.dev';
+  const appUrl = SITE_ORIGIN;
   const safeTitle = escHtml(title);
   const safeCtaLabel = escHtml(ctaLabel);
   const safeCtaUrl = escHtml(ctaUrl);

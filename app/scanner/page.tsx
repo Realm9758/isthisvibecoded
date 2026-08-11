@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { SURFACE_PHASE_IDS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
 import { TARGET_HOURLY_LIMIT } from '@/lib/scan-quota';
+import { SCANNER_INFO_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
   title: 'The scanner | Ironclad',
@@ -44,8 +45,8 @@ export default function ScannerPage() {
             <pre
               className="font-mono text-xs p-4 overflow-x-auto"
               style={{ background: 'var(--bg)', color: 'var(--accent)', borderRadius: 4 }}
-            >{`Ironclad-Surface/2.0 (+https://ironclad.dev/scanner)
-Ironclad-Deep/2.0 (authorized domain-control scan; +https://ironclad.dev/scanner)`}</pre>
+            >{`Ironclad-Surface/2.0 (+${SCANNER_INFO_URL})
+Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
             <p>
               <span className="text-white/80">Surface</span> means somebody asked us to look at your site
               from the outside. They did not have to prove they own it, so that lane makes read-only requests

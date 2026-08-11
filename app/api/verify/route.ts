@@ -7,6 +7,7 @@ import { VERIFICATION_MAX_AGE_MS } from '@/lib/policy';
 import { reserveUsage } from '@/lib/store';
 import { pinnedFetch } from '@/lib/pinned-fetch';
 import type { VerificationToken } from '@/types/analysis';
+import { SCANNER_INFO_URL } from '@/lib/site';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -36,7 +37,7 @@ async function fetchVerificationTarget(rawUrl: string): Promise<Response> {
 
   for (let redirects = 0; redirects <= 5; redirects++) {
     const response = await pinnedFetch(target, {
-      headers: { 'User-Agent': 'Ironclad-Verifier/2.0 (+https://ironclad.dev/scanner)' },
+      headers: { 'User-Agent': `Ironclad-Verifier/2.0 (+${SCANNER_INFO_URL})` },
       signal: AbortSignal.timeout(8_000),
       redirect: 'manual',
     });

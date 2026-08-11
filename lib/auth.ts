@@ -3,6 +3,7 @@ import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import { scrypt, randomBytes, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
 import type { Plan } from './store';
+import { SITE_COOKIE_PATH } from './site';
 
 const scryptAsync = promisify(scrypt);
 
@@ -60,7 +61,9 @@ export const COOKIE_OPTIONS = {
   secure: process.env.NODE_ENV === 'production',
   sameSite: 'lax' as const,
   maxAge: 60 * 60 * 24 * 7, // 7 days
-  path: '/',
+  // Scoped to the app's own prefix so the session is not attached to requests
+  // for the sibling apps sharing this domain.
+  path: SITE_COOKIE_PATH,
 };
 
 export const PLAN_LIMITS: Record<Plan, { scansPerDay: number | null; label: string }> = {

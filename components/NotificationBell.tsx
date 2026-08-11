@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 
 interface Notification {
   id: string;
-  type: 'comment' | 'reply' | 'popular' | 'security' | 'system';
+  type: 'security' | 'system';
   title: string;
   description: string;
   link: string | null;
@@ -26,29 +26,8 @@ function relativeTime(ts: number): string {
 function NotifIcon({ type }: { type: Notification['type'] }) {
   const cls = 'w-7 h-7 rounded-lg flex items-center justify-center shrink-0';
 
-  if (type === 'comment') return (
-    <div className={cls} style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.2)' }}>
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-      </svg>
-    </div>
-  );
 
-  if (type === 'reply') return (
-    <div className={cls} style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.2)' }}>
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>
-      </svg>
-    </div>
-  );
 
-  if (type === 'popular') return (
-    <div className={cls} style={{ background: 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.2)' }}>
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fb923c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-      </svg>
-    </div>
-  );
 
   if (type === 'security') return (
     <div className={cls} style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.2)' }}>
@@ -137,6 +116,8 @@ export function NotificationBell() {
   }
 
   if (!user) return null;
+  // Nothing emits notifications yet, so an always-empty bell is just clutter.
+  if (notifications.length === 0) return null;
 
   const unread = notifications.filter(n => !n.read);
   const read   = notifications.filter(n => n.read);
@@ -197,7 +178,7 @@ export function NotificationBell() {
               <button
                 onClick={markAllRead}
                 disabled={loading}
-                className="text-[11px] text-violet-400 hover:text-violet-300 transition-colors disabled:opacity-50"
+                className="text-[11px] hover:opacity-70 transition-colors disabled:opacity-50"
               >
                 Mark all read
               </button>
@@ -284,7 +265,7 @@ function NotifItem({ n, onClick }: { n: Notification; onClick: () => void }) {
             {n.title}
           </p>
           {!n.read && (
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0 mt-1" />
+            <span className="w-1.5 h-1.5 rounded-full bg-transparent shrink-0 mt-1" />
           )}
         </div>
         <p className="text-[11px] text-white/35 mt-0.5 line-clamp-2 leading-relaxed">{n.description}</p>

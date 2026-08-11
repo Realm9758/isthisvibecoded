@@ -10,6 +10,7 @@ import { calculateDeepScore } from '@/lib/deep-score';
 import { findStripeSecretEvidence, validateSensitiveFileEvidence } from '@/lib/deep-evidence';
 import { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION, DEEP_SCORING_VERSION } from '@/lib/deep-versions';
 import { pinnedFetch } from '@/lib/pinned-fetch';
+import { SCANNER_INFO_URL, SITE_HOST } from '@/lib/site';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 const TIMEOUT = 8000;
@@ -25,8 +26,8 @@ const MAX_PROBE_BODY_BYTES = 512_000;
  * unverified target.
  */
 const LANE_USER_AGENTS: Record<ScanLane, string> = {
-  surface: 'Ironclad-Surface/2.0 (+https://ironclad.dev/scanner)',
-  deep: 'Ironclad-Deep/2.0 (authorized domain-control scan; +https://ironclad.dev/scanner)',
+  surface: `Ironclad-Surface/2.0 (+${SCANNER_INFO_URL})`,
+  deep: `Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`,
 };
 export { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION } from '@/lib/deep-versions';
 
@@ -1587,7 +1588,7 @@ async function checkRateLimiting(baseUrl: string): Promise<DeepFinding[]> {
       safeFetch(`${baseUrl}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'ratelimit-probe@ironclad.dev', password: 'wrongpassword123' }),
+        body: JSON.stringify({ email: `ratelimit-probe@${SITE_HOST}`, password: 'wrongpassword123' }),
         allowRateLimitResponse: true,
       })
     );

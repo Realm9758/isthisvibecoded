@@ -19,45 +19,46 @@ export const metadata: Metadata = {
 
 export default function PrivacyPage() {
   return (
-    <main className="min-h-screen px-6 py-16" style={{ background: '#0a0a0f' }}>
+    <main className="min-h-screen px-6 py-16" style={{ background: 'var(--bg)' }}>
       <div
         className="fixed inset-0 pointer-events-none"
         style={{ background: 'radial-gradient(ellipse 80% 50% at 50% -10%, rgba(139,92,246,0.07) 0%, transparent 70%)' }}
       />
 
       <div className="relative max-w-2xl mx-auto">
-        <Link href="/" className="inline-flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors mb-10">
+        <Link href="/" className="inline-flex items-center gap-1.5 font-mono text-xs transition-colors hover:text-white mb-10" style={{ color: 'var(--faint)' }}>
           ← Back to home
         </Link>
 
         <div className="mb-10">
-          <h1 className="text-3xl font-bold text-white mb-2">Privacy Policy</h1>
-          <p className="text-sm text-white/35">Last updated: August 2026</p>
-          <div className="mt-4 p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
-            <p className="text-sm text-emerald-300/80 font-medium">
+          <h1 className="display text-white text-3xl mb-3">Privacy Policy</h1>
+          <p className="font-mono text-xs" style={{ color: 'var(--faint)' }}>last updated August 2026</p>
+          <div className="mt-6 p-5 border" style={{ borderColor: 'var(--border-2)', borderRadius: 4 }}>
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
               Short version: we do not sell personal data or use it for advertising. Every scan result is private to the account that ran it, and there is no public feed, leaderboard, or shareable result page at all.
             </p>
           </div>
         </div>
 
         {/* Sections */}
-        <div className="space-y-10 text-sm text-white/50 leading-relaxed">
+        <div className="space-y-10 text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Who we are
             </h2>
             <p>
-              Ironclad (&ldquo;we&rdquo;, &ldquo;us&rdquo;) is a website security scanner.
-              It reports visible generative-builder provenance signals, a limited response-header hardening index, and visible technology indicators.
-              It does not determine whether a developer understood, reviewed, or personally wrote the code.
+              Ironclad (&ldquo;we&rdquo;, &ldquo;us&rdquo;) is a website security scanner. It looks at a site
+              from the outside with bounded, automated probes and reports what it observed. It is not a
+              penetration test, and it cannot read your source, review your access control, or reason about
+              your business logic.
             </p>
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               What we scan, and what we do not
             </h2>
             <p className="mb-3">
@@ -72,7 +73,7 @@ export default function PrivacyPage() {
                 'JavaScript references and potential public key or token patterns already present in the returned HTML',
               ].map(item => (
                 <li key={item} className="flex gap-2">
-                  <span className="text-violet-500/60 shrink-0">›</span>
+                  <span className="shrink-0" style={{ color: 'var(--ghost)' }}>›</span>
                   {item}
                 </li>
               ))}
@@ -84,8 +85,8 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               What the provenance result means
             </h2>
             <p>
@@ -96,7 +97,7 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
               <span className="w-1 h-4 rounded-full bg-red-500 shrink-0" />
               Deep vulnerability scans
             </h2>
@@ -124,8 +125,8 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Data we collect
             </h2>
             <p className="mb-2"><strong className="text-white/70">Anonymous users (no account):</strong></p>
@@ -136,7 +137,7 @@ export default function PrivacyPage() {
                 'A local-storage consent flag is saved in your browser only after you explicitly accept this policy',
               ].map(item => (
                 <li key={item} className="flex gap-2">
-                  <span className="text-violet-500/60 shrink-0">›</span>
+                  <span className="shrink-0" style={{ color: 'var(--ghost)' }}>›</span>
                   {item}
                 </li>
               ))}
@@ -147,12 +148,12 @@ export default function PrivacyPage() {
                 'Email address (required for login)',
                 'A display handle you choose at signup',
                 'Password, stored as a salted cryptographic hash (scrypt). We never store plain-text passwords.',
-                'Profile details you provide, plus comments, reactions, and notification preferences created through the service',
-                'Passive and deep scan results linked to your account; new passive scans start private',
+                'Your display name, optional avatar, and notification preferences',
+                'Scan results linked to your account. Every result is private to you; there is no publish action',
                 'Subscription status if you upgrade, via Stripe, so we never see your card details',
               ].map(item => (
                 <li key={item} className="flex gap-2">
-                  <span className="text-violet-500/60 shrink-0">›</span>
+                  <span className="shrink-0" style={{ color: 'var(--ghost)' }}>›</span>
                   {item}
                 </li>
               ))}
@@ -165,8 +166,8 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               What passive scanning intentionally excludes
             </h2>
             <ul className="space-y-1.5">
@@ -186,20 +187,20 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Cookies and sessions
             </h2>
             <p>
-              Our application uses an httpOnly cookie (<code className="text-violet-300 font-mono text-xs bg-violet-500/10 px-1 py-0.5 rounded">vc-auth</code>) to
+              Our application uses an httpOnly cookie (<code className="font-mono text-xs px-1 py-0.5" style={{ color: 'var(--accent)', background: 'var(--accent-dim)', borderRadius: 3 }}>vc-auth</code>) to
               maintain a signed-in session. It contains a signed JWT with account identifiers and plan information and expires after seven days.
               After explicit consent, the browser also stores the consent version in local storage. We do not use these values for advertising or cross-site tracking.
             </p>
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Data storage and security
             </h2>
             <p className="mb-2">
@@ -213,8 +214,8 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Public feed
             </h2>
             <p>
@@ -225,8 +226,8 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Data sharing
             </h2>
             <p className="mb-3">
@@ -242,7 +243,7 @@ export default function PrivacyPage() {
                 'Google Favicon Service, which supplies the small site icons shown in the interface',
               ].map(item => (
                 <li key={item} className="flex gap-2">
-                  <span className="text-violet-500/60 shrink-0">›</span>
+                  <span className="shrink-0" style={{ color: 'var(--ghost)' }}>›</span>
                   {item}
                 </li>
               ))}
@@ -253,8 +254,8 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Your rights
             </h2>
             <p className="mb-3">Depending on where you live and subject to applicable law, you may have rights to:</p>
@@ -267,7 +268,7 @@ export default function PrivacyPage() {
                 'Object to or restrict certain processing, or withdraw consent where consent is the legal basis',
               ].map(item => (
                 <li key={item} className="flex gap-2">
-                  <span className="text-violet-500/60 shrink-0">›</span>
+                  <span className="shrink-0" style={{ color: 'var(--ghost)' }}>›</span>
                   {item}
                 </li>
               ))}
@@ -275,14 +276,14 @@ export default function PrivacyPage() {
             <p>
               These are request rights, not a claim that each action currently has a one-click control in the app.
               The current interface does not provide self-service account deletion or full data export; those requests require operator support through the{' '}
-              <a href="https://github.com/Realm9758/isthisvibecoded/issues" className="text-violet-300 hover:text-violet-200 underline underline-offset-2">project issue tracker</a>.
+              <a href="https://github.com/Realm9758/isthisvibecoded/issues" className="underline underline-offset-2 hover:opacity-70 transition-opacity" style={{ color: 'var(--accent)' }}>project issue tracker</a>.
               Because that tracker is public, do not include an email address, account data, or other personal information; request a private contact channel instead.
             </p>
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Data retention
             </h2>
             <p>
@@ -294,8 +295,8 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Children
             </h2>
             <p>
@@ -305,8 +306,8 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
-              <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
+            <h2 className="text-base font-semibold text-white mb-3 flex items-center gap-2.5">
+              <span className="w-1 h-4 shrink-0" style={{ background: 'var(--accent)' }} />
               Changes to this policy
             </h2>
             <p>
