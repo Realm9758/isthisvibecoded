@@ -261,7 +261,7 @@ const SENSITIVE_FILES: {
     description: 'A PHP info page is publicly accessible.',
     remediation: 'Remove info.php from the webroot.',
   },
-  // /server-status is checked separately with content verification — a 200 response
+  // /server-status is checked separately with content verification, because a 200
   // that doesn't contain actual Apache mod_status output is not a finding.
   {
     path: '/backup.sql',
@@ -305,7 +305,7 @@ const SENSITIVE_FILES: {
     description: '.DS_Store reveals directory structure metadata and filenames.',
     remediation: 'Add .DS_Store to .gitignore and block access via server config.',
   },
-  // crossdomain.xml is checked separately with content analysis — not via the static list
+  // crossdomain.xml is checked separately with content analysis, not via the static list
   // because a restrictive policy file is not a vulnerability.
   {
     path: '/.npmrc',
@@ -412,10 +412,10 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
       });
     }
     // Wildcard on the HTML page itself is only a real issue if credentials are also allowed
-    // Don't flag it on regular pages — only flag on API routes
+    // Don't flag it on regular pages, only on API routes
   }
 
-  // Test CORS on API endpoints — this is where wildcard is actually dangerous
+  // Test CORS on API endpoints, where a wildcard is actually dangerous
   const apiPaths = ['/api', '/api/user', '/api/me', '/api/auth', '/api/data'];
   for (const path of apiPaths) {
     const apiRes = await safeFetch(`${baseUrl}${path}`, {
@@ -525,7 +525,7 @@ async function checkCookies(res: Response | null): Promise<DeepFinding[]> {
         category: 'cookies',
         severity: 'high',
         title: `Auth Cookie Missing HttpOnly: ${name}`,
-        description: `"${name}" appears to be a session/auth cookie but lacks HttpOnly — JavaScript can steal it during an XSS attack.`,
+        description: `"${name}" appears to be a session/auth cookie but lacks HttpOnly, so JavaScript can steal it during an XSS attack.`,
         evidence: `Set-Cookie: ${cookie.split(';')[0]}`,
         remediation: 'Add the HttpOnly flag to all session and authentication cookies.',
       });
@@ -701,7 +701,7 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
   const text = await readProbeText(res);
   // Report only non-obvious paths as context; their access controls determine
   // whether anything is actually exposed.
-  // /admin, /login, /dashboard are universally guessed — listing them adds no signal
+  // /admin, /login, /dashboard are universally guessed, so listing them adds no signal
   // and Disallow: /admin is actually best practice. Focus on specific, unusual paths.
   const sensitiveRe = /\/backup|\/database|\/private|\/secret|\/internal|\/staging|\/\.git|\/config\/|\/api\/internal|\/dev\//i;
 
@@ -721,7 +721,7 @@ async function checkRobotsTxt(baseUrl: string): Promise<DeepFinding[]> {
       title: 'robots.txt Reveals Non-Obvious Sensitive Paths',
       description: `robots.txt lists potentially internal paths: ${disallowed.join(', ')}. These paths are reconnaissance context; they may already be guessable and are not exposures unless their own access controls fail.`,
       evidence: disallowed.map(p => `Disallow: ${p}`).join('\n'),
-      remediation: 'Remove non-obvious internal paths from robots.txt. Security should not depend on obscurity — protect these endpoints with authentication instead.',
+      remediation: 'Remove non-obvious internal paths from robots.txt. Security should not depend on obscurity; protect these endpoints with authentication instead.',
     },
   ];
 }
@@ -754,7 +754,7 @@ async function checkServerStatus(baseUrl: string): Promise<DeepFinding[]> {
   const res = await safeFetch(`${baseUrl}/server-status`);
   if (!res || res.status !== 200) return [];
   const text = await readProbeText(res);
-  // Confirm this is actual Apache mod_status output — not just a 200 page
+  // Confirm this is actual Apache mod_status output, not just a 200 page
   const isRealStatus = /Apache\s+Server\s+Status|Current\s+Time.*Server\s+uptime|requests\s+currently\s+being\s+processed/i.test(text);
   if (!isRealStatus) return [];
   return [{
@@ -762,7 +762,7 @@ async function checkServerStatus(baseUrl: string): Promise<DeepFinding[]> {
     category: 'info-disclosure',
     severity: 'high',
     title: 'Apache Server Status Page Exposed',
-    description: 'Apache mod_status is publicly accessible, exposing real-time server info: active connections, request URIs, worker states, and client IPs — useful for targeted attacks.',
+    description: 'Apache mod_status is publicly accessible, exposing real-time server info: active connections, request URIs, worker states, and client IPs, all useful for targeted attacks.',
     evidence: `GET ${baseUrl}/server-status → 200 (Apache mod_status content confirmed)`,
     remediation: 'Restrict /server-status to localhost or trusted IPs: `Require ip 127.0.0.1`',
     url: `${baseUrl}/server-status`,
@@ -771,14 +771,14 @@ async function checkServerStatus(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── Admin path discovery ──────────────────────────────────────────────────
 
-// Only paths that are unambiguously admin/management software — not generic app routes
+// Only paths that are unambiguously admin or management software, not generic app routes
 // like /dashboard (user dashboards) or /portal (marketing pages), /root, /manager
 const ADMIN_PATHS = [
   '/admin', '/admin/', '/administrator', '/administrator/',
   '/wp-admin', '/wp-admin/',
   '/cpanel', '/phpmyadmin', '/phpmyadmin/', '/pma', '/pma/',
   '/admin/login', '/adminpanel', '/controlpanel', '/superadmin',
-  '/manager/html', '/manager/text',  // Tomcat manager — specific path
+  '/manager/html', '/manager/text',  // Tomcat manager, specific path
   '/cms', '/cms/',
 ];
 
@@ -996,9 +996,9 @@ async function checkVibeCodePatterns(baseUrl: string, html: string): Promise<Dee
         category: 'exposed-files',
         severity: 'critical',
         title: 'Supabase Service Role Key Exposed in Client HTML',
-        description: 'A Supabase SERVICE ROLE key is embedded in the client-side HTML. This key bypasses Row Level Security and gives full database access — read, write, and delete everything. Immediate action required.',
+        description: 'A Supabase SERVICE ROLE key is embedded in the client-side HTML. This key bypasses Row Level Security and gives full database access to read, write, and delete everything. Immediate action required.',
         evidence: `Supabase URL: ${supabaseUrl[0]}\nService role JWT found in page HTML`,
-        remediation: '1. Rotate the key immediately in Supabase → Project Settings → API.\n2. Never use the service_role key client-side — only use the anon key in the browser.\n3. Move service_role to server-side only (API routes, server components).',
+        remediation: '1. Rotate the key immediately in Supabase → Project Settings → API.\n2. Never use the service_role key client-side; only use the anon key in the browser.\n3. Move service_role to server-side only (API routes, server components).',
       });
     } else {
       findings.push({
@@ -1006,9 +1006,9 @@ async function checkVibeCodePatterns(baseUrl: string, html: string): Promise<Dee
         category: 'info-disclosure',
         severity: 'info',
         title: 'Supabase Anon Key Visible in Client HTML',
-        description: 'The Supabase anon (public) key is embedded in the client HTML. This is normal and expected for client-side Supabase usage — the anon key is designed to be public. Security depends entirely on your Row Level Security (RLS) policies.',
+        description: 'The Supabase anon (public) key is embedded in the client HTML. This is normal and expected for client-side Supabase usage, because the anon key is designed to be public. Security depends entirely on your Row Level Security (RLS) policies.',
         evidence: `Supabase project: ${supabaseUrl[0]}`,
-        remediation: 'Verify your Supabase tables have RLS enabled with appropriate policies. The anon key is safe to expose — but RLS must be configured correctly.',
+        remediation: 'Verify your Supabase tables have RLS enabled with appropriate policies. The anon key is safe to expose, but RLS must be configured correctly.',
       });
     }
   }
@@ -1021,9 +1021,9 @@ async function checkVibeCodePatterns(baseUrl: string, html: string): Promise<Dee
       category: 'info-disclosure',
       severity: 'info',
       title: 'Firebase Config Visible in Client HTML',
-      description: 'Firebase configuration (apiKey, projectId, etc.) is embedded in the HTML. Firebase API keys are designed to be public — security depends on Firebase Security Rules, not key secrecy.',
+      description: 'Firebase configuration (apiKey, projectId, etc.) is embedded in the HTML. Firebase API keys are designed to be public, so security depends on Firebase Security Rules rather than key secrecy.',
       evidence: firebaseConfig[0].substring(0, 60) + '…',
-      remediation: 'Verify your Firestore and Storage security rules are configured correctly. Firebase API keys are public by design — rules are your security layer.',
+      remediation: 'Verify your Firestore and Storage security rules are configured correctly. Firebase API keys are public by design; rules are your security layer.',
     });
   }
 
@@ -1111,7 +1111,7 @@ async function checkXSS(baseUrl: string): Promise<DeepFinding[]> {
     const res = await safeFetch(url);
     if (!res) continue;
     const text = await readProbeText(res);
-    // Reflected unencoded — actual XSS
+    // Reflected unencoded, so this is actual XSS
     if (text.includes('<script>alert(1)</script>')) {
       return [{
         id: 'xss-reflected',
@@ -1233,7 +1233,7 @@ async function checkForcedBrowsing(baseUrl: string): Promise<DeepFinding[]> {
     title: `Unauthenticated JSON Response${exposed.length > 1 ? 's' : ''} Need Review: ${exposed.slice(0, 3).map(item => item.path).join(', ')}${exposed.length > 3 ? '…' : ''}`,
     description: `${exposed.length} selected API path${exposed.length > 1 ? 's' : ''} returned non-empty sensitive-looking JSON fields without authentication. Public profile/configuration data can be intentional, so confirm field sensitivity and access expectations before classifying this as broken access control.`,
     evidence: exposed.map(item => `GET ${baseUrl}${item.path} → 200 JSON with non-empty ${item.severity === 'high' ? 'secret-shaped' : 'account/configuration'} fields`).join('\n'),
-    remediation: 'Add authentication middleware to all API routes. Return 401 for unauthenticated requests. Never rely on obscurity — assume all endpoint paths are known to attackers.',
+    remediation: 'Add authentication middleware to all API routes. Return 401 for unauthenticated requests. Never rely on obscurity; assume all endpoint paths are known to attackers.',
   }];
 }
 
@@ -1264,7 +1264,7 @@ async function checkIDOR(baseUrl: string): Promise<DeepFinding[]> {
       title: `Sequential Public Object Responses Need Authorization Review: ${path}{id}`,
       description: `${path}1 and ${path}2 both return object-like data without authentication. This can be intentional public data and does not establish IDOR without authenticated users and ownership expectations; review whether either record should be access-controlled.`,
       evidence: `GET ${baseUrl}${path}1 → 200 JSON\nGET ${baseUrl}${path}2 → 200 JSON\nBoth return objects with id/email/name fields`,
-      remediation: 'Check ownership on every resource request — verify the authenticated user owns the record before returning it. Return 403 for resources belonging to other users. Use non-sequential UUIDs as identifiers.',
+      remediation: 'Check ownership on every resource request, verifying the authenticated user owns the record before returning it. Return 403 for resources belonging to other users. Use non-sequential UUIDs as identifiers.',
       url: `${baseUrl}${path}1`,
     }];
   }
@@ -1285,7 +1285,7 @@ async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
     if (metaRes?.status === 200) {
       const text = await readProbeText(metaRes);
       if (/ami-id|instance-id|security-credentials|iam\//.test(text)) {
-        const controlUrl = `${baseUrl}${param}${encodeURIComponent('vibescan-control-value')}`;
+        const controlUrl = `${baseUrl}${param}${encodeURIComponent('ironclad-control-value')}`;
         const controlRes = await safeFetch(controlUrl);
         const controlText = controlRes?.status === 200 ? await readProbeText(controlRes) : '';
         if (/ami-id|instance-id|security-credentials|iam\//.test(controlText)) continue;
@@ -1329,7 +1329,7 @@ async function checkPathTraversal(baseUrl: string): Promise<DeepFinding[]> {
           id: 'path-traversal',
           category: 'exposed-files',
           severity: 'critical',
-          title: 'Path Traversal — /etc/passwd Read Successfully',
+          title: 'Path Traversal: /etc/passwd Read Successfully',
           description: `The ${param.replace('?', '').replace('=', '')} parameter is vulnerable to directory traversal. The payload "../../../etc/passwd" returned the Unix password file, confirming full filesystem read access.`,
           evidence: `GET ${url}\n→ Response contains /etc/passwd (root:x:0:0 matched)`,
           remediation: 'Never construct file paths from user input. Validate against an allowlist of permitted files. Use realpath() and confirm the result is within the expected directory.',
@@ -1480,7 +1480,7 @@ async function checkSourceMaps(baseUrl: string, html: string): Promise<DeepFindi
     category: 'info-disclosure',
     severity: 'medium',
     title: `Source Maps Publicly Accessible (${exposed.length} file${exposed.length > 1 ? 's' : ''})`,
-    description: 'JavaScript source map files (.js.map) are publicly accessible. These contain your original, unminified source code — including comments, variable names, internal logic, and sometimes hardcoded values — making reverse engineering trivial.',
+    description: 'JavaScript source map files (.js.map) are publicly accessible. These contain your original, unminified source code, including comments, variable names, internal logic, and sometimes hardcoded values, which makes reverse engineering trivial.',
     evidence: exposed.slice(0, 3).map(u => `GET ${u} → 200`).join('\n'),
     remediation: 'Disable source map generation for production builds. In Next.js: set productionBrowserSourceMaps: false in next.config.js (this is the default). In Webpack: set devtool: false for production.',
   }];
@@ -1587,7 +1587,7 @@ async function checkRateLimiting(baseUrl: string): Promise<DeepFinding[]> {
       safeFetch(`${baseUrl}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'ratelimit-probe@vibescan.io', password: 'wrongpassword123' }),
+        body: JSON.stringify({ email: 'ratelimit-probe@ironclad.dev', password: 'wrongpassword123' }),
         allowRateLimitResponse: true,
       })
     );
@@ -1611,7 +1611,7 @@ async function checkRateLimiting(baseUrl: string): Promise<DeepFinding[]> {
         severity: 'info',
         title: 'No Early HTTP 429 Observed on Authentication Endpoint',
         description: `${path} answered 6 rapid invalid login attempts without HTTP 429. This small black-box sample cannot establish that rate limiting is absent: controls may use a higher threshold, delayed responses, account/device signals, or edge enforcement.`,
-        evidence: `POST ${baseUrl}${path} × 6 rapid requests\n→ Statuses: ${statuses.join(', ')} — no 429 Too Many Requests`,
+        evidence: `POST ${baseUrl}${path} × 6 rapid requests\n→ Statuses: ${statuses.join(', ')}, with no 429 Too Many Requests`,
         remediation: 'Verify the documented abuse-control policy with an authorised test that covers IP, account, device, and time windows. Add throttling or step-up controls if the endpoint truly has none.',
         url: `${baseUrl}${path}`,
       }];
@@ -1689,7 +1689,7 @@ async function checkHostHeaderInjection(baseUrl: string): Promise<DeepFinding[]>
         ? 'The attacker-controlled Host value appeared in a redirect destination. Confirm whether the same host derivation reaches password-reset links or shared caches before assigning broader impact.'
         : 'The attacker-controlled Host value appeared in a successful response body. Reflection alone is not password-reset or cache poisoning; inspect the sink and cache behavior before treating it as exploitable.',
       evidence: `GET ${baseUrl} with Host: ${INJECTED_HOST}\n→ ${source}`,
-      remediation: 'Validate the Host header against a strict allowlist of your own domains. Never use the Host header to construct URLs in emails, redirects, or links — use a hardcoded base URL from environment config.',
+      remediation: 'Validate the Host header against a strict allowlist of your own domains. Never use the Host header to construct URLs in emails, redirects, or links; use a hardcoded base URL from environment config.',
     }];
   }
 
@@ -1712,10 +1712,10 @@ async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
         id: 'crlf-injection',
         category: 'injection',
         severity: 'high',
-        title: 'CRLF Injection — Header Injection Confirmed',
+        title: 'CRLF Injection: Header Injection Confirmed',
         description: `A CRLF sequence in the ${path} parameter was reflected into HTTP response headers. Attackers can inject arbitrary headers, set cookies, or split the HTTP response to perform session fixation, cache poisoning, or XSS.`,
         evidence: `GET ${url}\n→ X-Injected header appeared in response headers`,
-        remediation: 'Strip or reject \\r and \\n characters from any user input reflected into HTTP headers or Location values. Modern frameworks handle this automatically — ensure you are not constructing raw header strings from user input.',
+        remediation: 'Strip or reject \\r and \\n characters from any user input reflected into HTTP headers or Location values. Modern frameworks handle this automatically; ensure you are not constructing raw header strings from user input.',
         url,
       }];
     }

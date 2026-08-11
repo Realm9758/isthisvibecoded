@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { claimHeldScan } from '@/lib/claim-scan';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -20,7 +21,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      router.push('/');
+      router.push(await claimHeldScan());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
@@ -49,7 +50,7 @@ export default function LoginPage() {
             <div className="w-9 h-9 rounded-xl bg-violet-600 group-hover:bg-violet-500 transition-colors flex items-center justify-center text-base font-bold">
               V
             </div>
-            <span className="font-semibold text-white/90 text-lg">VibeScan</span>
+            <span className="font-semibold text-white/90 text-lg">Ironclad</span>
           </Link>
           <h1 className="text-2xl font-bold text-white mt-6 mb-1">Welcome back</h1>
           <p className="text-white/40 text-sm">Sign in to your account</p>

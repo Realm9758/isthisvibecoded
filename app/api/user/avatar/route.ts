@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   return Response.json({ ok: true, avatarUrl: updated.avatarUrl });
 }
 
-// DELETE — remove avatar (revert to colour initial)
+// DELETE removes the avatar, reverting to the colour initial
 export async function DELETE() {
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE)?.value;

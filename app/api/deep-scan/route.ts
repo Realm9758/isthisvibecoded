@@ -66,7 +66,7 @@ export async function POST(request: Request) {
   if (userError) {
     return Response.json({ error: 'Could not verify account plan' }, { status: 503 });
   }
-  // Fresh domain-control check — must belong to this authenticated user.
+  // Fresh domain-control check: it must belong to this authenticated user.
   const { data: verif, error: verificationError } = await supabase
     .from('verification_tokens')
     .select('verified, verified_at')
@@ -173,6 +173,7 @@ export async function POST(request: Request) {
           id: scanId,
           domain,
           user_id: payload.userId,
+          lane: 'deep',
           authorization_terms_version: DEEP_SCAN_TERMS_VERSION,
           authorization_accepted_at: authorizationAcceptedAt,
           result,

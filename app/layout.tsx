@@ -10,14 +10,14 @@ const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin']
 const BASE = 'https://isthisvibecoded-one.vercel.app';
 
 export const metadata: Metadata = {
-  title: 'Is This Vibe-Coded?',
-  description: 'Inspect public generative-builder provenance evidence, response-header hardening, and visible tech signals — without claiming how the code was written.',
+  title: 'Ironclad: is your site ironclad?',
+  description: 'Point it at any URL and find leaked keys, exposed config files, missing headers, and the other things that ship when nobody was looking.',
   alternates: { canonical: BASE },
   openGraph: {
     type: 'website',
     url: BASE,
-    title: 'Is This Vibe-Coded?',
-    description: 'Inspect public generative-builder provenance evidence, response-header hardening, and visible tech signals — without claiming how the code was written.',
+    title: 'Ironclad: is your site ironclad?',
+    description: 'Point it at any URL and find leaked keys, exposed config files, missing headers, and the other things that ship when nobody was looking.',
     images: [{ url: `${BASE}/og/default.png` }],
   },
   twitter: { card: 'summary_large_image' },

@@ -4,14 +4,14 @@ import type { Metadata } from 'next';
 const BASE = 'https://isthisvibecoded-one.vercel.app';
 
 export const metadata: Metadata = {
-  title: 'Privacy Policy — Is This Vibe-Coded?',
-  description: 'What VibeScan requests, stores, publishes, and cannot determine.',
+  title: 'Privacy Policy | Ironclad',
+  description: 'What Ironclad requests, stores, and cannot determine.',
   alternates: { canonical: `${BASE}/privacy` },
   openGraph: {
     type: 'website',
     url: `${BASE}/privacy`,
-    title: 'Privacy Policy — Is This Vibe-Coded?',
-    description: 'What VibeScan requests, stores, publishes, and cannot determine.',
+    title: 'Privacy Policy | Ironclad',
+    description: 'What Ironclad requests, stores, and cannot determine.',
     images: [{ url: `${BASE}/og/default.png` }],
   },
   twitter: { card: 'summary_large_image' },
@@ -35,7 +35,7 @@ export default function PrivacyPage() {
           <p className="text-sm text-white/35">Last updated: August 2026</p>
           <div className="mt-4 p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5">
             <p className="text-sm text-emerald-300/80 font-medium">
-              Short version: We don&apos;t sell personal data or use it for advertising. Anonymous scan results are not saved; signed-in scans start private and require an explicit publish action to become public.
+              Short version: we do not sell personal data or use it for advertising. Every scan result is private to the account that ran it, and there is no public feed, leaderboard, or shareable result page at all.
             </p>
           </div>
         </div>
@@ -49,7 +49,7 @@ export default function PrivacyPage() {
               Who we are
             </h2>
             <p>
-              Is This Vibe-Coded? (&ldquo;VibeScan&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;) is a public-site provenance and header-review tool.
+              Ironclad (&ldquo;we&rdquo;, &ldquo;us&rdquo;) is a website security scanner.
               It reports visible generative-builder provenance signals, a limited response-header hardening index, and visible technology indicators.
               It does not determine whether a developer understood, reviewed, or personally wrote the code.
             </p>
@@ -58,7 +58,7 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-base font-bold text-white/80 mb-3 flex items-center gap-2">
               <span className="w-1 h-4 rounded-full bg-violet-500 shrink-0" />
-              What we scan — and what we don&apos;t
+              What we scan, and what we do not
             </h2>
             <p className="mb-3">
               Passive scans are read-only but are not a single-request operation. We fetch the submitted public page, follow a bounded number
@@ -105,7 +105,7 @@ export default function PrivacyPage() {
             </p>
             <ul className="space-y-1.5 mb-3">
               {[
-                'You are logged in to a verified VibeScan account',
+                'You are logged in to a verified Ironclad account',
                 'You have demonstrated control of the domain by placing a unique token in DNS, an HTML meta tag, or a hosted verification file',
                 'You have explicitly requested the scan and accepted these terms',
               ].map(item => (
@@ -131,7 +131,7 @@ export default function PrivacyPage() {
             <p className="mb-2"><strong className="text-white/70">Anonymous users (no account):</strong></p>
             <ul className="space-y-1.5 mb-4">
               {[
-                'The submitted URL is processed to run the request, but the application does not insert the anonymous result into scan history or the public feed',
+                'The submitted URL is processed to run the scan. The result is stored privately for up to 7 days with a one-time claim token so you can attach it to an account you create afterwards, and it is deleted unclaimed after that',
                 'For rate limiting, an IP-derived value is transformed with a server-side HMAC and used in a date-scoped usage row; the raw IP is not stored in that row',
                 'A local-storage consent flag is saved in your browser only after you explicitly accept this policy',
               ].map(item => (
@@ -145,11 +145,11 @@ export default function PrivacyPage() {
             <ul className="space-y-1.5">
               {[
                 'Email address (required for login)',
-                'A public display handle you choose at signup; it appears with comments and replies, while a public profile becomes discoverable after you publish at least one scan',
-                'Password — stored as a salted cryptographic hash (scrypt). We never store plain-text passwords.',
+                'A display handle you choose at signup',
+                'Password, stored as a salted cryptographic hash (scrypt). We never store plain-text passwords.',
                 'Profile details you provide, plus comments, reactions, and notification preferences created through the service',
                 'Passive and deep scan results linked to your account; new passive scans start private',
-                'Subscription status if you upgrade (via Stripe — we never see your card details)',
+                'Subscription status if you upgrade, via Stripe, so we never see your card details',
               ].map(item => (
                 <li key={item} className="flex gap-2">
                   <span className="text-violet-500/60 shrink-0">›</span>
@@ -218,8 +218,8 @@ export default function PrivacyPage() {
               Public feed
             </h2>
             <p>
-              Anonymous results are not added to the feed. New signed-in passive scans are private by default and are visible only to their owner,
-              including at the direct result route. An owner can explicitly publish a result to make its page, badge, share card, and feed entry public,
+              Scan results are private to the account that ran them and are visible only at the direct result route to their owner. There is no publish action,
+              no public feed, and no shareable result link, because a scan can describe a site its requester does not own,
               and can later switch it back to private.
             </p>
           </section>
@@ -235,11 +235,11 @@ export default function PrivacyPage() {
             </p>
             <ul className="space-y-1.5">
               {[
-                'Supabase — database storage for account and saved service data',
-                'Stripe — payment processing (we never see card details)',
-                'Vercel — hosting and edge network',
-                'Resend — optional transactional notification email delivery when configured and enabled',
-                'Google Favicon Service — supplies small site icons shown in the interface',
+                'Supabase, for database storage of account and saved service data',
+                'Stripe, for payment processing. We never see card details',
+                'Vercel, for hosting and the edge network',
+                'Resend, for optional transactional notification email when configured and enabled',
+                'Google Favicon Service, which supplies the small site icons shown in the interface',
               ].map(item => (
                 <li key={item} className="flex gap-2">
                   <span className="text-violet-500/60 shrink-0">›</span>
@@ -286,7 +286,7 @@ export default function PrivacyPage() {
               Data retention
             </h2>
             <p>
-              Anonymous scan results are not persisted. Account data and saved scan results remain stored while the account or record exists,
+              An unclaimed anonymous scan result is deleted 7 days after it was run. Account data and saved scan results remain stored while the account or record exists,
               subject to legal and operational retention needs. Rate-limit counts use date-scoped database rows; the count window resets daily,
               but that does not mean the underlying row is deleted immediately. The free active-scan allowance also uses a lifetime counter.
               Stripe retains billing records under its own policy.

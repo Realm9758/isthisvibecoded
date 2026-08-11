@@ -185,7 +185,7 @@ export async function consumeUsage(id: string, limit: number): Promise<number> {
 /**
  * Reserves one allowance unit, returning the remaining count, or null when the
  * reservation could not be evaluated at all. A null means the limiter itself is
- * broken — an unapplied migration or an unreachable database — not that the
+ * broken, meaning an unapplied migration or an unreachable database, not that the
  * caller is over quota, so callers answer 503 rather than 429. The underlying
  * cause is logged here because every caller discards it to avoid leaking
  * database internals to the client.

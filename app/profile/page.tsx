@@ -179,7 +179,7 @@ function OverviewTab({
             style={{ background: 'rgba(255,255,255,0.02)' }}
           >
             <p className="text-2xl font-bold mb-0.5" style={{ color: stat.color }}>
-              {stat.value ?? '—'}
+              {stat.value ?? 'n/a'}
             </p>
             <p className="text-[10px] text-white/30 uppercase tracking-wider">{stat.label}</p>
           </div>
@@ -235,7 +235,7 @@ function OverviewTab({
             className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap"
             style={{ background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.25)', color: '#a78bfa' }}
           >
-            Upgrade — £4.99/mo
+            Upgrade to Pro, £4.99/mo
           </Link>
         </div>
       )}

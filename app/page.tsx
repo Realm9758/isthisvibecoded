@@ -8,9 +8,7 @@ import { Confetti } from '@/components/Confetti';
 import { useAuth } from '@/contexts/AuthContext';
 import { SURFACE_PHASE_IDS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
 import { FREE_LIFETIME_LIMIT } from '@/lib/scan-quota';
-
-/** Held so a visitor who signs up can claim the scan they already ran. */
-export const CLAIM_STORAGE_KEY = 'ironclad:claim';
+import { holdClaim } from '@/lib/claim-scan';
 
 const SURFACE_CHECKS = [
   'Secrets in your HTML',
@@ -94,14 +92,7 @@ export default function Home() {
     // An anonymous scan is held so signing up unlocks this exact report
     // rather than spending one of the three free scans re-running it.
     if (completed.claimToken) {
-      try {
-        sessionStorage.setItem(CLAIM_STORAGE_KEY, JSON.stringify({
-          scanId: completed.scanId,
-          claimToken: completed.claimToken,
-        }));
-      } catch {
-        // A blocked sessionStorage costs the claim, not the report.
-      }
+      holdClaim({ scanId: completed.scanId, claimToken: completed.claimToken });
     }
 
     if (completed.findings.length === 0 && completed.summary.score !== null) {

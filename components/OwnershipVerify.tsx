@@ -64,7 +64,7 @@ function DNSInstructions({ domain, token }: { domain: string; token: string }) {
   return (
     <div className="space-y-4">
       <div className="p-3 rounded-lg bg-amber-500/8 border border-amber-500/20 text-xs text-amber-300/80">
-        <strong>Best for custom domains.</strong> Does not work on *.vercel.app, *.netlify.app, or other platform subdomains — use Meta Tag instead.
+        <strong>Best for custom domains.</strong> Does not work on *.vercel.app, *.netlify.app, or other platform subdomains, so use Meta Tag instead.
       </div>
 
       <div className="space-y-3">
@@ -168,7 +168,7 @@ function FileInstructions({ domain, token }: { domain: string; token: string }) 
         <div className="ml-8 space-y-3">
           <div className="p-3 rounded-lg border border-white/8 bg-white/2 space-y-1">
             <p className="text-[10px] font-bold text-white/50 uppercase tracking-wider">Next.js / Vite / React</p>
-            <p className="text-xs text-white/45">Create the file at <span className="font-mono text-white/65">public/.well-known/vibecoded.txt</span> — Next.js/Vite serve the <span className="font-mono text-white/65">public/</span> folder at the root.</p>
+            <p className="text-xs text-white/45">Create the file at <span className="font-mono text-white/65">public/.well-known/vibecoded.txt</span>. Next.js and Vite serve the <span className="font-mono text-white/65">public/</span> folder at the root.</p>
           </div>
 
           <div className="p-3 rounded-lg border border-white/8 bg-white/2 space-y-1">
@@ -284,7 +284,7 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
   }
 
   const METHODS: { id: Method; label: string; icon: string; best: string }[] = [
-    { id: 'meta',  label: 'Meta Tag',    icon: '</>', best: 'Easiest — works everywhere' },
+    { id: 'meta',  label: 'Meta Tag',    icon: '</>', best: 'Easiest, works everywhere' },
     { id: 'file',  label: 'File Upload', icon: '📄',  best: 'No code required' },
     { id: 'dns',   label: 'DNS Record',  icon: '🌐',  best: 'Custom domains only' },
   ];

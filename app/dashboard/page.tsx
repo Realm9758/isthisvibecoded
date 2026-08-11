@@ -291,7 +291,7 @@ function FindingCard({ f }: { f: DeepFinding }) {
 }
 
 const GRADE = (s: number) => s >= 90 ? 'A' : s >= 75 ? 'B' : s >= 55 ? 'C' : s >= 35 ? 'D' : 'F';
-const GRADE_COLOR = (g: string) => g === '—' ? '#94a3b8' : g === 'A' ? '#22c55e' : g === 'B' ? '#84cc16' : g === 'C' ? '#f59e0b' : g === 'D' ? '#f97316' : '#ef4444';
+const GRADE_COLOR = (g: string) => g === 'n/a' ? '#94a3b8' : g === 'A' ? '#22c55e' : g === 'B' ? '#84cc16' : g === 'C' ? '#f59e0b' : g === 'D' ? '#f97316' : '#ef4444';
 
 function CheckRow({ item }: { item: { id: string; label: string; description: string; status: string; detail: string } }) {
   const [open, setOpen] = useState(false);
@@ -436,7 +436,7 @@ function DeepScanPromptSection({ result }: { result: DeepScanResult }) {
         <div className="relative rounded-xl border overflow-hidden" style={{ borderColor: toolDef.border, background: 'rgba(0,0,0,0.3)' }}>
           <div className="px-3 py-1.5 border-b flex items-center gap-2" style={{ borderColor: toolDef.border, background: toolDef.bg }}>
             <div className="w-1.5 h-1.5 rounded-full" style={{ background: toolDef.accent }} />
-            <span className="text-[10px] font-medium" style={{ color: toolDef.accent }}>{toolDef.name} — {toolDef.tagline}</span>
+            <span className="text-[10px] font-medium" style={{ color: toolDef.accent }}>{toolDef.name}: {toolDef.tagline}</span>
           </div>
           <pre className="text-[11px] leading-relaxed text-white/55 p-4 whitespace-pre-wrap font-mono overflow-x-auto max-h-52 overflow-y-auto">
             {prompt}
@@ -456,7 +456,7 @@ function DeepScanResults({ result, domain, onReset }: { result: DeepScanResultWi
     && result.versions?.scanner === DEEP_SCANNER_VERSION
     && result.versions?.scoring === DEEP_SCORING_VERSION
     && result.versions?.coverage === DEEP_COVERAGE_VERSION;
-  const grade = scoreAvailable ? GRADE(summary.score as number) : '—';
+  const grade = scoreAvailable ? GRADE(summary.score as number) : 'n/a';
   const gradeColor = GRADE_COLOR(grade);
   const order: DeepFinding['severity'][] = ['critical', 'high', 'medium', 'low', 'info'];
   const sorted = [...findings].sort((a, b) => order.indexOf(a.severity) - order.indexOf(b.severity));
@@ -610,7 +610,7 @@ function DeepScanPanel() {
     try {
       d = new URL(inputUrl.startsWith('http') ? inputUrl : `https://${inputUrl}`).hostname;
     } catch {
-      setUrlError('Enter a valid domain — e.g. example.com');
+      setUrlError('Enter a valid domain, for example example.com');
       return;
     }
     if (!d) { setUrlError('Enter a valid domain'); return; }
@@ -814,7 +814,7 @@ function DeepScanHistoryCard({ entry }: { entry: DeepScanEntry }) {
     && entry.result.versions?.scanner === DEEP_SCANNER_VERSION
     && entry.result.versions?.scoring === DEEP_SCORING_VERSION
     && entry.result.versions?.coverage === DEEP_COVERAGE_VERSION;
-  const grade = scoreAvailable ? GRADE(summary.score as number) : '—';
+  const grade = scoreAvailable ? GRADE(summary.score as number) : 'n/a';
   const gradeColor = GRADE_COLOR(grade);
   const criticalCount = summary.critical ?? 0;
   const highCount = summary.high ?? 0;

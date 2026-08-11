@@ -12,7 +12,7 @@ const PLAN_BADGE: Record<string, string> = {
   free: 'bg-white/5 text-white/35 border-white/10',
 };
 
-// Minimal SVG icons — no emoji
+// Minimal SVG icons, no emoji
 function IconScan() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">

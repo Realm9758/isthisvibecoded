@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { claimHeldScan } from '@/lib/claim-scan';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
@@ -104,7 +105,7 @@ export default function SignupPage() {
         body: JSON.stringify({ notifInApp, notifEmail }),
       });
       if (!response.ok) throw new Error('Could not save notification preferences');
-      router.push('/');
+      router.push(await claimHeldScan());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save notification preferences');
     } finally {
@@ -112,8 +113,8 @@ export default function SignupPage() {
     }
   }
 
-  function skipPrefs() {
-    router.push('/');
+  async function skipPrefs() {
+    router.push(await claimHeldScan());
   }
 
   return (
@@ -133,7 +134,7 @@ export default function SignupPage() {
             <div className="w-9 h-9 rounded-xl bg-violet-600 group-hover:bg-violet-500 transition-colors flex items-center justify-center text-base font-bold">
               V
             </div>
-            <span className="font-semibold text-white/90 text-lg">VibeScan</span>
+            <span className="font-semibold text-white/90 text-lg">Ironclad</span>
           </Link>
 
           {step === 'form' ? (
