@@ -4,44 +4,90 @@ import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { ScanRunner, type CompletedScan, type ScanErrorMeta } from '@/components/ScanRunner';
 import { ScanReport } from '@/components/ScanReport';
-import { Confetti } from '@/components/Confetti';
 import { useAuth } from '@/contexts/AuthContext';
-import { SURFACE_PHASE_IDS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
+import { DEEP_ONLY_PHASE_IDS, LANE_CHECK_COUNTS } from '@/lib/scan-lanes';
 import { FREE_LIFETIME_LIMIT } from '@/lib/scan-quota';
 import { holdClaim } from '@/lib/claim-scan';
 
-const SURFACE_CHECKS = [
-  'Secrets in your HTML',
-  'Exposed .env and .git',
-  'Security headers',
-  'Cookie flags',
-  'HTTPS and HSTS',
-  'CORS policy',
-  'Source maps',
-  'Vulnerable libraries',
-  'Directory listing',
-  'GraphQL introspection',
-  'Public API schemas',
-  'Server version leaks',
-  'Subresource integrity',
-  'robots.txt disclosure',
-  'HTTP methods',
+const SURFACE = LANE_CHECK_COUNTS.surface;
+const DEEP_ONLY = DEEP_ONLY_PHASE_IDS.length;
+const TOTAL = LANE_CHECK_COUNTS.deep;
+
+const STEPS = [
+  {
+    n: '01',
+    title: 'Scan any URL, free',
+    body: `Type a domain. ${SURFACE} read-only checks run immediately, no account: leaked keys in your bundle, a public .env, an exposed source map, headers you never set.`,
+  },
+  {
+    n: '02',
+    title: 'Prove the domain is yours',
+    body: 'One TXT record, one meta tag, or one file at /.well-known. That unlocks the checks that send real payloads, because we will not fire those at a server you have not proved you control.',
+  },
+  {
+    n: '03',
+    title: 'Fix it with the evidence',
+    body: 'Every finding ships with what we requested, what came back, and what to change. No finding is reported without the observation behind it.',
+  },
 ];
 
-const DEEP_CHECKS = [
-  'SQL injection',
-  'Cross-site scripting',
-  'NoSQL injection',
-  'Path traversal',
-  'Server-side request forgery',
-  'CRLF injection',
-  'Host header injection',
-  'Open redirect',
-  'Error verbosity',
-  'Admin panel discovery',
-  'Forced browsing',
-  'Insecure direct object reference',
-  'Auth rate limiting',
+/** The real check inventory, grouped for the coverage matrix. */
+const COVERAGE = [
+  { name: 'Secrets in HTML',     lane: 'surface' },
+  { name: 'Exposed .env',        lane: 'surface' },
+  { name: 'Exposed .git',        lane: 'surface' },
+  { name: 'Source maps',         lane: 'surface' },
+  { name: 'Security headers',    lane: 'surface' },
+  { name: 'Cookie flags',        lane: 'surface' },
+  { name: 'HTTPS / HSTS',        lane: 'surface' },
+  { name: 'CORS policy',         lane: 'surface' },
+  { name: 'Vulnerable libs',     lane: 'surface' },
+  { name: 'Directory listing',   lane: 'surface' },
+  { name: 'GraphQL schema',      lane: 'surface' },
+  { name: 'Public API docs',     lane: 'surface' },
+  { name: 'Version disclosure',  lane: 'surface' },
+  { name: 'robots.txt leaks',    lane: 'surface' },
+  { name: 'HTTP methods',        lane: 'surface' },
+  { name: 'SQL injection',       lane: 'deep' },
+  { name: 'NoSQL injection',     lane: 'deep' },
+  { name: 'Reflected XSS',       lane: 'deep' },
+  { name: 'Path traversal',      lane: 'deep' },
+  { name: 'SSRF',                lane: 'deep' },
+  { name: 'CRLF injection',      lane: 'deep' },
+  { name: 'Host header inj.',    lane: 'deep' },
+  { name: 'Open redirect',       lane: 'deep' },
+  { name: 'IDOR',                lane: 'deep' },
+  { name: 'Forced browsing',     lane: 'deep' },
+  { name: 'Admin discovery',     lane: 'deep' },
+  { name: 'Error verbosity',     lane: 'deep' },
+  { name: 'Rate-limit abuse',    lane: 'deep' },
+];
+
+/** Shown in the hero as a worked example, never presented as a live result. */
+const EXAMPLE_FINDINGS = [
+  { sev: 'CRIT', color: 'var(--crit)', title: 'Supabase service role key in client HTML', meta: 'GET /  ·  bypasses row level security' },
+  { sev: 'CRIT', color: 'var(--crit)', title: 'Environment file publicly readable',       meta: 'GET /.env  ·  200  ·  non-placeholder secret' },
+  { sev: 'HIGH', color: 'var(--high)', title: 'Source maps expose unminified source',     meta: 'GET /_next/static/main.js.map  ·  200' },
+  { sev: 'HIGH', color: 'var(--high)', title: 'Site reachable over plain HTTP',           meta: 'GET http://  ·  200  ·  no redirect to HTTPS' },
+];
+
+const FAQ = [
+  {
+    q: `Why can I only run ${SURFACE} checks on someone else's site?`,
+    a: `Because the other ${DEEP_ONLY} send attack payloads. Firing those at a server you do not control is unauthorised access in a lot of places, and a checkbox saying you had permission is not a defence. The ${SURFACE} open checks are read-only requests of the kind any browser or search crawler already makes, so they are safe on any target.`,
+  },
+  {
+    q: 'Does paying unlock more checks?',
+    a: 'No. Permission decides which checks run; payment decides how many scans you get. Verifying a domain unlocks all 28 on the free plan too.',
+  },
+  {
+    q: 'What if my firewall blocks the scanner?',
+    a: 'The blocked check is reported as inconclusive with the reason stated, and the rest of the report still renders. A blocked check never becomes a passing one, so blocking us costs you the report rather than hiding a problem.',
+  },
+  {
+    q: 'Is this a penetration test?',
+    a: 'No. Ironclad looks from the outside at one moment in time with bounded, automated probes. It cannot read your source, review your access control, or reason about your business logic. A clean result means these checks observed nothing, not that your site is secure.',
+  },
 ];
 
 function isValidUrl(value: string) {
@@ -61,12 +107,11 @@ export default function Home() {
   const [result, setResult] = useState<CompletedScan | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [errorMeta, setErrorMeta] = useState<ScanErrorMeta>({});
-  const [confetti, setConfetti] = useState(false);
-  const resultsRef = useRef<HTMLDivElement>(null);
+  const runRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (status === 'done') {
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    if (status === 'scanning' || status === 'done') {
+      setTimeout(() => runRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
     }
   }, [status]);
 
@@ -88,24 +133,10 @@ export default function Home() {
   function handleResult(completed: CompletedScan) {
     setResult(completed);
     setStatus('done');
-
-    // An anonymous scan is held so signing up unlocks this exact report
-    // rather than spending one of the three free scans re-running it.
     if (completed.claimToken && completed.scanId) {
       holdClaim({ scanId: completed.scanId, claimToken: completed.claimToken });
     }
-
-    if (completed.findings.length === 0 && completed.summary.score !== null) {
-      setConfetti(true);
-      setTimeout(() => setConfetti(false), 4000);
-    }
     refreshUser();
-  }
-
-  function handleError(message: string, meta: ScanErrorMeta) {
-    setErrorMsg(message);
-    setErrorMeta(meta);
-    setStatus('error');
   }
 
   function reset() {
@@ -117,235 +148,444 @@ export default function Home() {
     setTarget('');
   }
 
-  const showIdle = status === 'idle' || status === 'error';
+  const running = status === 'scanning' || status === 'done';
 
   return (
-    <>
-      <Confetti active={confetti} />
+    <main style={{ background: 'var(--bg)' }}>
+      {/* ── Hero ───────────────────────────────────────── */}
+      <section className="px-6 pt-20 pb-24 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-6xl mx-auto grid lg:grid-cols-[1fr_1.05fr] gap-14 lg:gap-16 items-start">
 
-      <main className="min-h-screen" style={{ background: '#0a0a0f' }}>
-        <div
-          className="fixed inset-0 pointer-events-none"
-          style={{
-            background:
-              'radial-gradient(ellipse 80% 50% at 50% -10%, rgba(139,92,246,0.12) 0%, transparent 70%), radial-gradient(ellipse 60% 40% at 80% 80%, rgba(6,182,212,0.06) 0%, transparent 60%)',
-          }}
-        />
-
-        <div className="relative z-10">
-          <section className="px-6 pt-20 pb-12 text-center">
-            <div className="max-w-2xl mx-auto">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-violet-500/20 bg-violet-500/5 text-violet-400 text-xs font-medium mb-8">
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse-glow" />
-                {SURFACE_PHASE_IDS.length} checks on any site, no account
-              </div>
-
-              <h1 className="text-4xl sm:text-5xl font-bold text-white mb-4 leading-tight">
-                Is your site{' '}
-                <span style={{
-                  background: 'linear-gradient(135deg, #a78bfa 0%, #818cf8 50%, #38bdf8 100%)',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  backgroundClip: 'text',
-                }}>
-                  ironclad?
-                </span>
-              </h1>
-
-              <p className="text-white/50 text-lg mb-10 max-w-lg mx-auto">
-                Point Ironclad at any URL. It finds leaked keys, exposed config files, missing headers,
-                and the other things that ship when nobody was looking.
-              </p>
-
-              {user && user.plan === 'free' && user.scansRemaining !== null && (
-                <div className="mb-6 inline-flex items-center gap-3 px-4 py-2 rounded-xl border border-white/8 bg-white/3 text-xs">
-                  <span className="text-white/40">
-                    <span className="text-white/70 font-semibold">{user.scansRemaining}</span> free scan
-                    {user.scansRemaining !== 1 ? 's' : ''} left
-                  </span>
-                  <Link href="/pricing" className="text-violet-400 hover:text-violet-300 transition-colors font-medium">
-                    Upgrade
-                  </Link>
-                </div>
-              )}
-
-              <div className="max-w-xl mx-auto">
-                <div className="flex gap-2 p-1.5 rounded-xl border border-white/8 bg-white/3 backdrop-blur-sm focus-within:border-violet-500/40 transition-colors">
-                  <input
-                    id="scan-url"
-                    type="url"
-                    inputMode="url"
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    aria-label="Website URL to scan"
-                    aria-describedby={status === 'error' ? 'scan-error' : 'scan-authorised-use'}
-                    aria-invalid={status === 'error'}
-                    value={url}
-                    onChange={e => setUrl(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && startScan()}
-                    placeholder="example.com"
-                    className="flex-1 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/25 outline-none min-w-0"
-                  />
-                  <button
-                    type="button"
-                    onClick={startScan}
-                    disabled={status === 'scanning'}
-                    className="px-5 py-2.5 rounded-lg text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                    style={{
-                      background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
-                      boxShadow: '0 0 20px rgba(124,58,237,0.3)',
-                    }}
-                  >
-                    {status === 'scanning' ? 'Scanning…' : 'Scan'}
-                  </button>
-                </div>
-
-                {status === 'error' && (
-                  <div className="mt-3 flex flex-col sm:flex-row items-center justify-between gap-3">
-                    <p id="scan-error" role="alert" className="text-sm text-red-400 text-left px-1">{errorMsg}</p>
-                    {errorMeta.signupRequired && (
-                      <Link href="/signup" className="text-xs font-semibold text-violet-400 shrink-0 hover:text-violet-300 transition-colors">
-                        Create a free account
-                      </Link>
-                    )}
-                    {errorMeta.upgradeRequired && (
-                      <Link href="/pricing" className="text-xs font-semibold text-violet-400 shrink-0 hover:text-violet-300 transition-colors">
-                        See Pro
-                      </Link>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <p id="scan-authorised-use" className="mt-4 text-[11px] text-white/25 text-center max-w-lg mx-auto leading-relaxed">
-                Surface checks are read-only public requests, the same kind any browser makes, so they run
-                on any URL. The {DEEP_ONLY_PHASE_IDS.length} deeper checks send test payloads and run only on
-                domains you have verified.{' '}
-                <Link href="/scanner" className="underline underline-offset-2 hover:text-white/50 transition-colors">
-                  About the scanner
-                </Link>
-              </p>
+          <div className="min-w-0">
+            <div
+              className="inline-flex items-center gap-2.5 px-3 py-1.5 mb-9 border font-mono text-xs"
+              style={{ borderColor: 'var(--border-2)', borderRadius: 999, color: 'var(--muted)' }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full animate-pulse-glow" style={{ background: 'var(--accent)' }} />
+              verified-domain attack simulation
             </div>
-          </section>
 
-          {status === 'scanning' && (
-            <section className="px-6 pb-16 max-w-3xl mx-auto">
+            <h1 className="display text-white text-[clamp(2.75rem,6.5vw,4.25rem)] mb-7 max-w-[13ch]">
+              Find what a hacker would find, first.
+            </h1>
+
+            <p className="text-lg leading-relaxed mb-10 max-w-xl" style={{ color: 'var(--muted)' }}>
+              Ironclad runs live SQL injection, XSS, SSRF and {DEEP_ONLY - 3} other attack
+              checks against a domain you have verified, then hands you the exact request
+              that broke it.
+            </p>
+
+            {user?.plan === 'free' && user.scansRemaining !== null && (
+              <p className="font-mono text-xs mb-4" style={{ color: 'var(--faint)' }}>
+                <span className="text-white/70">{user.scansRemaining}</span> of {FREE_LIFETIME_LIMIT} free scans left
+              </p>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-3 max-w-xl">
+              <div
+                className="flex-1 flex items-center border px-4 focus-within:border-[var(--accent)] transition-colors"
+                style={{ borderColor: 'var(--border-2)', background: 'var(--surface)', borderRadius: 4 }}
+              >
+                <span className="font-mono text-sm shrink-0" style={{ color: 'var(--ghost)' }}>https://</span>
+                <input
+                  id="scan-url"
+                  type="text"
+                  inputMode="url"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  aria-label="Domain to scan"
+                  aria-describedby={status === 'error' ? 'scan-error' : 'scan-terms'}
+                  aria-invalid={status === 'error'}
+                  value={url}
+                  onChange={e => setUrl(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && startScan()}
+                  className="flex-1 bg-transparent py-3.5 px-1 font-mono text-sm text-white outline-none focus-visible:outline-none min-w-0"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={startScan}
+                disabled={status === 'scanning'}
+                className="px-7 py-3.5 text-sm font-semibold text-white shrink-0 transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ background: 'var(--accent)', borderRadius: 4 }}
+              >
+                {status === 'scanning' ? 'Scanning…' : 'Scan my domain'}
+              </button>
+            </div>
+
+            {status === 'error' && (
+              <p id="scan-error" role="alert" className="mt-4 text-sm" style={{ color: 'var(--crit)' }}>
+                {errorMsg}{' '}
+                {errorMeta.signupRequired && (
+                  <Link href="/signup" className="underline underline-offset-4" style={{ color: 'var(--accent)' }}>
+                    Create a free account
+                  </Link>
+                )}
+                {errorMeta.upgradeRequired && (
+                  <Link href="/pricing" className="underline underline-offset-4" style={{ color: 'var(--accent)' }}>
+                    See Pro
+                  </Link>
+                )}
+              </p>
+            )}
+
+            <p id="scan-terms" className="mt-5 font-mono text-xs leading-relaxed" style={{ color: 'var(--ghost)' }}>
+              {FREE_LIFETIME_LIMIT} free scans · no card · one DNS record proves you own the domain
+            </p>
+          </div>
+
+          {/* Example report */}
+          <div
+            className="border min-w-0"
+            style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}
+            aria-label="Example scan report"
+          >
+            <div className="flex items-center gap-3 px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: 'var(--ok)' }} />
+              <span className="font-mono text-sm text-white truncate">acme-store.example</span>
+              <span className="font-mono text-xs shrink-0" style={{ color: 'var(--faint)' }}>verified</span>
+              <span className="ml-auto label shrink-0">example</span>
+            </div>
+
+            <div style={{ height: 2, background: 'var(--accent)' }} />
+
+            <div className="grid grid-cols-4 border-b" style={{ borderColor: 'var(--border)' }}>
+              {[
+                { k: 'critical', v: '2' },
+                { k: 'high',     v: '2' },
+                { k: 'medium',   v: '5' },
+                { k: 'checks',   v: String(TOTAL) },
+              ].map((cell, i) => (
+                <div
+                  key={cell.k}
+                  className="px-4 py-4"
+                  style={{ borderRight: i < 3 ? '1px solid var(--border)' : undefined }}
+                >
+                  <p className="label mb-1.5">{cell.k}</p>
+                  <p className="font-mono text-lg text-white">{cell.v}</p>
+                </div>
+              ))}
+            </div>
+
+            <ul>
+              {EXAMPLE_FINDINGS.map((f, i) => (
+                <li
+                  key={f.title}
+                  className="flex items-start gap-3.5 px-5 py-4"
+                  style={{ borderBottom: i < EXAMPLE_FINDINGS.length - 1 ? '1px solid var(--border)' : undefined }}
+                >
+                  <span className="chip shrink-0 mt-0.5" style={{ color: f.color }}>{f.sev}</span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-white/90 leading-snug">{f.title}</p>
+                    <p className="font-mono text-xs mt-1.5 truncate" style={{ color: 'var(--faint)' }}>{f.meta}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            <p className="px-5 py-4 font-mono text-xs border-t" style={{ color: 'var(--ghost)', borderColor: 'var(--border)' }}>
+              + 7 more findings
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Live run ───────────────────────────────────── */}
+      {running && (
+        <section ref={runRef} className="px-6 py-16 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div className="max-w-6xl mx-auto">
+            {status === 'scanning' && (
               <ScanRunner
                 endpoint="/api/scan"
                 label={target}
                 body={{ url: target }}
                 onResult={handleResult}
-                onError={handleError}
+                onError={(message, meta) => { setErrorMsg(message); setErrorMeta(meta); setStatus('error'); }}
               />
-            </section>
-          )}
-
-          {status === 'done' && result && (
-            <section ref={resultsRef} className="px-6 pb-20">
-              {result.notSaved && (
-                <p className="max-w-4xl mx-auto mb-4 text-xs text-amber-300/70 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
-                  {result.notSaved}
-                </p>
-              )}
-              <ScanReport result={result} onReset={reset} />
-            </section>
-          )}
-
-          {showIdle && (
-            <>
-              {/* The two lanes */}
-              <section className="px-6 pb-20 max-w-5xl mx-auto">
-                <div className="border-t border-white/5 pt-16">
-                  <h2 className="text-2xl font-bold text-white/80 mb-2 text-center">What gets checked</h2>
-                  <p className="text-white/40 text-center text-sm mb-12 max-w-lg mx-auto">
-                    We limit checks by permission, not by payment. Sending an attack payload at a server you
-                    do not control is not something money should be able to buy.
+            )}
+            {status === 'done' && result && (
+              <>
+                {result.notSaved && (
+                  <p
+                    className="max-w-4xl mx-auto mb-5 px-4 py-3 font-mono text-xs border"
+                    style={{ color: 'var(--high)', borderColor: 'rgba(245,158,11,0.25)', borderRadius: 4 }}
+                  >
+                    {result.notSaved}
                   </p>
+                )}
+                <ScanReport result={result} onReset={reset} />
+              </>
+            )}
+          </div>
+        </section>
+      )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                    <div className="p-6 rounded-2xl border border-emerald-500/15" style={{ background: 'rgba(34,197,94,0.03)' }}>
-                      <div className="flex items-baseline gap-2 mb-1">
-                        <h3 className="font-semibold text-white/85">{SURFACE_PHASE_IDS.length} surface checks</h3>
-                        <span className="text-[10px] uppercase tracking-widest text-emerald-400/70">Any site</span>
-                      </div>
-                      <p className="text-xs text-white/35 mb-4 leading-relaxed">
-                        Read-only requests. No payloads, no brute force, nothing a search crawler does not
-                        already do.
-                      </p>
-                      <ul className="space-y-1">
-                        {SURFACE_CHECKS.map(check => (
-                          <li key={check} className="text-xs text-white/50 flex gap-2">
-                            <span className="text-emerald-400/50 shrink-0">✓</span>{check}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+      {/* ── 01 How it works ────────────────────────────── */}
+      <section className="px-6 py-24 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-6xl mx-auto">
+          <p className="eyebrow mb-6">01 / how it works</p>
+          <h2 className="display text-white text-[clamp(2rem,4.5vw,3rem)] mb-14 max-w-2xl">
+            Three steps between you<br />and a real attack report.
+          </h2>
 
-                    <div className="p-6 rounded-2xl border border-red-500/15" style={{ background: 'rgba(239,68,68,0.03)' }}>
-                      <div className="flex items-baseline gap-2 mb-1">
-                        <h3 className="font-semibold text-white/85">{DEEP_ONLY_PHASE_IDS.length} deep checks</h3>
-                        <span className="text-[10px] uppercase tracking-widest text-red-400/70">Verified domains</span>
-                      </div>
-                      <p className="text-xs text-white/35 mb-4 leading-relaxed">
-                        These send real test payloads. Prove you control the domain and they unlock, on the
-                        free plan too.
-                      </p>
-                      <ul className="space-y-1">
-                        {DEEP_CHECKS.map(check => (
-                          <li key={check} className="text-xs text-white/50 flex gap-2">
-                            <span className="text-red-400/50 shrink-0">›</span>{check}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </section>
+          <div className="grid md:grid-cols-3 grid-hairline">
+            {STEPS.map(step => (
+              <div key={step.n} className="p-7">
+                <p className="label mb-5">step {step.n}</p>
+                <h3 className="text-lg font-semibold text-white mb-3">{step.title}</h3>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>{step.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
-              {/* Pricing strip */}
-              <section className="px-6 pb-24 max-w-3xl mx-auto text-center">
-                <div className="border-t border-white/5 pt-16">
-                  <h2 className="text-2xl font-bold text-white/80 mb-3">
-                    {FREE_LIFETIME_LIMIT} free scans, then £4.99 a month
-                  </h2>
-                  <p className="text-white/40 text-sm mb-8 max-w-md mx-auto leading-relaxed">
-                    The free scans are the whole product, deep checks included. Nobody should subscribe to
-                    something they have not watched work.
-                  </p>
-                  <div className="flex gap-3 justify-center flex-wrap">
-                    <Link
-                      href="/signup"
-                      className="px-6 py-3 rounded-xl text-sm font-semibold text-white transition-all"
-                      style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)' }}
-                    >
-                      Create a free account
-                    </Link>
-                    <Link
-                      href="/pricing"
-                      className="px-6 py-3 rounded-xl text-sm text-white/50 border border-white/8 hover:bg-white/5 transition-colors"
-                    >
-                      Compare plans
-                    </Link>
-                  </div>
-                </div>
-              </section>
-            </>
-          )}
+      {/* ── 02 Coverage ────────────────────────────────── */}
+      <section className="px-6 py-24 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-6xl mx-auto grid lg:grid-cols-[0.85fr_1.15fr] gap-14 items-start">
+          <div>
+            <p className="eyebrow mb-6">02 / attack coverage</p>
+            <h2 className="display text-white text-[clamp(2rem,4.5vw,3rem)] mb-6">
+              Not a header<br />checklist.
+            </h2>
+            <p className="text-base leading-relaxed mb-9" style={{ color: 'var(--muted)' }}>
+              Plenty of scanners read your response headers and infer the rest. Ironclad sends the
+              payload, watches what comes back, and reports only what it managed to observe.
+            </p>
+            <dl className="font-mono text-sm space-y-2.5">
+              <div className="flex gap-3">
+                <dt style={{ color: 'var(--faint)' }}>{String(TOTAL).padStart(2, '0')}</dt>
+                <dd style={{ color: 'var(--muted)' }}>checks in total</dd>
+              </div>
+              <div className="flex gap-3">
+                <dt style={{ color: 'var(--faint)' }}>{String(SURFACE).padStart(2, '0')}</dt>
+                <dd style={{ color: 'var(--muted)' }}>run on any URL, free</dd>
+              </div>
+              <div className="flex gap-3">
+                <dt style={{ color: 'var(--faint)' }}>{String(DEEP_ONLY).padStart(2, '0')}</dt>
+                <dd style={{ color: 'var(--muted)' }}>need domain proof</dd>
+              </div>
+              <div className="flex gap-3">
+                <dt style={{ color: 'var(--faint)' }}>00</dt>
+                <dd style={{ color: 'var(--muted)' }}>findings without evidence</dd>
+              </div>
+            </dl>
+          </div>
 
-          <footer className="border-t border-white/5 px-6 py-6 print:hidden">
-            <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 flex-wrap">
-              <p className="text-xs text-white/20">Ironclad</p>
-              <div className="flex items-center gap-4 flex-wrap justify-center">
-                <Link href="/privacy" className="text-xs text-white/20 hover:text-white/50 transition-colors">Privacy</Link>
-                <Link href="/pricing" className="text-xs text-white/20 hover:text-white/50 transition-colors">Pricing</Link>
-                <Link href="/scanner" className="text-xs text-white/20 hover:text-white/50 transition-colors">Scanner</Link>
-                <p className="text-xs text-white/15">Scan only sites you own or have permission to test.</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 grid-hairline">
+            {COVERAGE.map(check => (
+              <div key={check.name} className="px-4 py-3.5 flex items-center gap-2.5 min-w-0">
+                <span
+                  className="w-1 h-1 rounded-full shrink-0"
+                  style={{ background: check.lane === 'deep' ? 'var(--accent)' : 'var(--ghost)' }}
+                  aria-hidden="true"
+                />
+                <span className="font-mono text-[13px] truncate" style={{ color: 'var(--muted)' }}>
+                  {check.name}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="max-w-6xl mx-auto mt-6 flex items-center gap-6 font-mono text-xs" style={{ color: 'var(--ghost)' }}>
+          <span className="flex items-center gap-2">
+            <span className="w-1 h-1 rounded-full" style={{ background: 'var(--ghost)' }} /> open to any URL
+          </span>
+          <span className="flex items-center gap-2">
+            <span className="w-1 h-1 rounded-full" style={{ background: 'var(--accent)' }} /> verified domains only
+          </span>
+        </div>
+      </section>
+
+      {/* ── 03 Evidence ────────────────────────────────── */}
+      <section className="px-6 py-24 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-6xl mx-auto">
+          <p className="eyebrow mb-6">03 / evidence</p>
+          <h2 className="display text-white text-[clamp(2rem,4.5vw,3rem)] mb-14 max-w-2xl">
+            Every finding comes<br />with the receipt.
+          </h2>
+
+          <div className="border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+            <div className="flex flex-wrap items-center gap-4 px-6 py-5 border-b" style={{ borderColor: 'var(--border)' }}>
+              <span className="chip" style={{ color: 'var(--crit)' }}>critical</span>
+              <h3 className="text-base font-semibold text-white">Environment file publicly readable</h3>
+              <span className="ml-auto font-mono text-xs" style={{ color: 'var(--ghost)' }}>
+                exposed-files · surface lane
+              </span>
+            </div>
+
+            <div className="grid md:grid-cols-2">
+              <div className="p-6 border-b md:border-b-0 md:border-r" style={{ borderColor: 'var(--border)' }}>
+                <p className="label mb-4">request sent</p>
+                <pre className="font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-all" style={{ color: 'var(--muted)' }}>
+{`GET /.env HTTP/1.1
+Host: acme-store.example
+User-Agent: `}<span style={{ color: 'var(--accent)' }}>Ironclad-Surface/2.0</span>
+                </pre>
+              </div>
+
+              <div className="p-6">
+                <p className="label mb-4">response observed</p>
+                <pre className="font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-all" style={{ color: 'var(--muted)' }}>
+{`HTTP/1.1 `}<span style={{ color: 'var(--crit)' }}>200 OK</span>{`
+Content-Type: text/plain
+
+`}<span style={{ color: 'var(--ok)' }}>→ 6 assignments, one a non-placeholder secret</span>
+                </pre>
               </div>
             </div>
-          </footer>
+
+            <div className="grid md:grid-cols-2 border-t" style={{ borderColor: 'var(--border)' }}>
+              <div className="p-6 border-b md:border-b-0 md:border-r" style={{ borderColor: 'var(--border)' }}>
+                <p className="label mb-4">reproduce</p>
+                <pre
+                  className="font-mono text-[13px] p-3.5 overflow-x-auto"
+                  style={{ background: 'var(--bg)', color: 'var(--muted)', borderRadius: 4 }}
+                >curl -i https://acme-store.example/.env</pre>
+              </div>
+              <div className="p-6">
+                <p className="label mb-4">fix</p>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
+                  Block <span className="font-mono text-white/75">.env*</span> at the server or CDN, then rotate
+                  every credential the file contained. Treat them as compromised: you cannot know who read it
+                  before you did.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <p className="mt-6 font-mono text-xs" style={{ color: 'var(--ghost)' }}>
+            Redacted for anonymous scans. Evidence and remediation are withheld until you create an account.
+          </p>
         </div>
-      </main>
-    </>
+      </section>
+
+      {/* ── Boundaries ─────────────────────────────────── */}
+      <section className="px-6 py-20 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-6xl mx-auto">
+          <p className="font-mono text-sm mb-8" style={{ color: 'var(--muted)' }}>
+            What Ironclad does not claim
+          </p>
+          <div className="grid md:grid-cols-3 grid-hairline">
+            {[
+              ['Not a penetration test', 'Automated, bounded probes from outside, at one moment in time. No source review, no business logic, no chained exploitation.'],
+              ['A clean result is not a clearance', `It means these ${TOTAL} checks observed nothing. It is evidence of absence only for what was actually tested.`],
+              ['Blocked is not passed', 'If your firewall stops a check, the report says so and withholds the grade rather than quietly scoring it as fine.'],
+            ].map(([title, body]) => (
+              <div key={title} className="p-7">
+                <h3 className="text-sm font-semibold text-white mb-2.5">{title}</h3>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>{body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── 04 Pricing ─────────────────────────────────── */}
+      <section className="px-6 py-24 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-6xl mx-auto">
+          <p className="eyebrow mb-6">04 / pricing</p>
+          <h2 className="display text-white text-[clamp(2rem,4.5vw,3rem)] mb-14">
+            Start free. Keep going for £4.99.
+          </h2>
+
+          <div className="grid md:grid-cols-2 gap-5 max-w-4xl">
+            <div className="border p-8" style={{ borderColor: 'var(--border)', borderRadius: 6 }}>
+              <p className="label mb-6">free</p>
+              <p className="display text-white text-5xl mb-3">£0</p>
+              <p className="text-sm mb-8" style={{ color: 'var(--muted)' }}>
+                Enough to find out whether you have a real problem.
+              </p>
+              <ul className="space-y-3 mb-9">
+                {[
+                  `${FREE_LIFETIME_LIMIT} scans total`,
+                  `All ${TOTAL} checks on a domain you verify`,
+                  'Full evidence on every finding',
+                  `${SURFACE} checks on any URL, no account`,
+                ].map(item => (
+                  <li key={item} className="text-sm flex gap-3" style={{ color: 'var(--muted)' }}>
+                    <span style={{ color: 'var(--ghost)' }}>·</span>{item}
+                  </li>
+                ))}
+              </ul>
+              <Link href="/signup" className="font-mono text-sm hover:opacity-70 transition-opacity" style={{ color: 'var(--accent)' }}>
+                run a free scan →
+              </Link>
+            </div>
+
+            <div
+              className="border p-8"
+              style={{ borderColor: 'var(--accent-line)', background: 'rgba(59,130,246,0.03)', borderRadius: 6 }}
+            >
+              <div className="flex items-center justify-between mb-6">
+                <p className="label" style={{ color: 'var(--accent)' }}>pro</p>
+                <span className="chip" style={{ color: 'var(--accent)' }}>most picked</span>
+              </div>
+              <p className="display text-white text-5xl mb-3">
+                £4.99<span className="font-mono text-sm font-normal ml-2" style={{ color: 'var(--faint)' }}>/ month</span>
+              </p>
+              <p className="text-sm mb-8" style={{ color: 'var(--muted)' }}>Scan as often as you ship.</p>
+              <ul className="space-y-3 mb-9">
+                {[
+                  'Unlimited scans, fair-use burst limits',
+                  `All ${TOTAL} checks on every domain you verify`,
+                  'Scan history with a fixed-since-last-time diff',
+                  'Everything in Free',
+                ].map(item => (
+                  <li key={item} className="text-sm flex gap-3" style={{ color: 'var(--muted)' }}>
+                    <span style={{ color: 'var(--accent)' }}>·</span>{item}
+                  </li>
+                ))}
+              </ul>
+              <Link
+                href="/pricing"
+                className="block text-center py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                style={{ background: 'var(--accent)', borderRadius: 4 }}
+              >
+                Go Pro
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FAQ ────────────────────────────────────────── */}
+      <section className="px-6 py-24 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-6xl mx-auto">
+          <p className="eyebrow mb-12">05 / questions</p>
+          <dl className="space-y-9 max-w-3xl">
+            {FAQ.map(item => (
+              <div key={item.q}>
+                <dt className="text-base font-semibold text-white mb-2.5">{item.q}</dt>
+                <dd className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>{item.a}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </section>
+
+      {/* ── Footer ─────────────────────────────────────── */}
+      <footer className="px-6 py-10 print:hidden">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-start sm:items-center gap-5 justify-between">
+          <p className="font-mono text-xs" style={{ color: 'var(--ghost)' }}>
+            IRONCLAD · scan only what you own or are permitted to test
+          </p>
+          <div className="flex items-center gap-6 font-mono text-xs flex-wrap">
+            {[
+              ['/what-we-check', 'coverage'],
+              ['/scanner', 'scanner'],
+              ['/pricing', 'pricing'],
+              ['/privacy', 'privacy'],
+            ].map(([href, label]) => (
+              <Link key={href} href={href} className="hover:text-white transition-colors" style={{ color: 'var(--faint)' }}>
+                {label}
+              </Link>
+            ))}
+          </div>
+        </div>
+      </footer>
+    </main>
   );
 }

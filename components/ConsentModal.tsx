@@ -3,23 +3,46 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { SURFACE_PHASE_IDS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
 
-const CONSENT_KEY = 'vc-consent-v2';
+/**
+ * Bumped when the terms below change materially, so an old acceptance never
+ * stands in for a new one.
+ */
+const CONSENT_KEY = 'ironclad-consent-v3';
+
+const TERMS = [
+  {
+    title: `${SURFACE_PHASE_IDS.length} read-only checks run on any URL`,
+    body: 'They fetch the page, read its headers, and request a fixed list of well-known public paths. No login, no payloads, no brute force, nothing written.',
+  },
+  {
+    title: `${DEEP_ONLY_PHASE_IDS.length} more need proof you control the domain`,
+    body: 'Those send real test payloads, so a signed-in user must place a token in DNS, a meta tag, or a hosted file first. You remain responsible for having permission to test the target.',
+  },
+  {
+    title: 'What we store',
+    body: 'An anonymous result is kept privately for 7 days with a one-time claim token so you can attach it to an account, then deleted. Rate limiting uses an HMAC-derived identifier rather than your address.',
+  },
+  {
+    title: 'What we never do',
+    body: 'No selling personal data, no advertising, and no public results. There is no feed, leaderboard, or shareable result page: every scan is private to the account that ran it.',
+  },
+];
 
 export function ConsentModal() {
   const [visible, setVisible] = useState(false);
   const pathname = usePathname();
 
   useEffect(() => {
-    // The policy must remain readable before consent. Navigating back to the app
-    // will show this notice again unless the user explicitly accepts it.
+    // The policy must stay readable before consent. Navigating back into the
+    // app shows this again unless it was explicitly accepted.
     if (pathname === '/privacy') return;
 
     const timer = window.setTimeout(() => {
       try {
         setVisible(!localStorage.getItem(CONSENT_KEY));
       } catch {
-        // localStorage unavailable (SSR / private browsing)
         setVisible(true);
       }
     }, 0);
@@ -28,7 +51,7 @@ export function ConsentModal() {
   }, [pathname]);
 
   function accept() {
-    try { localStorage.setItem(CONSENT_KEY, '1'); } catch { /* ignore */ }
+    try { localStorage.setItem(CONSENT_KEY, '1'); } catch { /* private browsing */ }
     setVisible(false);
   }
 
@@ -37,85 +60,60 @@ export function ConsentModal() {
   return (
     <div
       className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4"
-      style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)' }}
+      style={{ background: 'rgba(0,0,0,0.88)', backdropFilter: 'blur(8px)' }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="consent-title"
     >
       <div
-        className="w-full max-w-lg rounded-2xl border border-white/10 overflow-hidden animate-fade-in-up"
-        style={{ background: '#0d0d1a' }}
+        className="w-full max-w-lg border overflow-hidden animate-fade-in-up"
+        style={{ background: 'var(--surface)', borderColor: 'var(--border-2)', borderRadius: 6 }}
       >
-        {/* Header */}
-        <div className="px-6 pt-6 pb-4 border-b border-white/6 flex items-center gap-3">
-          <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
-            style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)' }}
-          >
-            <span className="text-violet-400 text-base">◈</span>
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-white/90">Before you continue</h2>
-            <p className="text-xs text-white/35 mt-0.5">Ironclad: privacy and usage</p>
-          </div>
+        <div className="px-6 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+          <p className="label mb-1.5">before you continue</p>
+          <h2 id="consent-title" className="text-sm font-semibold text-white">
+            How the Ironclad scanner behaves
+          </h2>
         </div>
 
         <div className="px-6 py-5 space-y-4">
-          {/* What we do */}
-          <div className="space-y-2.5">
-            {[
-              {
-                icon: '👁',
-                title: 'Bounded, read-only public checks',
-                desc: 'A passive scan fetches the submitted public page, reads its response headers and HTML, then makes up to 15 HEAD or GET requests to a fixed list of public paths. It does not log in, exploit, inject payloads, or brute-force credentials.',
-              },
-              {
-                icon: '🔐',
-                title: 'Deep scans require domain-control verification',
-                desc: 'Before active checks can start, a signed-in user must place a unique token in DNS, a meta tag, or a hosted file and explicitly request the scan. You remain responsible for having legal permission to test the site.',
-              },
-              {
-                icon: '💾',
-                title: 'What we store',
-                desc: 'Anonymous scan results are not saved. For abuse prevention, an HMAC-derived identifier is used in a date-scoped usage row. If you sign in, account details and scan results are stored; new results start private.',
-              },
-              {
-                icon: '🚫',
-                title: "What we don't do",
-                desc: "We don't sell personal data or use it for advertising. A signed-in scan appears publicly only after its owner explicitly publishes it; private result routes are restricted to that owner.",
-              },
-            ].map(item => (
-              <div key={item.title} className="flex gap-3">
-                <span className="text-base shrink-0 mt-0.5">{item.icon}</span>
-                <div>
-                  <p className="text-xs font-semibold text-white/75">{item.title}</p>
-                  <p className="text-xs text-white/40 mt-0.5 leading-relaxed">{item.desc}</p>
-                </div>
+          {TERMS.map(term => (
+            <div key={term.title} className="flex gap-3.5">
+              <span className="font-mono text-xs shrink-0 mt-0.5" style={{ color: 'var(--accent)' }}>·</span>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-white/80">{term.title}</p>
+                <p className="text-xs mt-1 leading-relaxed" style={{ color: 'var(--faint)' }}>{term.body}</p>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
 
-          {/* Privacy link */}
-          <p className="text-xs text-white/30 leading-relaxed">
+          <p className="text-xs leading-relaxed pt-1" style={{ color: 'var(--ghost)' }}>
             By continuing you agree to our{' '}
-            <Link href="/privacy" className="text-violet-400 hover:text-violet-300 transition-colors underline underline-offset-2">
-              Privacy Policy
+            <Link
+              href="/privacy"
+              className="underline underline-offset-2 transition-opacity hover:opacity-70"
+              style={{ color: 'var(--accent)' }}
+            >
+              privacy policy
             </Link>
-            . You must only scan websites you own or have explicit permission to test.
+            . Scan only sites you own or have explicit permission to test.
           </p>
         </div>
 
-        {/* Actions */}
-        <div className="px-6 pb-6 flex gap-2">
+        <div className="px-6 pb-6 flex gap-2.5">
           <button
             onClick={accept}
-            className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition-all"
-            style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', boxShadow: '0 0 20px rgba(124,58,237,0.25)' }}
+            className="flex-1 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            style={{ background: 'var(--accent)', borderRadius: 4 }}
           >
-            I Understand &amp; Agree
+            I understand
           </button>
           <Link
             href="/privacy"
-            className="px-4 py-2.5 rounded-xl text-sm text-white/40 border border-white/8 hover:bg-white/5 transition-colors"
+            className="px-5 py-3 font-mono text-sm border transition-colors hover:bg-white/4"
+            style={{ borderColor: 'var(--border-2)', color: 'var(--faint)', borderRadius: 4 }}
           >
-            Read Policy
+            read policy
           </Link>
         </div>
       </div>

@@ -1,8 +1,39 @@
 @import "tailwindcss";
 
+/*
+ * Ironclad design system.
+ *
+ * Near-black ground, one blue accent, and a hard split between two
+ * typefaces: the grotesque carries the argument, the monospace carries the
+ * evidence. Anything the scanner observed (a path, a header, a payload, a
+ * status code) is set in mono, so the reader can tell at a glance what came
+ * from their site and what came from us.
+ */
+
 :root {
-  --background: #0a0a0f;
-  --foreground: #e8e8f0;
+  --bg:        #000000;
+  --surface:   #0a0a0b;
+  --surface-2: #0e0e10;
+  --border:    rgba(255, 255, 255, 0.08);
+  --border-2:  rgba(255, 255, 255, 0.14);
+
+  --text:   #f4f4f5;
+  --muted:  rgba(255, 255, 255, 0.52);
+  --faint:  rgba(255, 255, 255, 0.30);
+  --ghost:  rgba(255, 255, 255, 0.16);
+
+  --accent:      #3b82f6;
+  --accent-dim:  rgba(59, 130, 246, 0.14);
+  --accent-line: rgba(59, 130, 246, 0.35);
+
+  --crit: #ef4444;
+  --high: #f59e0b;
+  --med:  #eab308;
+  --low:  #38bdf8;
+  --ok:   #22c55e;
+
+  --background: var(--bg);
+  --foreground: var(--text);
 }
 
 html,
@@ -11,14 +42,88 @@ body {
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg);
+  color: var(--text);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* ── Type ──────────────────────────────────────────── */
+
+.font-mono,
+.mono {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Display headings: tight, heavy, optically corrected at large sizes. */
+.display {
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
+}
+
+/* Section eyebrow: "01 / HOW IT WORKS" */
+.eyebrow {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.label {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* ── Structure ─────────────────────────────────────── */
+
+.rule {
+  border-color: var(--border);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+/*
+ * Hairline grid. Children carry their own right/bottom border and the
+ * container clips the overhang, so a wrapped row never leaves a stray edge.
+ */
+.grid-hairline {
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.grid-hairline > * {
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin-right: -1px;
+  margin-bottom: -1px;
+}
+
+/* ── Severity chips ────────────────────────────────── */
+
+.chip {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  line-height: 1.4;
+}
+
+/* ── Motion ────────────────────────────────────────── */
 
 @keyframes pulse-glow {
   0%, 100% { opacity: 1; }
-  50%       { opacity: 0.4; }
+  50%      { opacity: 0.35; }
 }
 
 @keyframes spin-slow {
@@ -27,15 +132,50 @@ body {
 }
 
 @keyframes fade-in-up {
-  from { opacity: 0; transform: translateY(16px); }
+  from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-.animate-fade-in-up  { animation: fade-in-up 0.4s ease-out forwards; }
-.animate-pulse-glow  { animation: pulse-glow 2s ease-in-out infinite; }
-.animate-spin-slow   { animation: spin-slow 3s linear infinite; }
+@keyframes scan-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
 
-/* ── Print / PDF export ───────────────────────────── */
+.animate-fade-in-up { animation: fade-in-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+.animate-spin-slow  { animation: spin-slow 3s linear infinite; }
+
+.scan-sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.5), transparent);
+  animation: scan-sweep 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in-up,
+  .animate-pulse-glow,
+  .animate-spin-slow,
+  .scan-sweep::after {
+    animation: none;
+  }
+  .animate-fade-in-up { opacity: 1; transform: none; }
+}
+
+/* ── Form ──────────────────────────────────────────── */
+
+input::placeholder {
+  color: var(--ghost);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Print / PDF export ────────────────────────────── */
+
 @media print {
   .print\:hidden { display: none !important; }
 
@@ -51,9 +191,6 @@ body {
     display: none !important;
   }
 
-  .rounded-xl { border-radius: 8px; }
-
-  /* Force colors for print */
   * {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
