@@ -36,7 +36,7 @@ async function fetchVerificationTarget(rawUrl: string): Promise<Response> {
 
   for (let redirects = 0; redirects <= 5; redirects++) {
     const response = await pinnedFetch(target, {
-      headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
+      headers: { 'User-Agent': 'Ironclad-Verifier/2.0 (+https://ironclad.dev/scanner)' },
       signal: AbortSignal.timeout(8_000),
       redirect: 'manual',
     });

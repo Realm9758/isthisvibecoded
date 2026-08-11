@@ -15,7 +15,18 @@ const TIMEOUT = 8000;
 const SCAN_BUDGET_MS = 42_000;
 const MAX_REDIRECTS = 5;
 const MAX_PROBE_BODY_BYTES = 512_000;
-const UA = 'VibeScan-DeepScan/1.0 (Authorized domain-control scan)';
+/**
+ * One user agent per lane. The surface lane runs against sites that never
+ * asked to be scanned, so it must not claim an authorisation it does not
+ * have, and it carries a URL a site owner can follow to identify and block
+ * it. The previous single string claimed every request was an authorised
+ * domain-control scan, which would have been a false statement on any
+ * unverified target.
+ */
+const LANE_USER_AGENTS: Record<ScanLane, string> = {
+  surface: 'Ironclad-Surface/2.0 (+https://ironclad.dev/scanner)',
+  deep: 'Ironclad-Deep/2.0 (authorized domain-control scan; +https://ironclad.dev/scanner)',
+};
 export { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION } from '@/lib/deep-versions';
 
 type RequestCoverage = {
@@ -27,6 +38,7 @@ type RequestCoverage = {
 
 const scanRequestContext = new AsyncLocalStorage<{
   authorizedHostname: string;
+  lane: ScanLane;
   coverage: RequestCoverage;
   deadlineAt: number;
   deadlineExceeded: boolean;
@@ -66,7 +78,11 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
     let body = requestOptions.body;
 
     const headers = new Headers(requestOptions.headers);
-    if (!headers.has('user-agent')) headers.set('user-agent', UA);
+    // Defaulting to the surface string when there is no scan context is
+    // deliberate: an unattributed request must never claim authorisation.
+    if (!headers.has('user-agent')) {
+      headers.set('user-agent', LANE_USER_AGENTS[context?.lane ?? 'surface']);
+    }
 
     for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
       if (context && Date.now() >= context.deadlineAt) {
