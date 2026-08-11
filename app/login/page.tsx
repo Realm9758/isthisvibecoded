@@ -32,25 +32,16 @@ export default function LoginPage() {
   return (
     <main
       className="min-h-[calc(100vh-57px)] flex items-center justify-center px-4 py-16"
-      style={{ background: '#0a0a0f' }}
+      style={{ background: 'var(--bg)' }}
     >
-      {/* Ambient glow */}
-      <div
-        className="fixed inset-0 pointer-events-none"
-        style={{
-          background:
-            'radial-gradient(ellipse 80% 60% at 50% 0%, rgba(139,92,246,0.1) 0%, transparent 70%)',
-        }}
-      />
-
       <div className="relative w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
           <Link href="/" className="inline-flex items-center gap-2.5 group">
-            <div className="w-9 h-9 rounded-xl bg-violet-600 group-hover:bg-violet-500 transition-colors flex items-center justify-center text-base font-bold">
-              V
-            </div>
-            <span className="font-semibold text-white/90 text-lg">Ironclad</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="12" y="1.5" width="14.85" height="14.85" transform="rotate(45 12 1.5)" fill="var(--accent)" />
+            </svg>
+            <span className="font-mono text-sm font-semibold tracking-[0.18em] text-white">IRONCLAD</span>
           </Link>
           <h1 className="text-2xl font-bold text-white mt-6 mb-1">Welcome back</h1>
           <p className="text-white/40 text-sm">Sign in to your account</p>
@@ -58,8 +49,8 @@ export default function LoginPage() {
 
         {/* Card */}
         <div
-          className="rounded-2xl p-8 border border-white/8"
-          style={{ background: 'rgba(255,255,255,0.025)', backdropFilter: 'blur(16px)' }}
+          className="p-8 border"
+          style={{ background: 'var(--surface)', borderColor: 'var(--border)', borderRadius: 6 }}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Email */}
@@ -75,13 +66,14 @@ export default function LoginPage() {
                 required
                 autoComplete="email"
                 placeholder="you@example.com"
-                className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/25 outline-none transition-all"
+                className="w-full px-4 py-3 text-sm text-white placeholder-white/25 outline-none transition-all"
                 style={{
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid rgba(255,255,255,0.09)',
+                  background: 'var(--bg)',
+                  border: '1px solid var(--border-2)',
+                  borderRadius: 4,
                 }}
-                onFocus={e => (e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)')}
-                onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
+                onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-2)')}
               />
             </div>
 
@@ -93,7 +85,7 @@ export default function LoginPage() {
                 </label>
                 <button
                   type="button"
-                  className="text-xs text-white/25 hover:text-violet-400 transition-colors"
+                  className="text-xs text-white/25 hover:text-white transition-colors"
                   tabIndex={-1}
                 >
                   Forgot password?
@@ -108,13 +100,13 @@ export default function LoginPage() {
                   required
                   autoComplete="current-password"
                   placeholder="••••••••"
-                  className="w-full px-4 py-3 pr-11 rounded-xl text-sm text-white placeholder-white/25 outline-none transition-all"
+                  className="w-full px-4 py-3 pr-11 text-sm text-white placeholder-white/25 outline-none transition-all"
                   style={{
                     background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.09)',
+                    border: '1px solid var(--border-2)',
                   }}
-                  onFocus={e => (e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)')}
-                  onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
+                  onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                  onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-2)')}
                 />
                 <button
                   type="button"
@@ -139,7 +131,7 @@ export default function LoginPage() {
 
             {/* Error */}
             {error && (
-              <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+              <div className="flex items-center gap-2 p-3  bg-red-500/10 border border-red-500/20">
                 <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -151,9 +143,9 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-xl text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-1"
+              className="w-full py-3  text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-1"
               style={{
-                background: loading ? 'rgba(124,58,237,0.5)' : 'linear-gradient(135deg, #7c3aed, #4f46e5)',
+                background: 'var(--accent)', borderRadius: 4,
                 boxShadow: '0 0 24px rgba(124,58,237,0.25)',
               }}
             >
@@ -179,7 +171,7 @@ export default function LoginPage() {
           {/* Social placeholder */}
           <button
             disabled
-            className="w-full py-2.5 rounded-xl text-sm text-white/30 border border-white/8 bg-white/2 flex items-center justify-center gap-2 cursor-not-allowed"
+            className="w-full py-2.5  text-sm text-white/30 border border-white/8 bg-white/2 flex items-center justify-center gap-2 cursor-not-allowed"
             title="OAuth coming soon"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -194,7 +186,7 @@ export default function LoginPage() {
 
         <p className="text-center text-sm text-white/30 mt-6">
           Don&apos;t have an account?{' '}
-          <Link href="/signup" className="text-violet-400 hover:text-violet-300 transition-colors font-medium">
+          <Link href="/signup" className="hover:opacity-70 transition-opacity font-medium" style={{ color: 'var(--accent)' }}>
             Sign up free →
           </Link>
         </p>

@@ -43,7 +43,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
       type="button"
       onClick={() => onChange(!checked)}
       className="relative w-9 h-5 rounded-full transition-colors shrink-0"
-      style={{ background: checked ? '#7c3aed' : 'rgba(255,255,255,0.1)' }}
+      style={{ background: checked ? 'var(--accent)' : 'rgba(255,255,255,0.1)' }}
     >
       <span
         className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow-sm"
@@ -120,7 +120,7 @@ export default function SignupPage() {
   return (
     <main
       className="min-h-[calc(100vh-57px)] flex items-center justify-center px-4 py-16"
-      style={{ background: '#0a0a0f' }}
+      style={{ background: 'var(--bg)' }}
     >
       <div
         className="fixed inset-0 pointer-events-none"
@@ -131,10 +131,10 @@ export default function SignupPage() {
         {/* Logo */}
         <div className="text-center mb-8">
           <Link href="/" className="inline-flex items-center gap-2.5 group">
-            <div className="w-9 h-9 rounded-xl bg-violet-600 group-hover:bg-violet-500 transition-colors flex items-center justify-center text-base font-bold">
-              V
-            </div>
-            <span className="font-semibold text-white/90 text-lg">Ironclad</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="12" y="1.5" width="14.85" height="14.85" transform="rotate(45 12 1.5)" fill="var(--accent)" />
+            </svg>
+            <span className="font-mono text-sm font-semibold tracking-[0.18em] text-white">IRONCLAD</span>
           </Link>
 
           {step === 'form' ? (
@@ -154,7 +154,7 @@ export default function SignupPage() {
           <>
             {/* Free tier perks */}
             <div className="flex items-center justify-center gap-4 mb-6 flex-wrap">
-              {['5 scans/day', 'Provenance signals', 'Private by default'].map(perk => (
+              {['3 full scans', 'All 28 checks', 'Private by default'].map(perk => (
                 <span key={perk} className="flex items-center gap-1.5 text-xs text-white/40">
                   <span className="text-emerald-400 text-xs">✓</span>
                   {perk}
@@ -164,14 +164,14 @@ export default function SignupPage() {
 
             {/* Card */}
             <div
-              className="rounded-2xl p-8 border border-white/8"
+              className=" p-8 border border-white/8"
               style={{ background: 'rgba(255,255,255,0.025)', backdropFilter: 'blur(16px)' }}
             >
               <form onSubmit={handleSubmit} className="space-y-4">
                 {/* Public display handle */}
                 <div>
                   <label className="block text-xs font-medium text-white/50 mb-1.5" htmlFor="name">
-                    Public display handle
+                    Display name
                   </label>
                   <input
                     id="name"
@@ -184,14 +184,14 @@ export default function SignupPage() {
                     title="Use letters, numbers, dots, underscores, or hyphens; start with a letter or number."
                     autoComplete="username"
                     aria-describedby="handle-privacy-note"
-                    placeholder="your-handle"
-                    className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/25 outline-none transition-all"
-                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}
-                    onFocus={e => (e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)')}
-                    onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
+                    placeholder="your name"
+                    className="w-full px-4 py-3 text-sm text-white placeholder-white/25 outline-none transition-all"
+                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-2)' }}
+                    onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                    onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-2)')}
                   />
                   <p id="handle-privacy-note" className="text-[11px] text-white/30 leading-relaxed mt-1.5">
-                    This handle appears publicly with comments and replies. Your public profile becomes discoverable only after you explicitly publish a scan.
+                    Shown only to you, on your own dashboard. Ironclad has no public profiles, feed, or comments.
                   </p>
                 </div>
 
@@ -208,10 +208,10 @@ export default function SignupPage() {
                     required
                     autoComplete="email"
                     placeholder="you@example.com"
-                    className="w-full px-4 py-3 rounded-xl text-sm text-white placeholder-white/25 outline-none transition-all"
-                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}
-                    onFocus={e => (e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)')}
-                    onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
+                    className="w-full px-4 py-3 text-sm text-white placeholder-white/25 outline-none transition-all"
+                    style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-2)' }}
+                    onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                    onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-2)')}
                   />
                 </div>
 
@@ -230,10 +230,10 @@ export default function SignupPage() {
                       minLength={8}
                       autoComplete="new-password"
                       placeholder="Min. 8 characters"
-                      className="w-full px-4 py-3 pr-11 rounded-xl text-sm text-white placeholder-white/25 outline-none transition-all"
-                      style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }}
-                      onFocus={e => (e.currentTarget.style.borderColor = 'rgba(139,92,246,0.5)')}
-                      onBlur={e => (e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)')}
+                      className="w-full px-4 py-3 pr-11 text-sm text-white placeholder-white/25 outline-none transition-all"
+                      style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-2)' }}
+                      onFocus={e => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                      onBlur={e => (e.currentTarget.style.borderColor = 'var(--border-2)')}
                     />
                     <button
                       type="button"
@@ -266,19 +266,19 @@ export default function SignupPage() {
                     onChange={e => setAgreed(e.target.checked)}
                     required
                     aria-describedby="account-policy-copy"
-                    className="w-4 h-4 mt-0.5 rounded accent-violet-600 shrink-0"
+                    className="w-4 h-4 mt-0.5 rounded accent-[color:var(--accent)] shrink-0"
                   />
                   <p id="account-policy-copy" className="text-xs text-white/40 leading-relaxed">
                     I accept the{' '}
-                    <Link href="/privacy" className="text-violet-400 hover:text-violet-300 transition-colors">
+                    <Link href="/privacy" className="hover:opacity-70 transition-opacity underline underline-offset-2" style={{ color: 'var(--accent)' }}>
                       privacy and account policy
                     </Link>
-                    . I understand that my handle is public with comments and replies, and my profile becomes discoverable after I explicitly publish a scan.
+. I understand that scan results are private to my account, and that I may only scan sites I own or have permission to test.
                   </p>
                 </div>
 
                 {error && (
-                  <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+                  <div className="flex items-center gap-2 p-3  bg-red-500/10 border border-red-500/20">
                     <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
@@ -289,9 +289,9 @@ export default function SignupPage() {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3 rounded-xl text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full py-3  text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{
-                    background: loading ? 'rgba(124,58,237,0.5)' : 'linear-gradient(135deg, #7c3aed, #4f46e5)',
+                    background: 'var(--accent)', borderRadius: 4,
                     boxShadow: '0 0 24px rgba(124,58,237,0.25)',
                   }}
                 >
@@ -310,7 +310,7 @@ export default function SignupPage() {
 
             <p className="text-center text-sm text-white/30 mt-6">
               Already have an account?{' '}
-              <Link href="/login" className="text-violet-400 hover:text-violet-300 transition-colors font-medium">
+              <Link href="/login" className="hover:opacity-70 transition-opacity font-medium" style={{ color: 'var(--accent)' }}>
                 Sign in →
               </Link>
             </p>
@@ -322,12 +322,12 @@ export default function SignupPage() {
           <>
             {/* Progress indicator */}
             <div className="flex items-center justify-center gap-2 mb-8">
-              <div className="w-6 h-1.5 rounded-full bg-violet-500" />
-              <div className="w-6 h-1.5 rounded-full bg-violet-500" />
+              <div className="w-6 h-1.5 rounded-full bg-[color:var(--accent)]" />
+              <div className="w-6 h-1.5 rounded-full bg-[color:var(--accent)]" />
             </div>
 
             <div
-              className="rounded-2xl border border-white/8 overflow-hidden"
+              className=" border border-white/8 overflow-hidden"
               style={{ background: 'rgba(255,255,255,0.025)', backdropFilter: 'blur(16px)' }}
             >
               {/* Banner */}
@@ -336,7 +336,7 @@ export default function SignupPage() {
                 style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.12), rgba(79,70,229,0.08))' }}
               >
                 <div
-                  className="w-12 h-12 rounded-2xl mx-auto mb-4 flex items-center justify-center"
+                  className="w-12 h-12  mx-auto mb-4 flex items-center justify-center"
                   style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.3)' }}
                 >
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -352,7 +352,7 @@ export default function SignupPage() {
               {/* Toggles */}
               <div className="px-8 py-6 space-y-1">
                 {/* What you'll be notified about */}
-                <div className="mb-5 p-3 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <div className="mb-5 p-3 " style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
                   <p className="text-[10px] text-white/30 uppercase tracking-wider mb-3">You&apos;ll be notified when</p>
                   <div className="space-y-2">
                     {[
@@ -389,7 +389,7 @@ export default function SignupPage() {
               {/* Actions */}
               <div className="px-8 pb-8 space-y-2">
                 {error && (
-                  <div role="alert" className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+                  <div role="alert" className="flex items-center gap-2 p-3  bg-red-500/10 border border-red-500/20">
                     <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
@@ -399,9 +399,9 @@ export default function SignupPage() {
                 <button
                   onClick={saveNotificationPrefs}
                   disabled={savingPrefs}
-                  className="w-full py-3 rounded-xl text-sm font-semibold text-white transition-all disabled:opacity-50"
+                  className="w-full py-3  text-sm font-semibold text-white transition-all disabled:opacity-50"
                   style={{
-                    background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
+                    background: 'var(--accent)', borderRadius: 4,
                     boxShadow: '0 0 24px rgba(124,58,237,0.25)',
                   }}
                 >
