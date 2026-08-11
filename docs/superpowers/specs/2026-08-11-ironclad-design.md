@@ -389,8 +389,11 @@ alter table public.deep_scans
 
 - Hero: name, tagline, URL input, one Scan button, authorised-use notice.
 - Live progress driven by the existing SSE phase stream, one row per phase with status and
-  a running finding count. `components/VulnScanSection.tsx` already consumes this stream
-  and is promoted into this role rather than rewritten.
+  a running finding count. That stream consumer currently lives inline inside
+  `app/dashboard/page.tsx`, which is 1,286 lines. It is extracted into
+  `components/ScanRunner.tsx` and consumed by both the landing page and the dashboard, so
+  the two surfaces cannot drift apart. `components/VulnScanSection.tsx` is the domain
+  verification funnel, not a stream consumer, and it moves to the deep-lane upsell.
 - The report renders inline below: grade, severity counts, coverage banner when checks were
   skipped, findings grouped by severity, the checked list, the provenance section, the deep
   lane upsell, and the Roast Mode toggle.
