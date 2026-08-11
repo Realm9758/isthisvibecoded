@@ -157,7 +157,7 @@ export async function POST(request: Request) {
       try {
         emit('phases', SCAN_PHASES);
 
-        const result = await deepScanDomain(domain, (phase, findings: DeepFinding[], status) => {
+        const result = await deepScanDomain(domain, 'deep', (phase, findings: DeepFinding[], status) => {
           emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings, status });
         });
 

@@ -22,6 +22,8 @@
     "lib/url-safety.ts",
     "lib/scan-lanes.ts",
     "lib/scan-phases.ts",
+    "lib/scan-coverage.ts",
+    "types/deep-scan.ts",
     "types/analysis.ts"
   ]
 }
