@@ -14,9 +14,12 @@ import type { ScanPhase } from '@/lib/scan-phases';
  */
 
 export type CompletedScan = DeepScanResult & {
-  scanId: string;
+  /** Absent when the scan ran but could not be written to history. */
+  scanId?: string;
   claimToken?: string | null;
   redacted?: boolean;
+  /** Set when the result is real but was not persisted. */
+  notSaved?: string;
 };
 
 export interface ScanErrorMeta {

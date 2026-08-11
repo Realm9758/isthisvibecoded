@@ -91,7 +91,7 @@ export default function Home() {
 
     // An anonymous scan is held so signing up unlocks this exact report
     // rather than spending one of the three free scans re-running it.
-    if (completed.claimToken) {
+    if (completed.claimToken && completed.scanId) {
       holdClaim({ scanId: completed.scanId, claimToken: completed.claimToken });
     }
 
@@ -243,6 +243,11 @@ export default function Home() {
 
           {status === 'done' && result && (
             <section ref={resultsRef} className="px-6 pb-20">
+              {result.notSaved && (
+                <p className="max-w-4xl mx-auto mb-4 text-xs text-amber-300/70 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3">
+                  {result.notSaved}
+                </p>
+              )}
               <ScanReport result={result} onReset={reset} />
             </section>
           )}

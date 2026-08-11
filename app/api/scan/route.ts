@@ -170,8 +170,28 @@ export async function POST(request: Request) {
           claim_expires_at: claimToken ? Date.now() + CLAIM_WINDOW_MS : null,
           created_at: Date.now(),
         });
+
+        // A storage failure must not destroy a scan that already ran. The
+        // work is done and the findings are real, so they are returned with
+        // the allowance refunded and the caller told it was not saved. They
+        // lose the history entry, not the answer.
         if (insertError) {
-          throw new Error('Scan completed but the result could not be saved. Please try again.');
+          console.error('Scan result could not be saved', {
+            tag: 'scan:persist',
+            reason: insertError.message,
+          });
+          if (quotaKey) {
+            try {
+              await supabase.rpc('refund_usage', { usage_key: quotaKey });
+            } catch {
+              // A failed refund costs the caller an allowance, not the report.
+            }
+          }
+          emit('result', {
+            ...(userId ? result : redactForAnonymous(result)),
+            notSaved: 'This result could not be saved to your history, so it will disappear when you leave this page.',
+          });
+          return;
         }
         persisted = true;
 
