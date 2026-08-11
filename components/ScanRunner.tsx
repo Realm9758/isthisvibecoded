@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { DeepScanResult, DeepFinding } from '@/types/deep-scan';
 import type { ScanPhase } from '@/lib/scan-phases';
+import { apiPath } from '@/lib/site';
 
 /**
  * Consumes a scan's SSE stream and renders live progress.
@@ -73,7 +74,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
       addLog(`$ ironclad --target ${label}`);
       addLog('Starting scan…');
 
-      const res = await fetch(endpoint, {
+      const res = await fetch(apiPath(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyRef.current),

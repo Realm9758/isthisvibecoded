@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { NotificationBell } from './NotificationBell';
+import { apiPath } from '@/lib/site';
 
 const PLAN_BADGE: Record<string, string> = {
   pro:  'text-[#3b82f6] border-[rgba(59,130,246,0.35)]',
@@ -140,7 +141,7 @@ export function Navbar() {
                         <button
                           onClick={async () => {
                             setMenuOpen(false);
-                            const res = await fetch('/api/stripe/portal', { method: 'POST' });
+                            const res = await fetch(apiPath('/api/stripe/portal'), { method: 'POST' });
                             const data = await res.json();
                             if (data.url) window.location.href = data.url;
                           }}

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { ACCOUNT_POLICY_VERSION, isValidDisplayHandle } from '@/lib/policy';
+import { apiPath } from '@/lib/site';
 
 function PasswordStrength({ password }: { password: string }) {
   const strength = useMemo(() => {
@@ -99,7 +100,7 @@ export default function SignupPage() {
     setError('');
     setSavingPrefs(true);
     try {
-      const response = await fetch('/api/user/profile', {
+      const response = await fetch(apiPath('/api/user/profile'), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notifInApp, notifEmail }),

@@ -9,6 +9,7 @@ import { LANE_CHECK_COUNTS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
 import {
   FREE_LIFETIME_LIMIT, ANONYMOUS_DAILY_LIMIT, TARGET_HOURLY_LIMIT,
 } from '@/lib/scan-quota';
+import { apiPath } from '@/lib/site';
 
 const SURFACE = LANE_CHECK_COUNTS.surface;
 const TOTAL = LANE_CHECK_COUNTS.deep;
@@ -58,7 +59,7 @@ export default function PricingPage() {
     if (!user) { router.push('/signup'); return; }
     setLoading(planId);
     try {
-      const res = await fetch('/api/stripe/checkout', {
+      const res = await fetch(apiPath('/api/stripe/checkout'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan: planId }),

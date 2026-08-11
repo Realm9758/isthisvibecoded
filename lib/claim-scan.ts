@@ -1,3 +1,4 @@
+import { apiPath } from './site';
 /** Held so a visitor who signs up can claim the scan they already ran. */
 export const CLAIM_STORAGE_KEY = 'ironclad:claim';
 
@@ -39,7 +40,7 @@ export async function claimHeldScan(fallback = '/'): Promise<string> {
   }
 
   try {
-    const res = await fetch('/api/scans/claim', {
+    const res = await fetch(apiPath('/api/scans/claim'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ claimToken: held.claimToken }),

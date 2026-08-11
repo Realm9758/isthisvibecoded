@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { VerificationToken } from '@/types/analysis';
+import { apiPath } from '@/lib/site';
 
 type Method = 'dns' | 'meta' | 'file';
 
@@ -207,7 +208,7 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
     setError(null);
     setClaimContest(false);
     try {
-      const res = await fetch('/api/verify', {
+      const res = await fetch(apiPath('/api/verify'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain }),
@@ -235,7 +236,7 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
     setError(null);
     try {
       const params = new URLSearchParams({ domain, token: token.token, method });
-      const res = await fetch(`/api/verify?${params}`);
+      const res = await fetch(apiPath(`/api/verify?${params}`));
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Verification check failed');
       if (data.verified) {
@@ -266,7 +267,7 @@ export function OwnershipVerify({ domain, onVerified }: Props) {
     setRemoving(true);
     setError(null);
     try {
-      const res = await fetch('/api/verify', {
+      const res = await fetch(apiPath('/api/verify'), {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain }),

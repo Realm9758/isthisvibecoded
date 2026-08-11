@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
+import { apiPath } from '@/lib/site';
 
 interface Notification {
   id: string;
@@ -60,7 +61,7 @@ export function NotificationBell() {
   const fetchNotifications = useCallback(async () => {
     if (!user) return;
     try {
-      const res = await fetch('/api/notifications');
+      const res = await fetch(apiPath('/api/notifications'));
       if (res.ok) setNotifications(await res.json());
     } catch { /* ignore */ }
   }, [user]);
@@ -100,13 +101,13 @@ export function NotificationBell() {
 
   async function markRead(id: string) {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-    await fetch(`/api/notifications/${id}`, { method: 'PATCH' }).catch(() => null);
+    await fetch(apiPath(`/api/notifications/${id}`), { method: 'PATCH' }).catch(() => null);
   }
 
   async function markAllRead() {
     setLoading(true);
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    await fetch('/api/notifications', { method: 'PATCH' }).catch(() => null);
+    await fetch(apiPath('/api/notifications'), { method: 'PATCH' }).catch(() => null);
     setLoading(false);
   }
 

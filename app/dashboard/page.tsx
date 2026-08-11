@@ -11,6 +11,7 @@ import { DEEP_SCAN_TERMS_VERSION } from '@/lib/policy';
 import { LANE_CHECK_COUNTS, DEEP_ONLY_PHASE_IDS, type ScanLane } from '@/lib/scan-lanes';
 import { FREE_LIFETIME_LIMIT } from '@/lib/scan-quota';
 import type { DeepScanResult } from '@/types/deep-scan';
+import { apiPath } from '@/lib/site';
 
 interface ScanSummary {
   id: string;
@@ -399,7 +400,7 @@ export default function DashboardPage() {
   const [scansLoading, setScansLoading] = useState(true);
 
   const loadScans = useCallback(() => {
-    fetch('/api/user/scans')
+    fetch(apiPath('/api/user/scans'))
       .then(r => r.json())
       .then(data => { if (Array.isArray(data)) setScans(data); })
       .catch(() => undefined)

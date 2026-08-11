@@ -71,3 +71,15 @@ export const SCANNER_INFO_URL = `${SITE_ORIGIN}/scanner`;
 export function absoluteUrl(path: string): string {
   return `${SITE_ORIGIN}${path.startsWith('/') ? path : `/${path}`}`;
 }
+
+/**
+ * Same-origin path for a client-side fetch.
+ *
+ * Next's basePath rewrites <Link>, the router and static assets, but it does
+ * not touch fetch(). Under a path prefix a bare fetch('/api/...') leaves the
+ * zone entirely and hits the parent domain, which knows nothing about it. Any
+ * client call to our own API has to go through here.
+ */
+export function apiPath(path: string): string {
+  return `${SITE_BASE_PATH}${path.startsWith('/') ? path : `/${path}`}`;
+}

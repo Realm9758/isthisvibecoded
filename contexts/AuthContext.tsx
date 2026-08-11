@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { ACCOUNT_POLICY_VERSION } from '@/lib/policy';
 import type { Plan } from '@/lib/store';
+import { apiPath } from '@/lib/site';
 
 export interface AuthUser {
   id: string;
@@ -39,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/me');
+      const res = await fetch(apiPath('/api/auth/me'));
       const data = await res.json();
       setUser(data);
     } catch {
@@ -55,7 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshUser]);
 
   async function login(email: string, password: string) {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch(apiPath('/api/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -75,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('Please accept the current account policy before signing up');
     }
 
-    const res = await fetch('/api/auth/signup', {
+    const res = await fetch(apiPath('/api/auth/signup'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, name, policyVersion: acceptedPolicyVersion }),
@@ -86,7 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await fetch(apiPath('/api/auth/logout'), { method: 'POST' });
     setUser(null);
   }
 

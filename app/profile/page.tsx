@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { isValidDisplayHandle } from '@/lib/policy';
 import { FREE_LIFETIME_LIMIT } from '@/lib/scan-quota';
+import { apiPath } from '@/lib/site';
 
 /**
  * Account settings.
@@ -58,7 +59,7 @@ export default function ProfilePage() {
 
   async function patchProfile(body: Record<string, unknown>) {
     setError('');
-    const res = await fetch('/api/user/profile', {
+    const res = await fetch(apiPath('/api/user/profile'), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -93,7 +94,7 @@ export default function ProfilePage() {
         reader.onerror = () => reject(new Error('Could not read that file'));
         reader.readAsDataURL(file);
       });
-      const res = await fetch('/api/user/avatar', {
+      const res = await fetch(apiPath('/api/user/avatar'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dataUrl }),
@@ -113,7 +114,7 @@ export default function ProfilePage() {
 
   async function openBilling() {
     setBusy(true);
-    const res = await fetch('/api/stripe/portal', { method: 'POST' });
+    const res = await fetch(apiPath('/api/stripe/portal'), { method: 'POST' });
     const data = await res.json().catch(() => ({}));
     if (data.url) window.location.href = data.url;
     else { setError(data.error ?? 'Could not open the billing portal'); setBusy(false); }
@@ -281,7 +282,7 @@ export default function ProfilePage() {
                 <button
                   onClick={async () => {
                     setBusy(true);
-                    await fetch('/api/user/avatar', { method: 'DELETE' });
+                    await fetch(apiPath('/api/user/avatar'), { method: 'DELETE' });
                     await refreshUser();
                     setBusy(false);
                   }}
