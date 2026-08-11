@@ -27,14 +27,6 @@ function IconShield() {
     </svg>
   );
 }
-function IconFeed() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-      <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
-    </svg>
-  );
-}
 function IconUser() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -72,22 +64,18 @@ export function Navbar() {
           >
             VS
           </div>
-          <span className="font-semibold text-white/75 text-sm hidden sm:block tracking-tight">VibeScan</span>
+          <span className="font-semibold text-white/75 text-sm hidden sm:block tracking-tight">Ironclad</span>
         </Link>
 
         {/* Nav links */}
         <div className="flex items-center gap-0.5 flex-1">
           <Link href="/" className="flex items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4">
             <IconScan />
-            <span>Scanner</span>
+            <span>Scan</span>
           </Link>
-          <Link href="/security" className="items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden sm:flex">
+          <Link href="/what-we-check" className="items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden sm:flex">
             <IconShield />
-            <span>Deep Scan</span>
-          </Link>
-          <Link href="/feed" className="items-center gap-1.5 px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4 hidden md:flex">
-            <IconFeed />
-            <span>Leaderboard</span>
+            <span>What we check</span>
           </Link>
 
           <Link href="/pricing" className="px-3 py-2 text-xs text-white/45 hover:text-white/75 transition-colors rounded-lg hover:bg-white/4">

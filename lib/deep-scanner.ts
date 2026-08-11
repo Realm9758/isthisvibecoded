@@ -3,6 +3,7 @@ import { SCAN_PHASES, type ScanPhase } from '@/lib/scan-phases';
 import { phaseRunsInLane, type ScanLane } from '@/lib/scan-lanes';
 import { describeCoverageFailure, scoreIsWithheld } from '@/lib/scan-coverage';
 import { detectVibe } from '@/lib/vibe-detector';
+import { scanForPublicKeys } from '@/lib/key-scanner';
 import type { ScanProvenance } from '@/types/deep-scan';
 import { analyzeSecurityHeaders } from '@/lib/security-headers';
 import { calculateDeepScore } from '@/lib/deep-score';
@@ -1055,6 +1056,24 @@ async function checkVibeCodePatterns(baseUrl: string, html: string): Promise<Dee
   }
 
   // Missing RLS warning for Supabase sites with no auth headers
+  // Credential formats the checks above do not cover: AWS key identifiers,
+  // GitHub tokens, SendGrid and Mapbox keys, and inline NEXT_PUBLIC_
+  // assignments. Kept as a separate detector because its patterns are tested
+  // independently and it is the kind of list that grows.
+  for (const key of scanForPublicKeys(html)) {
+    if (key.risk === 'info' || key.risk === 'low') continue;
+    findings.push({
+      id: `vibe-key-${key.type.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      category: 'info-disclosure',
+      severity: key.risk === 'high' ? 'high' : 'medium',
+      title: `${key.type} Visible in Client Code`,
+      description: `A ${key.type} was found in code the browser receives. Anything served to a browser is readable by anyone who visits, so a credential here is a public credential.`,
+      evidence: `${key.value} (in page ${key.source})`,
+      remediation: `Rotate this ${key.type} now, since it must be treated as compromised. Move the call that uses it to your server so the credential is never sent to the browser.`,
+      url: baseUrl,
+    });
+  }
+
   const hasSupabase = html.includes('supabase');
   if (hasSupabase && !supabaseAnonKey) {
     // Check if any API endpoint returns data without auth

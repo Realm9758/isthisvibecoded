@@ -1,53 +1,70 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import type { AnalysisResult } from '@/types/analysis';
-import { LoadingAnimation } from '@/components/LoadingAnimation';
-import { ResultsDashboard } from '@/components/ResultsDashboard';
+import { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
+import { ScanRunner, type CompletedScan, type ScanErrorMeta } from '@/components/ScanRunner';
+import { ScanReport } from '@/components/ScanReport';
 import { Confetti } from '@/components/Confetti';
 import { useAuth } from '@/contexts/AuthContext';
+import { SURFACE_PHASE_IDS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
+import { FREE_LIFETIME_LIMIT } from '@/lib/scan-quota';
 
-const EXAMPLE_SITES = [
-  { label: 'example.com',  url: 'https://example.com',  hint: 'Reserved demo domain' },
-  { label: 'your-site.com', url: 'https://your-site.com', hint: 'Replace with a site you control' },
+/** Held so a visitor who signs up can claim the scan they already ran. */
+export const CLAIM_STORAGE_KEY = 'ironclad:claim';
+
+const SURFACE_CHECKS = [
+  'Secrets in your HTML',
+  'Exposed .env and .git',
+  'Security headers',
+  'Cookie flags',
+  'HTTPS and HSTS',
+  'CORS policy',
+  'Source maps',
+  'Vulnerable libraries',
+  'Directory listing',
+  'GraphQL introspection',
+  'Public API schemas',
+  'Server version leaks',
+  'Subresource integrity',
+  'robots.txt disclosure',
+  'HTTP methods',
 ];
 
-type FullResult = AnalysisResult & {
-  scanId?: string;
-  roasts?: string[];
-  scansRemaining?: number | null;
-  isPublic?: boolean;
-  canPublish?: boolean;
-};
+const DEEP_CHECKS = [
+  'SQL injection',
+  'Cross-site scripting',
+  'NoSQL injection',
+  'Path traversal',
+  'Server-side request forgery',
+  'CRLF injection',
+  'Host header injection',
+  'Open redirect',
+  'Error verbosity',
+  'Admin panel discovery',
+  'Forced browsing',
+  'Insecure direct object reference',
+  'Auth rate limiting',
+];
 
-function isValidUrl(val: string) {
-  try { new URL(val.startsWith('http') ? val : `https://${val}`); return true; }
-  catch { return false; }
+function isValidUrl(value: string) {
+  try {
+    new URL(value.startsWith('http') ? value : `https://${value}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
-
-const SCAN_STEP_MS = 1400;
 
 export default function Home() {
   const { user, refreshUser } = useAuth();
-  const [url, setUrl]             = useState('');
-  const [status, setStatus]       = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
-  const [result, setResult]       = useState<FullResult | null>(null);
-  const [errorMsg, setErrorMsg]   = useState('');
-  const [loadStep, setLoadStep]   = useState(0);
-  const [confetti, setConfetti]   = useState(false);
-  const [roastMode, setRoastMode] = useState(false);
-  const stepRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [url, setUrl] = useState('');
+  const [target, setTarget] = useState('');
+  const [status, setStatus] = useState<'idle' | 'scanning' | 'done' | 'error'>('idle');
+  const [result, setResult] = useState<CompletedScan | null>(null);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [errorMeta, setErrorMeta] = useState<ScanErrorMeta>({});
+  const [confetti, setConfetti] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (status === 'loading') {
-      setLoadStep(0);
-      stepRef.current = setInterval(() => setLoadStep(s => s + 1), SCAN_STEP_MS);
-    } else {
-      if (stepRef.current) clearInterval(stepRef.current);
-    }
-    return () => { if (stepRef.current) clearInterval(stepRef.current); };
-  }, [status]);
 
   useEffect(() => {
     if (status === 'done') {
@@ -55,49 +72,58 @@ export default function Home() {
     }
   }, [status]);
 
-  async function analyze(targetUrl?: string) {
-    const target = (targetUrl ?? url).trim();
-    if (!target || !isValidUrl(target)) {
-      setErrorMsg('Please enter a valid URL — e.g. example.com');
+  function startScan() {
+    const value = url.trim();
+    if (!value || !isValidUrl(value)) {
+      setErrorMsg('Enter a valid URL, for example example.com');
+      setErrorMeta({});
+      setStatus('error');
       return;
     }
     setErrorMsg('');
-    setStatus('loading');
+    setErrorMeta({});
     setResult(null);
-    setConfetti(false);
+    setTarget(value);
+    setStatus('scanning');
+  }
 
-    try {
-      const res  = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: target }),
-      });
-      const data = await res.json();
+  function handleResult(completed: CompletedScan) {
+    setResult(completed);
+    setStatus('done');
 
-      if (res.status === 429) {
-        setErrorMsg(data.error ?? 'Daily scan limit reached.');
-        setStatus('error');
-        return;
+    // An anonymous scan is held so signing up unlocks this exact report
+    // rather than spending one of the three free scans re-running it.
+    if (completed.claimToken) {
+      try {
+        sessionStorage.setItem(CLAIM_STORAGE_KEY, JSON.stringify({
+          scanId: completed.scanId,
+          claimToken: completed.claimToken,
+        }));
+      } catch {
+        // A blocked sessionStorage costs the claim, not the report.
       }
-      if (!res.ok) throw new Error(data.error ?? 'Analysis failed');
+    }
 
-      setResult(data as FullResult);
-      setStatus('done');
+    if (completed.findings.length === 0 && completed.summary.score !== null) {
       setConfetti(true);
       setTimeout(() => setConfetti(false), 4000);
-      refreshUser(); // update scansRemaining in nav
-    } catch (e) {
-      setErrorMsg(e instanceof Error ? e.message : 'Something went wrong');
-      setStatus('error');
     }
+    refreshUser();
+  }
+
+  function handleError(message: string, meta: ScanErrorMeta) {
+    setErrorMsg(message);
+    setErrorMeta(meta);
+    setStatus('error');
   }
 
   function reset() {
     setStatus('idle');
     setResult(null);
     setErrorMsg('');
+    setErrorMeta({});
     setUrl('');
-    setConfetti(false);
+    setTarget('');
   }
 
   const showIdle = status === 'idle' || status === 'error';
@@ -107,7 +133,6 @@ export default function Home() {
       <Confetti active={confetti} />
 
       <main className="min-h-screen" style={{ background: '#0a0a0f' }}>
-        {/* Ambient glow */}
         <div
           className="fixed inset-0 pointer-events-none"
           style={{
@@ -117,43 +142,42 @@ export default function Home() {
         />
 
         <div className="relative z-10">
-          {/* Hero */}
           <section className="px-6 pt-20 pb-12 text-center">
             <div className="max-w-2xl mx-auto">
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-violet-500/20 bg-violet-500/5 text-violet-400 text-xs font-medium mb-8">
                 <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse-glow" />
-                Public provenance &amp; header review
+                {SURFACE_PHASE_IDS.length} checks on any site, no account
               </div>
 
               <h1 className="text-4xl sm:text-5xl font-bold text-white mb-4 leading-tight">
-                Is This{' '}
+                Is your site{' '}
                 <span style={{
                   background: 'linear-gradient(135deg, #a78bfa 0%, #818cf8 50%, #38bdf8 100%)',
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                   backgroundClip: 'text',
                 }}>
-                  Vibe-Coded?
+                  ironclad?
                 </span>
               </h1>
 
               <p className="text-white/50 text-lg mb-10 max-w-lg mx-auto">
-                Check for explicit public AI-builder provenance, response-header hardening, exposed client keys, and visible technology signals.
+                Point Ironclad at any URL. It finds leaked keys, exposed config files, missing headers,
+                and the other things that ship when nobody was looking.
               </p>
 
-              {/* Scan limit strip for free logged-in users */}
               {user && user.plan === 'free' && user.scansRemaining !== null && (
                 <div className="mb-6 inline-flex items-center gap-3 px-4 py-2 rounded-xl border border-white/8 bg-white/3 text-xs">
                   <span className="text-white/40">
-                    <span className="text-white/70 font-semibold">{user.scansRemaining}</span> free scan{user.scansRemaining !== 1 ? 's' : ''} left today
+                    <span className="text-white/70 font-semibold">{user.scansRemaining}</span> free scan
+                    {user.scansRemaining !== 1 ? 's' : ''} left
                   </span>
-                  <a href="/pricing" className="text-violet-400 hover:text-violet-300 transition-colors font-medium">
-                    Upgrade →
-                  </a>
+                  <Link href="/pricing" className="text-violet-400 hover:text-violet-300 transition-colors font-medium">
+                    Upgrade
+                  </Link>
                 </div>
               )}
 
-              {/* URL Input */}
               <div className="max-w-xl mx-auto">
                 <div className="flex gap-2 p-1.5 rounded-xl border border-white/8 bg-white/3 backdrop-blur-sm focus-within:border-violet-500/40 transition-colors">
                   <input
@@ -163,204 +187,163 @@ export default function Home() {
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
-                    aria-label="Website URL to analyse"
-                    aria-describedby={errorMsg || status === 'error' ? 'scan-error' : 'scan-privacy-note'}
-                    aria-invalid={Boolean(errorMsg || status === 'error')}
+                    aria-label="Website URL to scan"
+                    aria-describedby={status === 'error' ? 'scan-error' : 'scan-authorised-use'}
+                    aria-invalid={status === 'error'}
                     value={url}
                     onChange={e => setUrl(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && analyze()}
-                    placeholder="Enter a URL — e.g. example.com"
+                    onKeyDown={e => e.key === 'Enter' && startScan()}
+                    placeholder="example.com"
                     className="flex-1 bg-transparent px-3 py-2.5 text-sm text-white placeholder-white/25 outline-none min-w-0"
                   />
                   <button
                     type="button"
-                    onClick={() => analyze()}
-                    disabled={status === 'loading'}
+                    onClick={startScan}
+                    disabled={status === 'scanning'}
                     className="px-5 py-2.5 rounded-lg text-sm font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     style={{
                       background: 'linear-gradient(135deg, #7c3aed, #4f46e5)',
                       boxShadow: '0 0 20px rgba(124,58,237,0.3)',
                     }}
                   >
-                    {status === 'loading' ? 'Analyzing…' : 'Analyze'}
+                    {status === 'scanning' ? 'Scanning…' : 'Scan'}
                   </button>
                 </div>
 
-                {(errorMsg || status === 'error') && (
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <p id="scan-error" role="alert" className="text-sm text-red-400 text-left px-1">{errorMsg || 'Analysis failed.'}</p>
-                    {errorMsg.includes('limit') && (
-                      <a href="/pricing" className="text-xs font-semibold text-violet-400 shrink-0 hover:text-violet-300 transition-colors">
-                        Upgrade →
-                      </a>
+                {status === 'error' && (
+                  <div className="mt-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <p id="scan-error" role="alert" className="text-sm text-red-400 text-left px-1">{errorMsg}</p>
+                    {errorMeta.signupRequired && (
+                      <Link href="/signup" className="text-xs font-semibold text-violet-400 shrink-0 hover:text-violet-300 transition-colors">
+                        Create a free account
+                      </Link>
+                    )}
+                    {errorMeta.upgradeRequired && (
+                      <Link href="/pricing" className="text-xs font-semibold text-violet-400 shrink-0 hover:text-violet-300 transition-colors">
+                        See Pro
+                      </Link>
                     )}
                   </div>
                 )}
               </div>
 
-              {/* Safety notice */}
-              <p id="scan-privacy-note" className="mt-3 text-[11px] text-white/20 text-center">
-                Query strings are removed before scanning, anonymous results are not saved, and active tests require fresh domain-control evidence plus explicit authorisation.{' '}
-                <a href="/privacy" className="underline underline-offset-2 hover:text-white/40 transition-colors">Privacy policy</a>
+              <p id="scan-authorised-use" className="mt-4 text-[11px] text-white/25 text-center max-w-lg mx-auto leading-relaxed">
+                Surface checks are read-only public requests, the same kind any browser makes, so they run
+                on any URL. The {DEEP_ONLY_PHASE_IDS.length} deeper checks send test payloads and run only on
+                domains you have verified.{' '}
+                <Link href="/scanner" className="underline underline-offset-2 hover:text-white/50 transition-colors">
+                  About the scanner
+                </Link>
               </p>
-
-              {/* Roast mode toggle */}
-              <div className="mt-4 flex justify-center">
-                <button
-                  onClick={() => setRoastMode(r => !r)}
-                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-medium transition-all ${
-                    roastMode
-                      ? 'bg-orange-500/15 border-orange-500/35 text-orange-400'
-                      : 'border-white/10 text-white/35 hover:border-white/20 hover:text-white/55'
-                  }`}
-                >
-                  <span>🔥</span>
-                  {roastMode ? 'Roast Mode On — results will be brutal' : 'Enable Roast Mode'}
-                </button>
-              </div>
-
-              {/* Example sites */}
-              <div className="mt-5 flex flex-wrap justify-center gap-2">
-                <span className="text-xs text-white/25 self-center">Fill:</span>
-                {EXAMPLE_SITES.map(site => (
-                  <button
-                    key={site.url}
-                    onClick={() => setUrl(site.url)}
-                    disabled={status === 'loading'}
-                    title={site.hint}
-                    className="px-3 py-1 rounded-full text-xs border border-white/10 text-white/50 hover:border-white/20 hover:text-white/80 transition-colors disabled:opacity-40"
-                  >
-                    {site.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Viral CTA */}
-              {showIdle && (
-                <div className="mt-10">
-                  <button
-                    onClick={() => document.getElementById('scan-url')?.focus()}
-                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-violet-500/25 bg-violet-500/8 text-violet-300 text-sm font-medium hover:bg-violet-500/12 transition-colors"
-                  >
-                    <span>🚀</span>
-                    Scan your startup
-                  </button>
-                </div>
-              )}
             </div>
           </section>
 
-          {/* Loading */}
-          {status === 'loading' && (
-            <section className="px-6 pb-16 flex justify-center">
-              <LoadingAnimation step={loadStep} />
+          {status === 'scanning' && (
+            <section className="px-6 pb-16 max-w-3xl mx-auto">
+              <ScanRunner
+                endpoint="/api/scan"
+                label={target}
+                body={{ url: target }}
+                onResult={handleResult}
+                onError={handleError}
+              />
             </section>
           )}
 
-          {/* Results */}
           {status === 'done' && result && (
-            <section ref={resultsRef} className="px-6 pb-6">
-              <ResultsDashboard result={result} onReset={reset} defaultRoastMode={roastMode} />
+            <section ref={resultsRef} className="px-6 pb-20">
+              <ScanReport result={result} onReset={reset} />
             </section>
           )}
 
-          {/* Deep scan CTA — shown after a passive scan completes */}
-          {status === 'done' && result && (
-            <section className="px-6 pb-20 max-w-5xl mx-auto">
-              <div
-                className="rounded-2xl border border-red-500/15 p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-5"
-                style={{ background: 'rgba(239,68,68,0.04)' }}
-              >
-                <div className="flex items-start gap-4">
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-lg"
-                    style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}
-                  >
-                    ⚡
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-white/80 mb-0.5">Want to go deeper?</h3>
-                    <p className="text-xs text-white/40 max-w-md leading-relaxed">
-                      This was a bounded public scan. The experimental deep scanner runs selected SQL injection, XSS, access-control, and configuration checks
-                      only after domain-control verification. Its findings still require manual validation.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex gap-2 shrink-0 flex-wrap">
-                  {user ? (
-                    <a
-                      href="/dashboard"
-                      className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all"
-                      style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)', boxShadow: '0 0 16px rgba(220,38,38,0.2)' }}
-                    >
-                      My Scans →
-                    </a>
-                  ) : (
-                    <>
-                      <a
-                        href="/dashboard"
-                        className="px-5 py-2.5 rounded-xl text-sm font-semibold text-white transition-all"
-                        style={{ background: 'linear-gradient(135deg, #dc2626, #b91c1c)', boxShadow: '0 0 16px rgba(220,38,38,0.2)' }}
-                      >
-                        Sign up free →
-                      </a>
-                      <a
-                        href="/vulnerability"
-                        className="px-4 py-2.5 rounded-xl text-sm text-white/45 border border-white/8 hover:bg-white/5 transition-colors"
-                      >
-                        How it works
-                      </a>
-                    </>
-                  )}
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* Why This Matters */}
           {showIdle && (
-            <section className="px-6 pb-24 max-w-5xl mx-auto">
-              <div className="border-t border-white/5 pt-16">
-                <h2 className="text-2xl font-bold text-white/80 mb-2 text-center">Why this matters</h2>
-                <p className="text-white/40 text-center text-sm mb-12 max-w-md mx-auto">
-                  Public evidence can support a narrow provenance claim; it cannot reveal a developer&apos;s process, understanding, or review quality.
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                  {[
-                    {
-                      icon: '◈', color: '#8b5cf6',
-                      title: 'Builder Provenance',
-                      desc: 'Only allowlisted generator metadata, builder project domains, explicit attribution, and builder-specific assets contribute to the evidence index.',
-                    },
-                    {
-                      icon: '⬡', color: '#06b6d4',
-                      title: 'Passive Hardening Review',
-                      desc: 'Review a focused set of response headers and public deployment paths. This is a limited hardening check, not an overall security grade.',
-                    },
-                    {
-                      icon: '◻', color: '#22c55e',
-                      title: 'Bounded Public Checks',
-                      desc: 'The public scan makes read-only page and public-path requests. It sends no exploit payloads, authentication bypasses, or brute-force attempts.',
-                    },
-                  ].map(item => (
-                    <div key={item.title} className="p-6 rounded-xl border border-white/5 bg-white/2">
-                      <div className="text-2xl mb-4" style={{ color: item.color }}>{item.icon}</div>
-                      <h3 className="font-semibold text-white/80 mb-2">{item.title}</h3>
-                      <p className="text-sm text-white/40 leading-relaxed">{item.desc}</p>
+            <>
+              {/* The two lanes */}
+              <section className="px-6 pb-20 max-w-5xl mx-auto">
+                <div className="border-t border-white/5 pt-16">
+                  <h2 className="text-2xl font-bold text-white/80 mb-2 text-center">What gets checked</h2>
+                  <p className="text-white/40 text-center text-sm mb-12 max-w-lg mx-auto">
+                    We limit checks by permission, not by payment. Sending an attack payload at a server you
+                    do not control is not something money should be able to buy.
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                    <div className="p-6 rounded-2xl border border-emerald-500/15" style={{ background: 'rgba(34,197,94,0.03)' }}>
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <h3 className="font-semibold text-white/85">{SURFACE_PHASE_IDS.length} surface checks</h3>
+                        <span className="text-[10px] uppercase tracking-widest text-emerald-400/70">Any site</span>
+                      </div>
+                      <p className="text-xs text-white/35 mb-4 leading-relaxed">
+                        Read-only requests. No payloads, no brute force, nothing a search crawler does not
+                        already do.
+                      </p>
+                      <ul className="space-y-1">
+                        {SURFACE_CHECKS.map(check => (
+                          <li key={check} className="text-xs text-white/50 flex gap-2">
+                            <span className="text-emerald-400/50 shrink-0">✓</span>{check}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                  ))}
+
+                    <div className="p-6 rounded-2xl border border-red-500/15" style={{ background: 'rgba(239,68,68,0.03)' }}>
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <h3 className="font-semibold text-white/85">{DEEP_ONLY_PHASE_IDS.length} deep checks</h3>
+                        <span className="text-[10px] uppercase tracking-widest text-red-400/70">Verified domains</span>
+                      </div>
+                      <p className="text-xs text-white/35 mb-4 leading-relaxed">
+                        These send real test payloads. Prove you control the domain and they unlock, on the
+                        free plan too.
+                      </p>
+                      <ul className="space-y-1">
+                        {DEEP_CHECKS.map(check => (
+                          <li key={check} className="text-xs text-white/50 flex gap-2">
+                            <span className="text-red-400/50 shrink-0">›</span>{check}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </section>
+              </section>
+
+              {/* Pricing strip */}
+              <section className="px-6 pb-24 max-w-3xl mx-auto text-center">
+                <div className="border-t border-white/5 pt-16">
+                  <h2 className="text-2xl font-bold text-white/80 mb-3">
+                    {FREE_LIFETIME_LIMIT} free scans, then £4.99 a month
+                  </h2>
+                  <p className="text-white/40 text-sm mb-8 max-w-md mx-auto leading-relaxed">
+                    The free scans are the whole product, deep checks included. Nobody should subscribe to
+                    something they have not watched work.
+                  </p>
+                  <div className="flex gap-3 justify-center flex-wrap">
+                    <Link
+                      href="/signup"
+                      className="px-6 py-3 rounded-xl text-sm font-semibold text-white transition-all"
+                      style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)' }}
+                    >
+                      Create a free account
+                    </Link>
+                    <Link
+                      href="/pricing"
+                      className="px-6 py-3 rounded-xl text-sm text-white/50 border border-white/8 hover:bg-white/5 transition-colors"
+                    >
+                      Compare plans
+                    </Link>
+                  </div>
+                </div>
+              </section>
+            </>
           )}
 
-          {/* Footer */}
           <footer className="border-t border-white/5 px-6 py-6 print:hidden">
             <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 flex-wrap">
-              <p className="text-xs text-white/20">Is This Vibe-Coded? — public evidence, with explicit limits</p>
-              <div className="flex items-center gap-4">
-                <a href="/privacy" className="text-xs text-white/20 hover:text-white/50 transition-colors">Privacy Policy</a>
-                <a href="/pricing" className="text-xs text-white/20 hover:text-white/50 transition-colors">Pricing</a>
+              <p className="text-xs text-white/20">Ironclad</p>
+              <div className="flex items-center gap-4 flex-wrap justify-center">
+                <Link href="/privacy" className="text-xs text-white/20 hover:text-white/50 transition-colors">Privacy</Link>
+                <Link href="/pricing" className="text-xs text-white/20 hover:text-white/50 transition-colors">Pricing</Link>
+                <Link href="/scanner" className="text-xs text-white/20 hover:text-white/50 transition-colors">Scanner</Link>
                 <p className="text-xs text-white/15">Scan only sites you own or have permission to test.</p>
               </div>
             </div>

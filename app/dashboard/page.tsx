@@ -649,7 +649,7 @@ function DeepScanPanel() {
             <p className="text-xs text-white/35 mt-0.5">Verified domain control · Selected active checks · Experimental</p>
           </div>
         </div>
-        <Link href="/vulnerability" className="text-xs text-white/30 hover:text-white/60 transition-colors hidden sm:block">
+        <Link href="/what-we-check" className="text-xs text-white/30 hover:text-white/60 transition-colors hidden sm:block">
           How it works →
         </Link>
       </div>
@@ -756,7 +756,7 @@ function DeepScanPanel() {
               <span className="text-xs text-white/55 leading-relaxed">
                 I confirm that I am explicitly authorised to test <span className="font-mono text-white/75">{scanDomain}</span> and to run
                 the active requests described in the{' '}
-                <Link href="/vulnerability" className="text-amber-300/80 underline hover:text-amber-200">
+                <Link href="/what-we-check" className="text-amber-300/80 underline hover:text-amber-200">
                   deep-scan terms
                 </Link>
                 . I authorise this specific scan. This confirmation is recorded with the result.
@@ -974,7 +974,7 @@ export default function DashboardPage() {
               ← Run passive scan
             </Link>
             <Link
-              href="/security"
+              href="/what-we-check"
               className="px-4 py-2 rounded-xl text-xs font-medium border border-red-500/25 bg-red-500/8 text-red-400 hover:bg-red-500/12 transition-colors"
             >
               About deep scans

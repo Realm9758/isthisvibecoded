@@ -1,3 +1,13 @@
+/**
+ * Vocabulary shared by the detectors.
+ *
+ * This file used to describe the passive scanner's composite result. That
+ * pipeline is gone: DeepScanResult in types/deep-scan.ts is now the single
+ * shape a scan produces, at either lane. What remains is the smaller
+ * vocabulary the surviving detectors speak, plus the domain-verification
+ * token, which has nothing to do with scanning at all.
+ */
+
 export type ConfidenceLevel = 'Low' | 'Medium' | 'High';
 /** Legacy field name; values describe only the bounded response-header rubric. */
 export type RiskLevel = 'Few Header Gaps' | 'Some Header Gaps' | 'Major Header Gaps';
@@ -7,7 +17,6 @@ export type VibeLabel =
   | 'Strong supporting evidence'
   | 'Direct AI-builder provenance';
 export type HeaderSeverity = 'critical' | 'high' | 'medium' | 'low';
-export type TechCategory = 'framework' | 'library' | 'hosting' | 'cdn' | 'analytics' | 'backend' | 'database';
 export type KeyRisk = 'info' | 'low' | 'medium' | 'high';
 export type VibeEvidenceCategory = 'provenance' | 'scaffold' | 'stack' | 'content' | 'conflict';
 export type VibeEvidenceStrength = 'direct' | 'strong' | 'moderate' | 'weak';
@@ -49,73 +58,11 @@ export interface SecurityHeaderResult {
   recommendation: string;
 }
 
-export interface TechStackItem {
-  name: string;
-  category: TechCategory;
-  confidence: ConfidenceLevel;
-}
-
-export interface PublicFile {
-  path: string;
-  accessible: boolean;
-  status: number;
-  confidence?: ConfidenceLevel;
-  evidence?: string;
-}
-
 export interface PublicKey {
   type: string;
   value: string;
   source: string;
   risk: KeyRisk;
-}
-
-export interface VibeResult {
-  score: number;
-  label: VibeLabel;
-  confidence: ConfidenceLevel;
-  reasons: string[];
-  signals?: VibeEvidenceSignal[];
-  breakdown?: VibeScoreBreakdown;
-  declaredGenerator?: string;
-  limitations?: string[];
-}
-
-export interface SecurityResult {
-  score: number;
-  riskLevel: RiskLevel;
-  headers: SecurityHeaderResult[];
-  httpsEnabled: boolean;
-  /** Identifies the non-probabilistic header-hardening rubric. */
-  modelVersion?: string;
-}
-
-export interface AnalysisCoverage {
-  responseStatus: number;
-  contentType: string;
-  htmlBytes: number;
-  redirectsFollowed: number;
-  publicPathChecks: {
-    attempted: number;
-    completed: number;
-    failed: number;
-  };
-  limitations: string[];
-}
-
-export interface AnalysisResult {
-  url: string;
-  scannedAt: string;
-  vibe: VibeResult;
-  security: SecurityResult;
-  techStack: TechStackItem[];
-  hosting: {
-    provider: string | null;
-    indicators: string[];
-  };
-  publicFiles: PublicFile[];
-  publicKeys: PublicKey[];
-  coverage?: AnalysisCoverage;
 }
 
 export interface VerificationToken {
