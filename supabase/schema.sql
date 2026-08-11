@@ -374,14 +374,66 @@ create index if not exists deep_scans_user_created_idx
 create index if not exists deep_scans_domain_created_idx
   on public.deep_scans (domain, created_at desc);
 
+-- Ironclad lane model ------------------------------------------------------
+-- deep_scans becomes the single store for both lanes. Existing rows are deep
+-- scans, which is what the default records. user_id becomes nullable so an
+-- anonymous surface scan can be held until its owner signs up and claims it.
+
+alter table public.deep_scans
+  add column if not exists lane             text not null default 'deep',
+  add column if not exists claim_token      text,
+  add column if not exists claim_expires_at bigint;
+
+alter table public.deep_scans
+  alter column user_id drop not null;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'deep_scans_lane_check'
+  ) then
+    alter table public.deep_scans
+      add constraint deep_scans_lane_check check (lane in ('surface', 'deep'));
+  end if;
+
+  -- An anonymous deep scan must be impossible, not merely unwritten. Deep
+  -- checks send payloads and require domain-control evidence tied to an
+  -- account, so a row with no owner can only ever be a surface scan.
+  if not exists (
+    select 1 from pg_constraint where conname = 'deep_scans_anonymous_surface_only_check'
+  ) then
+    alter table public.deep_scans
+      add constraint deep_scans_anonymous_surface_only_check
+      check (user_id is not null or lane = 'surface');
+  end if;
+
+  -- A claim token without an expiry would never be purged.
+  if not exists (
+    select 1 from pg_constraint where conname = 'deep_scans_claim_expiry_check'
+  ) then
+    alter table public.deep_scans
+      add constraint deep_scans_claim_expiry_check
+      check (claim_token is null or claim_expires_at is not null);
+  end if;
+end $$;
+
+create unique index if not exists deep_scans_claim_token_idx
+  on public.deep_scans (claim_token) where claim_token is not null;
+
+create index if not exists deep_scans_unclaimed_idx
+  on public.deep_scans (claim_expires_at) where user_id is null;
+
 -- Seed the atomic lifetime allowance ledger from existing completed scans.
 -- Re-running this migration never reduces a counter that already includes a
 -- concurrent reservation or a scan recorded after the seed query.
+-- Anonymous rows are excluded: they belong to no account, and grouping them
+-- would build a key from a null user id.
 insert into public.daily_usage as usage (key, count)
 select
   'deep:' || user_id || ':lifetime',
   count(*)::integer
 from public.deep_scans
+where user_id is not null
 group by user_id
 on conflict (key) do update
 set count = greatest(usage.count, excluded.count);
@@ -896,5 +948,29 @@ begin
   end if;
 end;
 $migration$;
+
+-- Legacy tables ------------------------------------------------------------
+-- Left in place rather than dropped: no destructive migration. `scans` held
+-- results from the retired passive scanner, which wrote a format nothing
+-- produces any more, and whose model versions must not be compared against
+-- current ones. `comments` and `likes` served the public feed, removed
+-- because a ranked list of sites with exposed secrets is a shopping list for
+-- attackers.
+do $legacy$
+begin
+  if to_regclass('public.scans') is not null then
+    comment on table public.scans is 'Legacy. Retired passive scanner. Read by nothing.';
+  end if;
+  if to_regclass('public.comments') is not null then
+    comment on table public.comments is 'Legacy. Public feed removed in the Ironclad repositioning.';
+  end if;
+  if to_regclass('public.scan_likes') is not null then
+    comment on table public.scan_likes is 'Legacy. Public feed removed in the Ironclad repositioning.';
+  end if;
+  if to_regclass('public.comment_likes') is not null then
+    comment on table public.comment_likes is 'Legacy. Public feed removed in the Ironclad repositioning.';
+  end if;
+end;
+$legacy$;
 
 commit;
