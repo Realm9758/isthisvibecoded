@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit --incremental false",
-    "test": "tsc -p tsconfig.test.json && node --test .test-dist/tests/*.test.js",
+    "test": "tsc -p tsconfig.test.json && node --import ./tests/support/alias-hook.mjs --test .test-dist/tests/*.test.js",
     "check": "npm run typecheck && npm run test && npm run lint && npm run build"
   },
   "dependencies": {

@@ -24,12 +24,21 @@ function meaningfulValue(rawValue: string): string | null {
 function environmentEvidence(body: string): SensitiveFileEvidence | null {
   let assignments = 0;
   let infrastructureValue = false;
+  // A file whose credential-bearing keys all hold placeholders is a template
+  // such as .env.example. Those are published on purpose, so reporting one as
+  // an exposure is noise that trains people to ignore the finding.
+  let templatePlaceholder = false;
   for (const line of body.split(/\r?\n/)) {
     const match = line.match(/^([A-Z_][A-Z0-9_]*)\s*=\s*(.+?)\s*$/);
     if (!match) continue;
     assignments++;
     const value = meaningfulValue(match[2]);
-    if (!value) continue;
+    if (!value) {
+      if (SECRET_ENV_NAME.test(match[1]) || match[1] === 'DATABASE_URL') {
+        templatePlaceholder = true;
+      }
+      continue;
+    }
     if (SECRET_ENV_NAME.test(match[1])) {
       return { evidence: `${assignments} or more environment assignments including a non-placeholder secret value detected` };
     }
@@ -52,6 +61,7 @@ function environmentEvidence(body: string): SensitiveFileEvidence | null {
       description: 'An environment file reveals database connection metadata, but this response did not confirm embedded database credentials.',
     };
   }
+  if (templatePlaceholder) return null;
   if (assignments >= 2) {
     return {
       evidence: `${assignments} non-secret environment assignments detected`,

@@ -1,4 +1,5 @@
 import type { DeepFinding, DeepScanResult } from '@/types/deep-scan';
+import { SCAN_PHASES, type ScanPhase } from '@/lib/scan-phases';
 import { analyzeSecurityHeaders } from '@/lib/security-headers';
 import { calculateDeepScore } from '@/lib/deep-score';
 import { findStripeSecretEvidence, validateSensitiveFileEvidence } from '@/lib/deep-evidence';
@@ -1780,45 +1781,11 @@ function buildChecked(
 }
 
 // ── Check phases (for streaming progress) ────────────────────────────────
+// Phase metadata lives in lib/scan-phases.ts so routes, the client, and the
+// test suite can read it without loading this module.
 
-export type ScanPhase = {
-  id: string;
-  label: string;
-  detail: string;
-};
-
-export const SCAN_PHASES: ScanPhase[] = [
-  { id: 'init',      label: 'Connecting',             detail: 'Establishing HTTPS connection, reading response headers and framework fingerprint…' },
-  { id: 'vibe',      label: 'Secrets in HTML',        detail: 'Scanning page source for Supabase keys, Firebase config, Stripe secrets, exposed API keys…' },
-  { id: 'files',     label: 'Sensitive Files',         detail: 'Probing 25 paths: .env, .env.local, .git/HEAD, wp-config.php, .npmrc, docker-compose.yml, Dockerfile, backup.sql…' },
-  { id: 'xss',       label: 'Cross-Site Scripting',   detail: "Injecting <script>alert(1)</script> into ?q=, ?s=, ?name= — checking if input is reflected unencoded…" },
-  { id: 'sqli',      label: 'SQL Injection',           detail: "Sending ' OR 1=1, \\\" OR \\\"1\\\"=\\\"1, SQLSTATE payloads — watching for database error messages…" },
-  { id: 'cors',      label: 'CORS Policy',             detail: 'Null origin + evil-attacker.com on /api routes — testing for wildcard+credentials or arbitrary origin reflection…' },
-  { id: 'headers',   label: 'Security Headers',        detail: 'Auditing CSP (with nonce check), HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy…' },
-  { id: 'cookies',   label: 'Cookie Security',         detail: 'Inspecting Set-Cookie for HttpOnly, Secure, SameSite=Lax/Strict flags on session/auth cookies…' },
-  { id: 'methods',   label: 'HTTP Methods',            detail: 'OPTIONS request — detecting TRACE (XST attacks), PUT, DELETE without authentication…' },
-  { id: 'ssl',       label: 'HTTPS / TLS',             detail: 'HTTP → HTTPS redirect check, testing plain HTTP access, checking HSTS preload status…' },
-  { id: 'admin',     label: 'Admin Discovery',         detail: 'Probing 18 paths: /admin, /wp-admin, /phpmyadmin, /cpanel, /manager, /backend, /portal…' },
-  { id: 'errors',    label: 'Error Verbosity',         detail: 'Triggering 404, /api/nonexistent, ?debug=true — checking for JS/Python/PHP stack traces…' },
-  { id: 'redirect',  label: 'Open Redirect',           detail: 'Testing ?redirect=, ?url=, ?next=, ?return=, ?goto= with external target URL…' },
-  { id: 'dirlist',   label: 'Directory Listing',       detail: 'Requesting /uploads/, /static/, /assets/, /files/, /backup/ — checking for open indexes…' },
-  { id: 'robots',    label: 'robots.txt',              detail: 'Fetching /robots.txt — parsing Disallow entries for accidentally exposed sensitive paths…' },
-  { id: 'sri',        label: 'Subresource Integrity',   detail: 'Parsing HTML for external <script> and <link> tags missing integrity= hashes…' },
-  { id: 'info',       label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, X-AspNet-Version — checking for version numbers in headers…' },
-  { id: 'forced',     label: 'Forced Browsing',         detail: 'Probing 15 admin/internal API paths without auth — checking for unauthenticated data exposure…' },
-  { id: 'idor',       label: 'IDOR',                    detail: 'Testing /api/users/1, /api/orders/1 — checking if object records are accessible without ownership verification…' },
-  { id: 'ssrf',       label: 'SSRF',                    detail: 'Injecting AWS metadata URL + localhost into ?url=, ?webhook=, ?proxy= — testing server-side request forgery…' },
-  { id: 'traversal',  label: 'Path Traversal',          detail: 'Sending ../../../etc/passwd into ?file=, ?path=, ?page= — testing directory traversal…' },
-  { id: 'components',  label: 'Vulnerable Libraries',    detail: 'Scanning HTML for jQuery, AngularJS, Lodash, Moment.js versions with known CVEs…' },
-  { id: 'sourcemaps', label: 'Source Map Exposure',     detail: 'Finding <script src> tags in HTML, probing .js.map files — checking if unminified source code is accessible…' },
-  { id: 'graphql',    label: 'GraphQL Introspection',   detail: 'POST {__schema query} to /graphql, /api/graphql, /gql — checking if full schema is enumerable without auth…' },
-  { id: 'apidocs',    label: 'API Documentation',       detail: 'Probing /swagger, /openapi.json, /api-docs, /redoc — checking if full API schema is publicly exposed…' },
-  { id: 'ratelimit',  label: 'Rate Limiting',           detail: 'Firing 6 rapid POST requests at auth endpoints — checking if login is protected against brute-force…' },
-  { id: 'nosql',      label: 'NoSQL Injection',         detail: 'Sending MongoDB operator payloads [$gt], [$ne], [$regex] — watching for BSON/Mongoose errors…' },
-  { id: 'hostheader', label: 'Host Header Injection',   detail: 'Sending forged Host: evil-attacker-test.com — checking if reflected in response body or Location header…' },
-  { id: 'crlf',       label: 'CRLF Injection',          detail: 'Injecting %0d%0a newlines into query params — checking if sequence breaks into response headers…' },
-  { id: 'done',       label: 'Compiling Report',        detail: 'Scoring all findings, computing security grade, building detailed report…' },
-];
+export { SCAN_PHASES } from '@/lib/scan-phases';
+export type { ScanPhase } from '@/lib/scan-phases';
 
 // ── Main export (with progress callback) ─────────────────────────────────
 
