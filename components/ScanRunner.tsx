@@ -49,13 +49,18 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
   const logRef = useRef<HTMLDivElement>(null);
 
   // The parent usually passes inline literals for these. Holding them in refs
-  // keeps a re-render from aborting and restarting a scan in flight.
+  // keeps a re-render from aborting and restarting a scan in flight. They are
+  // written in an effect rather than during render, so a discarded render
+  // cannot leave a ref pointing at a callback that was never committed.
   const bodyRef = useRef(body);
   const onResultRef = useRef(onResult);
   const onErrorRef = useRef(onError);
-  bodyRef.current = body;
-  onResultRef.current = onResult;
-  onErrorRef.current = onError;
+
+  useEffect(() => {
+    bodyRef.current = body;
+    onResultRef.current = onResult;
+    onErrorRef.current = onError;
+  }, [body, onResult, onError]);
 
   useEffect(() => {
     const ctrl = new AbortController();
