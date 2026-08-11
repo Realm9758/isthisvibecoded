@@ -4,6 +4,10 @@ import { supabase } from '@/lib/supabase';
 import { deepScanDomain, SCAN_PHASES } from '@/lib/deep-scanner';
 import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
 import { DEEP_SCAN_TERMS_VERSION, VERIFICATION_MAX_AGE_MS } from '@/lib/policy';
+import {
+  FREE_LIFETIME_LIMIT, USER_BURST_LIMIT, TARGET_HOURLY_LIMIT,
+  freeLifetimeKey, userBurstKey, targetHourlyKey,
+} from '@/lib/scan-quota';
 import type { DeepFinding } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
@@ -97,16 +101,15 @@ export async function POST(request: Request) {
   // Plan entitlement controls the daily/lifetime quota, not operational
   // safety. Every account and target remains burst-limited so a paid account
   // cannot launch an unbounded number of outbound active scans.
-  const minuteWindow = new Date().toISOString().slice(0, 16);
-  const hourWindow = new Date().toISOString().slice(0, 13);
+  const now = new Date();
   const [{ data: userBurst, error: userBurstError }, { data: targetBurst, error: targetBurstError }] = await Promise.all([
     supabase.rpc('consume_usage', {
-      usage_key: `deep-burst:${payload.userId}:${minuteWindow}`,
-      usage_limit: 1,
+      usage_key: userBurstKey(payload.userId, now),
+      usage_limit: USER_BURST_LIMIT,
     }),
     supabase.rpc('consume_usage', {
-      usage_key: `deep-target:${domain}:${hourWindow}`,
-      usage_limit: 10,
+      usage_key: targetHourlyKey(domain, now),
+      usage_limit: TARGET_HOURLY_LIMIT,
     }),
   ]);
   if (userBurstError || targetBurstError) {
@@ -125,10 +128,10 @@ export async function POST(request: Request) {
 
   let deepQuotaKey: string | null = null;
   if (!userRow || userRow.plan === 'free') {
-    deepQuotaKey = `deep:${payload.userId}:lifetime`;
+    deepQuotaKey = freeLifetimeKey(payload.userId);
     const { data: remaining, error: countError } = await supabase.rpc('consume_usage', {
       usage_key: deepQuotaKey,
-      usage_limit: 2,
+      usage_limit: FREE_LIFETIME_LIMIT,
     });
     if (countError) {
       console.error('Usage reservation failed', {
@@ -139,7 +142,10 @@ export async function POST(request: Request) {
     }
     if (Number(remaining) < 0) {
       return Response.json(
-        { error: 'Free plan lifetime limit reached. Pro removes the lifetime quota; operational rate limits still apply.' },
+        {
+          error: `You have used all ${FREE_LIFETIME_LIMIT} free scans. Pro removes the limit; operational rate limits still apply.`,
+          upgradeRequired: true,
+        },
         { status: 403 },
       );
     }
