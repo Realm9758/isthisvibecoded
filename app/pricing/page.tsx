@@ -38,11 +38,10 @@ function PlanCard({
             </>
           )}
         </div>
-        {'scansPerDay' in plan && plan.scansPerDay && (
-          <p className="text-xs text-white/40 mt-1">{plan.scansPerDay} passive scans / day</p>
-        )}
-        {'scansPerDay' in plan && plan.scansPerDay === null && (
-          <p className="text-xs text-violet-400 mt-1">No daily quota · fair-use rate limits</p>
+        {plan.scansTotal !== null ? (
+          <p className="text-xs text-white/40 mt-1">{plan.scansTotal} scans, no card needed</p>
+        ) : (
+          <p className="text-xs text-violet-400 mt-1">Unlimited scans, fair-use rate limits</p>
         )}
       </div>
 

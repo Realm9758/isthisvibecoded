@@ -9,7 +9,7 @@ async function getAuthUserId(): Promise<string | null> {
   return payload?.userId ?? null;
 }
 
-// GET /api/notifications — fetch all notifications for the current user
+// GET /api/notifications fetches all notifications for the current user
 export async function GET() {
   const userId = await getAuthUserId();
   if (!userId) return Response.json({ error: 'Unauthorised' }, { status: 401 });
@@ -18,7 +18,7 @@ export async function GET() {
   return Response.json(notifications);
 }
 
-// PATCH /api/notifications — mark all notifications as read
+// PATCH /api/notifications marks all notifications as read
 export async function PATCH() {
   const userId = await getAuthUserId();
   if (!userId) return Response.json({ error: 'Unauthorised' }, { status: 401 });

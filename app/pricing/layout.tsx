@@ -3,13 +3,13 @@ import type { Metadata } from 'next';
 const BASE = 'https://isthisvibecoded-one.vercel.app';
 
 export const metadata: Metadata = {
-  title: 'Pricing — Is This Vibe-Coded?',
+  title: 'Pricing | Ironclad',
   description: 'Free and Pro limits for public provenance evidence, header review, and experimental active checks.',
   alternates: { canonical: `${BASE}/pricing` },
   openGraph: {
     type: 'website',
     url: `${BASE}/pricing`,
-    title: 'Pricing — Is This Vibe-Coded?',
+    title: 'Pricing | Ironclad',
     description: 'Free and Pro limits for public provenance evidence, header review, and experimental active checks.',
     images: [{ url: `${BASE}/og/default.png` }],
   },

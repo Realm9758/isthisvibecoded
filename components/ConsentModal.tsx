@@ -53,7 +53,7 @@ export function ConsentModal() {
           </div>
           <div>
             <h2 className="text-sm font-bold text-white/90">Before you continue</h2>
-            <p className="text-xs text-white/35 mt-0.5">Is This Vibe-Coded? — Privacy &amp; Usage</p>
+            <p className="text-xs text-white/35 mt-0.5">Ironclad: privacy and usage</p>
           </div>
         </div>
 

@@ -9,7 +9,7 @@ async function getAuthUserId(): Promise<string | null> {
   return payload?.userId ?? null;
 }
 
-// PATCH /api/notifications/[id] — mark a single notification as read
+// PATCH /api/notifications/[id] marks a single notification as read
 export async function PATCH(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const userId = await getAuthUserId();
   if (!userId) return Response.json({ error: 'Unauthorised' }, { status: 401 });

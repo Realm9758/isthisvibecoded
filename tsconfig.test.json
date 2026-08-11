@@ -20,6 +20,13 @@
     "lib/deep-versions.ts",
     "lib/stripe-entitlements.ts",
     "lib/url-safety.ts",
+    "lib/scan-lanes.ts",
+    "lib/scan-phases.ts",
+    "lib/scan-coverage.ts",
+    "lib/scan-quota.ts",
+    "lib/scan-redaction.ts",
+    "lib/scan-diff.ts",
+    "types/deep-scan.ts",
     "types/analysis.ts"
   ]
 }

@@ -36,7 +36,7 @@ async function fetchVerificationTarget(rawUrl: string): Promise<Response> {
 
   for (let redirects = 0; redirects <= 5; redirects++) {
     const response = await pinnedFetch(target, {
-      headers: { 'User-Agent': 'VibeScan-Verifier/1.0' },
+      headers: { 'User-Agent': 'Ironclad-Verifier/2.0 (+https://ironclad.dev/scanner)' },
       signal: AbortSignal.timeout(8_000),
       redirect: 'manual',
     });
@@ -245,7 +245,7 @@ export async function POST(request: Request) {
   }
 
   // 2. Check if another account already has fresh control evidence for this domain.
-  //    We don't hard-block — current token placement, not first claim, wins.
+  //    We don't hard-block: current token placement, not first claim, wins.
   //    Issue a contest token: if the user can place it on the live site they
   //    demonstrably own it and supersede the existing claim (same model as
   //    Google Search Console-style claim transfer).
@@ -300,7 +300,7 @@ export async function POST(request: Request) {
     });
 
     if (insertError) {
-      // Race: another row was just inserted for (domain, userId) — fetch it
+      // Race: another row was just inserted for (domain, userId), so fetch it
       const { data: raceToken, error: raceError } = await supabase
         .from('verification_tokens')
         .select('token')
@@ -321,7 +321,7 @@ export async function POST(request: Request) {
     createdAt: new Date().toISOString(),
     alreadyVerified: false,
     // claimContest=true signals to the client that this domain is currently claimed
-    // by another account — placing the token will supersede that claim.
+    // by another account, and placing the token will supersede that claim.
     claimContest: isClaimContest,
     methods: {
       dns: `Add TXT record: _vibecoded-verification.${domain} = vibecoded-verification=${token}`,
@@ -430,7 +430,7 @@ export async function GET(request: Request) {
   }
   const method = requestedMethod as 'dns' | 'meta' | 'file';
 
-  // Validate token — must be owned by this user and match exactly
+  // Validate token: it must be owned by this user and match exactly
   const { data: stored, error: storedError } = await supabase
     .from('verification_tokens')
     .select('token, user_id, verified, verified_at')

@@ -1,7 +1,7 @@
 /**
  * Email sender via Resend (https://resend.com).
  * Set RESEND_API_KEY in .env.local to enable.
- * Set EMAIL_FROM to your verified sender (e.g. "VibeScan <hi@vibescan.io>").
+ * Set EMAIL_FROM to your verified sender (e.g. "Ironclad <hi@ironclad.dev>").
  * If not configured, emails are silently skipped.
  */
 
@@ -13,9 +13,9 @@ export async function sendEmail(
   html: string,
 ): Promise<void> {
   const key = process.env.RESEND_API_KEY;
-  if (!key) return; // email not configured — skip silently
+  if (!key) return; // email not configured, so skip silently
 
-  const from = process.env.EMAIL_FROM ?? 'VibeScan <notifications@vibescan.io>';
+  const from = process.env.EMAIL_FROM ?? 'Ironclad <notifications@ironclad.dev>';
 
   try {
     const res = await fetch(RESEND_API, {
@@ -36,7 +36,7 @@ export async function sendEmail(
 }
 
 function baseTemplate(title: string, body: string, ctaLabel: string, ctaUrl: string): string {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://vibescan.io';
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://ironclad.dev';
   const safeTitle = escHtml(title);
   const safeCtaLabel = escHtml(ctaLabel);
   const safeCtaUrl = escHtml(ctaUrl);
@@ -66,14 +66,14 @@ function baseTemplate(title: string, body: string, ctaLabel: string, ctaUrl: str
   <div class="card">
     <a href="${safeAppUrl}" class="logo">
       <div class="logo-badge">VS</div>
-      <span class="logo-name">VibeScan</span>
+      <span class="logo-name">Ironclad</span>
     </a>
     <h1>${safeTitle}</h1>
     ${body}
     <a href="${safeCtaUrl}" class="cta">${safeCtaLabel}</a>
   </div>
   <div class="footer">
-    <p style="margin:0">You're receiving this because you enabled email notifications on VibeScan.<br/>
+    <p style="margin:0">You're receiving this because you enabled email notifications on Ironclad.<br/>
     <a href="${safeAppUrl}/profile">Manage notification settings</a></p>
   </div>
 </div>
