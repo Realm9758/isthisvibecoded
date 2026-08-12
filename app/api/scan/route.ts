@@ -15,6 +15,7 @@ import {
 import { reserveUsageBatch, type UsageReservation } from '@/lib/scan-reservation';
 import { mutationRequestError, readBoundedJson } from '@/lib/request-security';
 import { sanitizeFindings, sanitizeScanResult } from '@/lib/evidence-redaction';
+import { encodeScanResultForStorage, summarizeScanStorageError } from '@/lib/scan-result-storage';
 import type { DeepFinding } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
@@ -136,7 +137,7 @@ export async function POST(request: Request) {
           domain,
           user_id: userId,
           lane: 'surface',
-          result,
+          result: encodeScanResultForStorage(result),
           claim_token: claimToken,
           claim_expires_at: claimToken ? Date.now() + CLAIM_WINDOW_MS : null,
           created_at: Date.now(),
@@ -149,7 +150,7 @@ export async function POST(request: Request) {
         if (insertError) {
           console.error('Scan result could not be saved', {
             tag: 'scan:persist',
-            reason: insertError.message,
+            ...summarizeScanStorageError(insertError),
           });
           if (quotaKey) {
             try {

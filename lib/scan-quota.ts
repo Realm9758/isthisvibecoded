@@ -15,6 +15,11 @@ export const ANONYMOUS_DAILY_LIMIT = 1;
 /** Free accounts, lifetime, spanning both lanes. */
 export const FREE_LIFETIME_LIMIT = 3;
 
+export function remainingFreeScans(used: number): number {
+  const safeUsed = Number.isFinite(used) ? Math.max(0, Math.floor(used)) : 0;
+  return Math.max(0, FREE_LIFETIME_LIMIT - safeUsed);
+}
+
 /** Signed-in callers, per minute, every plan. Protects scanner availability. */
 export const USER_BURST_LIMIT = 1;
 

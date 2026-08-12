@@ -4,6 +4,7 @@ import { AUTH_COOKIE, verifyToken } from './auth';
 import { supabase } from './supabase';
 import type { DeepScanResult } from '@/types/deep-scan';
 import type { ScanLane } from './scan-lanes';
+import { decodeScanResultFromStorage } from './scan-result-storage';
 
 /**
  * Reads over `deep_scans`, the single store for both lanes.
@@ -19,7 +20,7 @@ export interface StoredScanRow {
   domain: string;
   userId: string | null;
   lane: ScanLane;
-  result: DeepScanResult;
+  result: unknown;
   createdAt: number;
 }
 
@@ -33,13 +34,15 @@ interface RawRow {
 }
 
 function toStored(row: RawRow): StoredScanRow {
+  const result = decodeScanResultFromStorage(row.result);
+  if (!result) throw new Error('Stored scan result is unreadable');
   return {
     id: row.id,
     domain: row.domain,
     userId: row.user_id,
     // Rows written before the lane split are deep scans by definition.
     lane: (row.lane as ScanLane | null) ?? 'deep',
-    result: row.result,
+    result,
     createdAt: Number(row.created_at),
   };
 }
@@ -88,7 +91,7 @@ export async function getPreviousScan(scan: StoredScanRow): Promise<DeepScanResu
     .maybeSingle();
 
   if (error || !data) return null;
-  return (data as { result: DeepScanResult }).result;
+  return decodeScanResultFromStorage((data as { result: unknown }).result);
 }
 
 export async function listScansForUser(userId: string, limit = 50): Promise<StoredScanRow[]> {
@@ -100,5 +103,11 @@ export async function listScansForUser(userId: string, limit = 50): Promise<Stor
     .limit(limit);
 
   if (error || !data) return [];
-  return (data as RawRow[]).map(toStored);
+  return (data as RawRow[]).flatMap(row => {
+    try {
+      return [toStored(row)];
+    } catch {
+      return [];
+    }
+  });
 }

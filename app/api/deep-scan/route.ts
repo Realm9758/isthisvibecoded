@@ -14,6 +14,7 @@ import {
 import { reserveUsageBatch, type UsageReservation } from '@/lib/scan-reservation';
 import { revalidateProviderDomain } from '@/lib/provider-verification';
 import { sanitizeFindings, sanitizeScanResult } from '@/lib/evidence-redaction';
+import { encodeScanResultForStorage, summarizeScanStorageError } from '@/lib/scan-result-storage';
 import type { DeepFinding } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
@@ -258,7 +259,7 @@ export async function POST(request: Request) {
             revalidatedAt: authorizationAcceptedAt,
             proofSubject: liveProof.proofSubject ?? domain,
           },
-          result,
+          result: encodeScanResultForStorage(result),
           created_at: Date.now(),
         });
         if (insertError) {
@@ -266,8 +267,7 @@ export async function POST(request: Request) {
           // failure has to reach the logs or the save path is undiagnosable.
           console.error('Deep scan result could not be saved', {
             tag: 'deep-scan:persist',
-            reason: insertError.message,
-            code: insertError.code,
+            ...summarizeScanStorageError(insertError),
             details: insertError.details,
             hint: insertError.hint,
             resultBytes: JSON.stringify(result).length,

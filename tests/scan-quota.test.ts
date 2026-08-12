@@ -5,12 +5,16 @@ import {
   SURFACE_TARGET_HOURLY_LIMIT, anonymousDailyKey, freeLifetimeKey, userBurstKey,
   targetHourlyKey, surfaceTargetHourlyKey,
   providerTargetHourlyKey,
+  remainingFreeScans,
 } from '../lib/scan-quota';
 
 const NOW = new Date('2026-08-11T14:37:05.000Z');
 
 test('the free lifetime allowance is three scans', () => {
   assert.equal(FREE_LIFETIME_LIMIT, 3);
+  assert.equal(remainingFreeScans(0), 3);
+  assert.equal(remainingFreeScans(1), 2);
+  assert.equal(remainingFreeScans(5), 0);
 });
 
 test('anonymous callers get one scan per day', () => {

@@ -1,5 +1,7 @@
 import { randomBytes } from 'crypto';
 import { supabase } from './supabase';
+import { FREE_LIFETIME_LIMIT, freeLifetimeKey, remainingFreeScans } from './scan-quota';
+import { decodeScanResultFromStorage } from './scan-result-storage';
 
 export type Plan = 'free' | 'pro' | 'team';
 
@@ -152,7 +154,9 @@ export async function getDeepScanById(id: string, userId: string) {
     .eq('user_id', userId)
     .maybeSingle();
   if (error) throw new Error(error.message);
-  return data;
+  if (!data) return data;
+  const result = decodeScanResultFromStorage(data.result);
+  return result ? { ...data, result } : undefined;
 }
 
 // ── Usage / Rate limits ───────────────────────────────────────────────────
@@ -209,8 +213,13 @@ export async function refundUsage(id: string): Promise<void> {
 
 export async function getRemainingScans(id: string, plan: Plan): Promise<number | null> {
   if (plan === 'pro' || plan === 'team') return null;
-  const used = await getDailyCount(`user:${id}`);
-  return Math.max(0, 5 - used);
+  const { data, error } = await supabase
+    .from('daily_usage')
+    .select('count')
+    .eq('key', freeLifetimeKey(id))
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return remainingFreeScans(Number(data?.count ?? 0));
 }
 
 export async function getHourlyScanCount(): Promise<number> {
