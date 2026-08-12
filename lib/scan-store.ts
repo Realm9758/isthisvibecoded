@@ -20,7 +20,7 @@ export interface StoredScanRow {
   domain: string;
   userId: string | null;
   lane: ScanLane;
-  result: unknown;
+  result: DeepScanResult;
   createdAt: number;
 }
 
@@ -29,7 +29,7 @@ interface RawRow {
   domain: string;
   user_id: string | null;
   lane: string | null;
-  result: DeepScanResult;
+  result: unknown;
   created_at: number;
 }
 
