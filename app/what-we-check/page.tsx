@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { Metadata } from 'next';
 import { SURFACE_PHASE_IDS, DEEP_ONLY_PHASE_IDS, LANE_CHECK_COUNTS } from '@/lib/scan-lanes';
 import { SCAN_PHASES } from '@/lib/scan-phases';
+import { DEEP_SCAN_MODULES } from '@/lib/deep-scan-scope';
 
 export const metadata: Metadata = {
   title: 'Coverage | Ironclad',
@@ -11,7 +12,9 @@ export const metadata: Metadata = {
 const SURFACE_SET = new Set<string>(SURFACE_PHASE_IDS);
 const DEEP_SET = new Set<string>(DEEP_ONLY_PHASE_IDS);
 
-function CheckRow({ label, detail, index }: { label: string; detail: string; index: number }) {
+const moduleById = new Map<string, (typeof DEEP_SCAN_MODULES)[number]>(DEEP_SCAN_MODULES.map(module => [module.id, module]));
+
+function CheckRow({ label, detail, limitation, index }: { label: string; detail: string; limitation?: string; index: number }) {
   return (
     <div className="flex gap-5 px-6 py-5" style={{ borderTop: index === 0 ? undefined : '1px solid var(--border)' }}>
       <span className="font-mono text-xs shrink-0 pt-0.5 w-6" style={{ color: 'var(--ghost)' }}>
@@ -20,6 +23,7 @@ function CheckRow({ label, detail, index }: { label: string; detail: string; ind
       <div className="min-w-0">
         <h3 className="text-sm font-semibold text-white mb-1.5">{label}</h3>
         <p className="font-mono text-xs leading-relaxed" style={{ color: 'var(--faint)' }}>{detail}</p>
+        {limitation && <p className="text-[11px] leading-relaxed mt-2" style={{ color: 'var(--ghost)' }}>Limit: {limitation}</p>}
       </div>
     </div>
   );
@@ -88,7 +92,7 @@ export default function WhatWeCheckPage() {
           </div>
           <div className="border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
             {surface.map((phase, i) => (
-              <CheckRow key={phase.id} label={phase.label} detail={phase.detail} index={i} />
+              <CheckRow key={phase.id} label={phase.label} detail={moduleById.get(phase.id)?.benefit ?? phase.detail} limitation={moduleById.get(phase.id)?.limitation} index={i} />
             ))}
           </div>
         </div>
@@ -109,7 +113,32 @@ export default function WhatWeCheckPage() {
             style={{ borderColor: 'var(--accent-line)', background: 'rgba(59,130,246,0.02)', borderRadius: 6 }}
           >
             {deep.map((phase, i) => (
-              <CheckRow key={phase.id} label={phase.label} detail={phase.detail} index={i} />
+              <CheckRow key={phase.id} label={phase.label} detail={moduleById.get(phase.id)?.benefit ?? phase.detail} limitation={moduleById.get(phase.id)?.limitation} index={i} />
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="px-6 py-16 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-4xl mx-auto">
+          <p className="eyebrow mb-5">not tested yet</p>
+          <h2 className="display text-white text-2xl mb-4">The important gaps are named.</h2>
+          <p className="text-sm leading-relaxed max-w-3xl mb-7" style={{ color: 'var(--muted)' }}>
+            Ironclad does not treat a missing module as a passing result. The next high-value capability is an authenticated test workspace with disposable accounts and safe expected actions—not a larger list of guessed payloads.
+          </p>
+          <div className="grid sm:grid-cols-2 border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+            {[
+              ['Authenticated roles & IDOR', 'Two test users, known owned/unowned records, and explicit access expectations.'],
+              ['Login, sessions & reset', 'Login throttling, rotation, logout invalidation, enumeration, MFA and password-reset flows.'],
+              ['Schema-assisted APIs', 'Owner-supplied OpenAPI/Postman collections and confirmed GraphQL schemas.'],
+              ['Browser & DOM behaviour', 'DOM XSS, runtime CSP, JavaScript redirects and hydrated forms in a real browser.'],
+              ['CSRF & safe mutations', 'Origin/referer/token checks against a disposable state-changing action with cleanup.'],
+              ['TLS & infrastructure', 'Certificate chain/expiry, TLS versions, DNSSEC, CAA, SPF, DKIM and DMARC.'],
+            ].map(([title, detail], index) => (
+              <div key={title} className="p-5" style={{ borderTop: index > 1 ? '1px solid var(--border)' : undefined, borderLeft: index % 2 === 1 ? '1px solid var(--border)' : undefined }}>
+                <h3 className="text-sm font-semibold text-white/85">{title}</h3>
+                <p className="text-xs leading-relaxed mt-1.5" style={{ color: 'var(--faint)' }}>{detail}</p>
+              </div>
             ))}
           </div>
         </div>

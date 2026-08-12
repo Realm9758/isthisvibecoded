@@ -140,6 +140,46 @@ test('a custom scope executes and persists only the backend-selected modules', a
   assert.equal(result.summary.score, null);
 });
 
+test('rate-limit scope uses a discovered safe GET route and records bounded throttle evidence', async () => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://abcdefghijklmnopqrst.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= `test-service-role-${'x'.repeat(32)}`;
+  const { deepScanDomain } = await import('../lib/deep-scanner');
+  let apiRequests = 0;
+
+  const transport = async (input: URL | string): Promise<Response> => {
+    const url = input instanceof URL ? new URL(input.href) : new URL(input);
+    if (url.pathname === '/app') {
+      return new Response('<!doctype html><html><body><a href="/api/search?q=hello">search</a></body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    }
+    if (url.pathname === '/api/search') {
+      apiRequests += 1;
+      return apiRequests >= 4
+        ? new Response('slow down', { status: 429, headers: { 'retry-after': '10' } })
+        : new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response('not found', { status: 404 });
+  };
+
+  const result = await deepScanDomain(
+    { hostname: 'fixture.example', startUrl: 'https://fixture.example/app' },
+    'deep',
+    undefined,
+    { transport, selectedPhaseIds: ['ratelimit'] },
+  );
+
+  assert.equal(apiRequests, 6);
+  assert.deepEqual(result.coverage?.checks?.map(check => check.phaseId), ['vibe', 'ratelimit']);
+  const rateCoverage = result.coverage?.checks?.find(check => check.phaseId === 'ratelimit');
+  assert.equal(rateCoverage?.complete, true);
+  assert.equal(rateCoverage?.requestsAttempted, 6);
+  const rateItem = result.checked.find(item => item.id === 'ratelimit');
+  assert.equal(rateItem?.status, 'observe');
+  assert.match(rateItem?.detail ?? '', /confirms a low-volume throttle/);
+});
+
 test('blanket active-probe denials are inconclusive and cannot produce a flattering grade', async () => {
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://abcdefghijklmnopqrst.supabase.co';
   process.env.SUPABASE_SERVICE_ROLE_KEY ||= `test-service-role-${'x'.repeat(32)}`;

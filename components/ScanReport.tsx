@@ -58,7 +58,11 @@ function gradeColour(score: number): string {
  */
 function verdict(result: AnyScanResult): { headline: string; tone: string } {
   const { critical, high, medium, low } = result.summary;
-  if (result.scope?.fullInventory === false) return { headline: 'Scoped result', tone: 'var(--accent)' };
+  if (result.scope?.fullInventory === false) {
+    if (critical > 0 || high > 0) return { headline: 'Scoped result: action needed', tone: 'var(--crit)' };
+    if (medium > 0 || low > 0) return { headline: 'Scoped result: findings reported', tone: 'var(--med)' };
+    return { headline: 'Scoped result', tone: 'var(--accent)' };
+  }
   if (result.summary.score === null) return { headline: 'Partial result', tone: 'var(--med)' };
   if (critical > 0 || high > 0) return { headline: 'Not ironclad', tone: 'var(--crit)' };
   if (medium > 0 || low > 0) return { headline: 'Nearly ironclad', tone: 'var(--med)' };

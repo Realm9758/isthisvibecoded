@@ -19,6 +19,7 @@ import type { DeepFinding, ScanPhaseProgress } from '@/types/deep-scan';
 import {
   parseRequestedDeepScanScope,
   phasesForDeepScanScope,
+  resolveDeepScanScope,
   type DeepScanModuleId,
 } from '@/lib/deep-scan-scope';
 
@@ -94,7 +95,7 @@ export async function POST(request: Request) {
         { status: 409 },
       );
     }
-    selectedPhaseIds = parseRequestedDeepScanScope(body.selectedPhaseIds);
+    selectedPhaseIds = resolveDeepScanScope(parseRequestedDeepScanScope(body.selectedPhaseIds));
     authorizationAcceptedAt = Date.now();
     const target = normalizePublicUrl(body.domain);
     domain = target.hostname.toLowerCase();

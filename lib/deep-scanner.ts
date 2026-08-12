@@ -65,6 +65,7 @@ import {
   fullDeepScanScope,
   isFullDeepScanScope,
   parseRequestedDeepScanScope,
+  resolveDeepScanScope,
   type DeepScanModuleId,
 } from '@/lib/deep-scan-scope';
 
@@ -2710,7 +2711,7 @@ export async function deepScanDomain(
   const selectedPhaseIds: DeepScanModuleId[] = lane === 'deep'
     ? options.selectedPhaseIds === undefined
       ? fullDeepScanScope()
-      : parseRequestedDeepScanScope(options.selectedPhaseIds)
+      : resolveDeepScanScope(parseRequestedDeepScanScope(options.selectedPhaseIds))
     : [...SURFACE_PHASE_IDS];
   const selectedPhaseSet = new Set<string>(selectedPhaseIds);
   const fullInventory = lane === 'deep'

@@ -92,6 +92,11 @@ export const DEEP_SCAN_PROFILES = {
 
 const KNOWN_IDS = new Set<string>(DEEP_SCAN_MODULES.map(module => module.id));
 const ORDER = new Map(DEEP_SCAN_MODULES.map((module, index) => [module.id, index]));
+const CLIENT_DISCOVERY_DEPENDENTS = new Set<DeepScanModuleId>([
+  'components', 'sourcemaps', 'supabase', 'firebase', 'storage',
+  'xss', 'sqli', 'nosql', 'redirect', 'ssrf', 'traversal', 'crlf',
+  'cors', 'forced', 'ratelimit', 'idor',
+]);
 
 export function parseRequestedDeepScanScope(value: unknown): DeepScanModuleId[] {
   if (!Array.isArray(value) || value.length === 0) {
@@ -108,6 +113,21 @@ export function parseRequestedDeepScanScope(value: unknown): DeepScanModuleId[] 
 
 export function fullDeepScanScope(): DeepScanModuleId[] {
   return DEEP_SCAN_MODULES.map(module => module.id);
+}
+
+/**
+ * Browser-bundle discovery currently lives in the client-code module. Keep
+ * that dependency explicit in both the selector and backend so a SQL/API
+ * scope does not silently fall back to landing-page HTML only.
+ */
+export function resolveDeepScanScope(ids: readonly DeepScanModuleId[]): DeepScanModuleId[] {
+  const resolved = new Set<DeepScanModuleId>(ids);
+  if (ids.some(id => CLIENT_DISCOVERY_DEPENDENTS.has(id))) resolved.add('vibe');
+  return DEEP_SCAN_MODULES.filter(module => resolved.has(module.id)).map(module => module.id);
+}
+
+export function requiresClientDiscovery(id: DeepScanModuleId): boolean {
+  return CLIENT_DISCOVERY_DEPENDENTS.has(id);
 }
 
 export function isFullDeepScanScope(ids: readonly string[]): boolean {

@@ -124,6 +124,7 @@ export default function PrivacyPage() {
             </p>
             <p>
               Some active modules make bounded read or list requests to exact Supabase, Firebase, or S3 endpoints discovered in the site&apos;s own public configuration.
+              The optional rate-limit module sends six safe GET requests to one discovered public API route; it does not submit login forms or credentials.
               Provider credentials and raw returned records are not included in finding evidence. Deep scan results are stored privately in the requesting user&apos;s account.
             </p>
           </section>

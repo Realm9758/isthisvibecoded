@@ -4,6 +4,8 @@ import {
   DEEP_SCAN_GROUP_LABELS,
   DEEP_SCAN_MODULES,
   DEEP_SCAN_PROFILES,
+  requiresClientDiscovery,
+  resolveDeepScanScope,
   type DeepScanModuleGroup,
   type DeepScanModuleId,
 } from '@/lib/deep-scan-scope';
@@ -29,6 +31,7 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
     .find(([, profile]) => sameSelection(selected, profile.phaseIds))?.[0] ?? 'custom';
   const heavy = DEEP_SCAN_MODULES.filter(module => selectedSet.has(module.id) && module.intensity === 'heavy').length;
   const network = DEEP_SCAN_MODULES.filter(module => selectedSet.has(module.id) && module.intensity !== 'local').length;
+  const discoveryDependents = selected.filter(id => requiresClientDiscovery(id)).length;
 
   function ordered(ids: Set<string>): DeepScanModuleId[] {
     return DEEP_SCAN_MODULES.filter(module => ids.has(module.id)).map(module => module.id);
@@ -38,18 +41,18 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    onChange(ordered(next));
+    onChange(resolveDeepScanScope(ordered(next)));
   }
 
   function toggleGroup(group: DeepScanModuleGroup) {
     const members = DEEP_SCAN_MODULES.filter(module => module.group === group);
     const allSelected = members.every(module => selectedSet.has(module.id));
     const next = new Set(selected);
-    for (const module of members) {
-      if (allSelected) next.delete(module.id);
-      else next.add(module.id);
+    for (const member of members) {
+      if (allSelected) next.delete(member.id);
+      else next.add(member.id);
     }
-    onChange(ordered(next));
+    onChange(resolveDeepScanScope(ordered(next)));
   }
 
   return (
@@ -73,7 +76,7 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
             <button
               key={id}
               type="button"
-              onClick={() => onChange([...profile.phaseIds])}
+              onClick={() => onChange(resolveDeepScanScope([...profile.phaseIds]))}
               className="text-left border p-3 transition-colors"
               style={{
                 borderColor: activeProfile === id ? 'var(--accent-line)' : 'var(--border)',
@@ -119,6 +122,7 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
                 {modules.map(module => {
                   const phase = phaseById.get(module.id);
                   const checked = selectedSet.has(module.id);
+                  const requiredDiscovery = module.id === 'vibe' && discoveryDependents > 0;
                   return (
                     <label
                       key={module.id}
@@ -128,6 +132,7 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
                       <input
                         type="checkbox"
                         checked={checked}
+                        disabled={requiredDiscovery}
                         onChange={() => toggle(module.id)}
                         className="mt-0.5 h-4 w-4 shrink-0"
                         style={{ accentColor: 'var(--accent)' }}
@@ -138,6 +143,11 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
                           <span className="font-mono text-[9px] uppercase" style={{ color: 'var(--ghost)' }}>{module.intensity}</span>
                         </span>
                         <span className="block text-[11px] leading-relaxed mt-1" style={{ color: 'var(--muted)' }}>{module.benefit}</span>
+                        {requiredDiscovery && (
+                          <span className="block font-mono text-[10px] mt-1" style={{ color: 'var(--accent)' }}>
+                            Required to discover browser routes and inputs for {discoveryDependents} selected module{discoveryDependents === 1 ? '' : 's'}.
+                          </span>
+                        )}
                         <span className="block text-[10px] leading-relaxed mt-1" style={{ color: 'var(--ghost)' }}>Limit: {module.limitation}</span>
                       </span>
                     </label>

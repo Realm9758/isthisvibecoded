@@ -74,7 +74,7 @@ Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
           <Block title="what needs permission">
             <p>
               The other {DEEP_ONLY_PHASE_IDS.length} modules send real test payloads when the scanner finds a suitable target: injection strings, path
-              traversal, forged headers, GraphQL introspection, and bounded provider-rule reads. Those run
+              traversal, forged headers, GraphQL introspection, bounded provider-rule reads, and—when selected—a six-request GET-only rate-limit sample on one discovered public API route. Those run
               only against a domain whose control the requester has proved, and no plan or payment changes
               that.
             </p>
