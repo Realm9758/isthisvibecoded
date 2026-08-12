@@ -2242,7 +2242,10 @@ function buildChecked(
     item('forced',      'Forced Browsing',               'Unauthenticated access to selected common and passively discovered internal API routes', findingsFor('auth-unprotected'), 'No unauthenticated API endpoints found; all tested paths require authentication', 'forced'),
     item('idor',        'Insecure Direct Object Ref',    'Sequential ID enumeration on /api/users/, /api/orders/, /api/posts/',   findingsFor('idor-'),           'No IDOR detected; API endpoints are absent or inaccessible without auth', 'idor'),
     item('ssrf',        'Server-Side Request Forgery',   '?url=, ?webhook=, ?proxy= probed with a cloud-metadata target',           findingsFor('ssrf-'),           'No cloud-metadata SSRF indicators found in the bounded probes', 'ssrf'),
-    item('traversal',   'Path Traversal',                '../../../etc/passwd in ?file=, ?path=, ?page=, ?template=',             findingsFor('path-traversal'),  'No path traversal; file parameters are absent or correctly validated', 'traversal'),
+    // Described in prose rather than as a literal traversal sequence: this
+    // string is stored with every result, and the WAF in front of the database
+    // rejects a request body carrying a recognisable exploit payload.
+    item('traversal',   'Path Traversal',                'Directory traversal sequences in ?file=, ?path=, ?page=, ?template=',   findingsFor('path-traversal'),  'No path traversal; file parameters are absent or correctly validated', 'traversal'),
     item('components',  'Vulnerable Libraries (A06)',    'Reviewable jQuery, AngularJS, Lodash, and Moment.js version strings in HTML or bundles', findingsFor('outdated-'), 'No reviewable legacy client-library version strings detected', 'components'),
     item('sourcemaps',  'Source Map Exposure',           '.js.map files exposing unminified source, comments, and variable names',  findingsFor('source-maps-'),    'No publicly accessible source map files found; source code is not exposed', 'sourcemaps'),
     item('supabase',    'Supabase Anonymous Access',     'Bounded reads against passively discovered table names',                 findingsFor('supabase-'),       'No anonymous rows returned from the selected discovered tables', 'supabase'),
