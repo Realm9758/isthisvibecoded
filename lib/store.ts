@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { supabase } from './supabase';
-import { FREE_LIFETIME_LIMIT, freeLifetimeKey, remainingFreeScans } from './scan-quota';
+import { freeLifetimeKey, remainingFreeScans } from './scan-quota';
 import { decodeScanResultFromStorage } from './scan-result-storage';
 
 export type Plan = 'free' | 'pro' | 'team';
