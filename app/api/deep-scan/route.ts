@@ -262,6 +262,16 @@ export async function POST(request: Request) {
           created_at: Date.now(),
         });
         if (insertError) {
+          // The generic message below is all the caller sees, so the specific
+          // failure has to reach the logs or the save path is undiagnosable.
+          console.error('Deep scan result could not be saved', {
+            tag: 'deep-scan:persist',
+            reason: insertError.message,
+            code: insertError.code,
+            details: insertError.details,
+            hint: insertError.hint,
+            resultBytes: JSON.stringify(result).length,
+          });
           throw new Error('Scan completed but the result could not be saved. Please try again.');
         }
         persisted = true;
