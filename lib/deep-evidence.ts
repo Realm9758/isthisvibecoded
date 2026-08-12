@@ -19,7 +19,7 @@ export interface GenericClientKeyEvidence {
 
 const SECRET_ENV_NAME = /^(?:JWT_SECRET|API_SECRET|SECRET_KEY|PRIVATE_KEY|STRIPE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY|AWS_SECRET_ACCESS_KEY|[A-Z0-9_]*(?:PASSWORD|PRIVATE_KEY|CLIENT_SECRET|ACCESS_TOKEN|AUTH_TOKEN|SERVICE_ROLE_KEY|API_KEY))$/;
 const PUBLIC_ENV_PREFIX = /^(?:NEXT_PUBLIC_|VITE_|PUBLIC_)/;
-const PLACEHOLDER_VALUE = /^(?:change-?me|example|placeholder|replace-?me|test|your[-_].*|x{8,}|\$\{[^}]+\})$/i;
+const PLACEHOLDER_VALUE = /^(?:change-?me|example|placeholder|replace-?me|test|your[-_].*|x{8,}|\$\{[^}]+\}|\$[A-Z_][A-Z0-9_]*|<%=?[\s\S]*?%>|\{\{[\s\S]*?\}\}|process\.env(?:\.[A-Z_][A-Z0-9_]*|\[["'][^"']+["']\])|ENV(?:\.fetch\s*\([\s\S]*\)|\[["'][^"']+["']\]))$/i;
 
 function meaningfulValue(rawValue: string): string | null {
   const value = rawValue.replace(/^["']|["']$/g, '').trim();

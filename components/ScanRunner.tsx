@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { DeepScanResult, DeepFinding, ScanPhaseProgress } from '@/types/deep-scan';
 import type { ScanPhase } from '@/lib/scan-phases';
-import { formatFindingCount, formatTerminalPhaseLog } from '@/lib/scan-progress-presentation';
+import { explainPhaseReason, formatFindingCount, formatTerminalPhaseLog } from '@/lib/scan-progress-presentation';
 import { apiPath } from '@/lib/site';
 import { MUTATION_GUARD_HEADER, MUTATION_GUARD_VALUE } from '@/lib/request-security-constants';
 
@@ -207,6 +207,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
                 reason = null,
               } = phaseEvent;
               const findings = Array.isArray(phaseEvent.findings) ? phaseEvent.findings : [];
+              const displayReason = explainPhaseReason(reason);
 
               if (!['start', 'progress', 'complete', 'incomplete', 'not_applicable'].includes(status)) {
                 throw new Error('Invalid phase status');
@@ -224,7 +225,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
                   status,
                   findingCount: findings.length,
                   findingSeverities: findings.map(finding => finding?.severity),
-                  reason,
+                  reason: displayReason,
                 }));
               }
 
@@ -244,7 +245,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
                     findingCount: isTerminalPhase(nextStatus) ? findings.length : item.findingCount,
                     coverage,
                     durationMs,
-                    reason,
+                    reason: displayReason,
                   };
                 });
               });

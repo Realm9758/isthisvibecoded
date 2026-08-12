@@ -133,3 +133,21 @@ test('generic client-key candidates are evaluated independently', () => {
   assert.equal(evidence?.redacted, 'A1b2...A1b2');
   assert.equal(findGenericClientKeyEvidence('apiKey="your-api-key-placeholder"'), null);
 });
+
+test('template and environment references are not material credentials', () => {
+  for (const password of [
+    '<%= ENV.fetch("DATABASE_PASSWORD") %>',
+    '${DATABASE_PASSWORD}',
+    '$DATABASE_PASSWORD',
+    'process.env.DATABASE_PASSWORD',
+    'ENV["DATABASE_PASSWORD"]',
+  ]) {
+    const evidence = validateSensitiveFileEvidence(
+      '/config/database.yml',
+      `production:\n  adapter: postgresql\n  database: app\n  username: app\n  password: ${password}`,
+      'text/yaml',
+    );
+    assert.notEqual(evidence?.severity, 'critical', password);
+    assert.match(evidence?.description ?? '', /did not confirm a material database password/i);
+  }
+});

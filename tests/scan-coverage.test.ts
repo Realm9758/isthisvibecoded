@@ -33,6 +33,28 @@ test('a blocked scored check withholds the score', () => {
   assert.equal(scoreIsWithheld([coverage('headers'), blocked]), true);
 });
 
+test('one missed path in a broad inventory does not erase an otherwise useful grade', () => {
+  const partial = coverage('files', {
+    requestsAttempted: 20,
+    requestsCompleted: 20,
+    requestsBlocked: 1,
+    complete: false,
+    reason: 'One path was challenged',
+  });
+  assert.equal(scoreIsWithheld([partial]), false);
+});
+
+test('a materially incomplete scored phase still withholds the grade', () => {
+  const partial = coverage('files', {
+    requestsAttempted: 4,
+    requestsCompleted: 4,
+    requestsBlocked: 2,
+    complete: false,
+    reason: 'Two paths were challenged',
+  });
+  assert.equal(scoreIsWithheld([partial]), true);
+});
+
 test('a blocked unscored check leaves the score intact', () => {
   // A robots.txt disclosure carries no deduction, so missing it does not
   // make the remaining grade flattering.

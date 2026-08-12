@@ -40,7 +40,20 @@ export function describeCoverageFailure(counts: { blocked: number; failed: numbe
 }
 
 export function scoreIsWithheld(checks: readonly CheckCoverage[]): boolean {
-  return checks.some(check => check.applicable !== false && !check.complete && SCORED_PHASE_IDS.has(check.phaseId));
+  return checks.some(check => {
+    if (check.applicable === false || check.complete || !SCORED_PHASE_IDS.has(check.phaseId)) return false;
+    if (check.requestsAttempted <= 0) return true;
+    const unusable = Math.min(
+      check.requestsAttempted,
+      check.requestsFailed + check.requestsBlocked,
+    );
+    const usable = Math.max(0, check.requestsCompleted - unusable);
+    // One denied path in a broad 20-path inventory should remain visible, but
+    // it should not erase an otherwise useful grade. A scored phase with no
+    // usable evidence, or with more than a quarter of its probes unknown, is
+    // materially incomplete and still withholds the number.
+    return usable === 0 || unusable / check.requestsAttempted > 0.25;
+  });
 }
 
 /** Checks that produced no answer, for the report's coverage banner. */

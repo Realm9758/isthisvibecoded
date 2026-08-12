@@ -49,6 +49,13 @@ import {
   type SourceMapAssessment,
 } from '@/lib/source-map-evidence';
 import { assessSriTag } from '@/lib/subresource-integrity';
+import {
+  discoverApplicationSurface,
+  queryInputsFor,
+  type ApplicationQueryInput,
+  type ApplicationSurface,
+} from '@/lib/application-inputs';
+import { classifyUnauthenticatedJson } from '@/lib/unauthenticated-json';
 
 const TIMEOUT = 8000;
 const SCAN_BUDGET_MS = 42_000;
@@ -273,8 +280,11 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
           && body === undefined
           && isCanonicalHostPair(initialHostname, redirectHostname);
         if (!canAdoptCanonical) {
-          incrementCoverage(context, 'requestsBlocked');
-          return null;
+          // The redirect response itself is usable evidence. We deliberately
+          // stop at the verified-host boundary without sending anything to
+          // the other host; treating that safe stop as a blocked request made
+          // ordinary login/CDN redirects poison otherwise useful phases.
+          return res;
         }
         authorizedHostnames.add(redirectHostname);
       }
@@ -588,7 +598,7 @@ async function checkSensitiveFiles(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── CORS misconfiguration ─────────────────────────────────────────────────
 
-async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
+async function checkCORS(baseUrl: string, discoveredRoutes: readonly string[] = []): Promise<DeepFinding[]> {
   const findings: DeepFinding[] = [];
 
   // Test null origin
@@ -612,7 +622,15 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
   }
 
   // Test CORS on API endpoints, where a wildcard is actually dangerous
-  const apiPaths = ['/api', '/api/user', '/api/me', '/api/auth', '/api/data'];
+  const discoveredApiPaths = discoveredRoutes.flatMap(route => {
+    try {
+      const pathname = new URL(route, baseUrl).pathname;
+      return /^\/api\/[A-Za-z0-9_./-]{1,140}$/.test(pathname) ? [pathname] : [];
+    } catch {
+      return [];
+    }
+  });
+  const apiPaths = [...new Set([...discoveredApiPaths, '/api', '/api/me'])].slice(0, 7);
   for (const path of apiPaths) {
     const apiRes = await safeFetch(`${baseUrl}${path}`, {
       headers: { Origin: 'https://evil-attacker.com' },
@@ -663,14 +681,14 @@ async function checkCORS(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── Security headers ──────────────────────────────────────────────────────
 
-async function checkSecurityHeaders(res: Response | null): Promise<DeepFinding[]> {
+async function checkSecurityHeaders(res: Response | null, pageUrl: string): Promise<DeepFinding[]> {
   if (!res) return [];
 
   const responseHeaders: Record<string, string> = {};
   res.headers.forEach((value, name) => {
     responseHeaders[name.toLowerCase()] = value;
   });
-  const assessment = analyzeSecurityHeaders(responseHeaders, true);
+  const assessment = analyzeSecurityHeaders(responseHeaders, new URL(pageUrl).protocol === 'https:');
   function headerSeverity(name: string, penalty: number): DeepFinding['severity'] {
     if (name === 'Content-Security-Policy') return penalty >= 20 ? 'medium' : 'low';
     if (
@@ -1042,12 +1060,15 @@ const SQL_ERROR_PATTERNS = [
   /Microsoft.*ODBC.*SQL/i, /Warning.*mysql/i, /valid MySQL result/i,
 ];
 
-async function checkSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
-  // Look for forms or query parameters in common endpoints
-  const testPaths = ['/?id=', '/search?q=', '/product?id=', '/user?id=', '/page?id=', '/item?id='];
+function inputUrl(input: ApplicationQueryInput, value: string, parameter = input.parameter): string {
+  const url = new URL(input.url);
+  url.searchParams.set(parameter, value);
+  return url.href;
+}
 
-  for (const path of testPaths) {
-    const controlUrl = `${baseUrl}${path}${encodeURIComponent('ironclad-control-value')}`;
+async function checkSQLInjection(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
+  for (const input of inputs) {
+    const controlUrl = inputUrl(input, 'ironclad-control-value');
     const controlRes = await safeFetch(controlUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
@@ -1055,7 +1076,7 @@ async function checkSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
     const controlText = await readDifferentialControl(controlRes, 'SQL injection');
     if (controlText === null) continue;
     for (const payload of SQL_PAYLOADS) {
-      const url = `${baseUrl}${path}${encodeURIComponent(payload)}`;
+      const url = inputUrl(input, payload);
       const res = await safeFetch(url, {
         maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
         forbiddenIsBlocked: true,
@@ -1069,7 +1090,7 @@ async function checkSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
           category: 'info-disclosure',
           severity: 'medium',
           title: 'Database Error Disclosed After Crafted Input',
-          description: 'A SQL-shaped error string appeared after crafted input. This may expose implementation details, but one error response does not prove injectable query execution or database compromise without a differential control and exploit confirmation.',
+          description: `The discovered “${input.parameter}” input produced a database-specific error that a benign value did not. This is evidence of unsafe error handling around that real application input, but it does not yet prove that arbitrary SQL executed.`,
           evidence: `GET ${url}\nA SQL error signature appeared only after crafted input. Response content was not retained.`,
           remediation: 'Use parameterised queries / prepared statements. Never concatenate user input into SQL strings. Enable generic error pages in production.',
           url,
@@ -1123,12 +1144,11 @@ async function checkErrorVerbosity(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── Open redirect ─────────────────────────────────────────────────────────
 
-async function checkOpenRedirect(baseUrl: string): Promise<DeepFinding[]> {
-  const REDIRECT_PARAMS = ['?redirect=', '?url=', '?next=', '?return=', '?returnUrl=', '?goto=', '?continue='];
+async function checkOpenRedirect(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
   const TARGET = 'https://evil-attacker-test.com';
 
-  for (const param of REDIRECT_PARAMS) {
-    const url = `${baseUrl}${param}${encodeURIComponent(TARGET)}`;
+  for (const input of inputs) {
+    const url = inputUrl(input, TARGET);
     const res = await safeFetch(url, { redirect: 'manual' });
     if (!res) continue;
     if (res.status >= 300 && res.status < 400) {
@@ -1145,7 +1165,7 @@ async function checkOpenRedirect(baseUrl: string): Promise<DeepFinding[]> {
           category: 'authentication',
           severity: 'medium',
           title: 'Open Redirect Vulnerability',
-          description: `The ${param.replace('?','').replace('=','')} parameter is not validated and redirects to arbitrary external URLs. Attackers use this for phishing by sending links that appear to originate from your domain.`,
+          description: `The discovered “${input.parameter}” parameter redirected to an arbitrary external URL. Attackers can use links on your trusted domain as a convincing first step in phishing.`,
           evidence: `GET ${url}\n→ ${res.status} Location: ${loc}`,
           remediation: 'Validate redirect URLs against an allowlist of trusted destinations. Reject any URL pointing outside your domain.',
           url,
@@ -1312,13 +1332,11 @@ async function checkVibeCodePatterns(baseUrl: string, html: string): Promise<Dee
 
 // ── HTML reflection review ────────────────────────────────────────────────
 
-async function checkXSS(baseUrl: string): Promise<DeepFinding[]> {
-  const testPaths = ['/?q=', '/search?q=', '/?s=', '/?name=', '/?message='];
-
-  for (const path of testPaths) {
+async function checkXSS(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
+  for (const input of inputs) {
     const marker = `ironclad-${crypto.randomUUID()}`;
     const markup = `<ironclad-probe data-id="${marker}"></ironclad-probe>`;
-    const controlUrl = `${baseUrl}${path}${encodeURIComponent(`control-${marker}`)}`;
+    const controlUrl = inputUrl(input, `control-${marker}`);
     const controlRes = await safeFetch(controlUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
@@ -1326,7 +1344,7 @@ async function checkXSS(baseUrl: string): Promise<DeepFinding[]> {
     const controlText = await readDifferentialControl(controlRes, 'HTML reflection');
     if (controlText === null) continue;
 
-    const url = `${baseUrl}${path}${encodeURIComponent(markup)}`;
+    const url = inputUrl(input, markup);
     const res = await safeFetch(url, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
@@ -1345,7 +1363,7 @@ async function checkXSS(baseUrl: string): Promise<DeepFinding[]> {
         category: 'injection',
         severity: 'info',
         title: 'Unencoded HTML Element Reflection Needs Context Review',
-        description: `A unique inert HTML element sent to ${path} reappeared unencoded in an HTML response and was absent from a benign control. This confirms markup reflection, not script execution. Review the browser parsing context before classifying it as XSS.`,
+        description: `A unique inert HTML element sent through the discovered “${input.parameter}” input reappeared unencoded in an HTML response and was absent from a benign control. This confirms markup reflection, not script execution. Review the browser parsing context before classifying it as XSS.`,
         evidence: `GET ${url}\nResponse contained the unique inert element only after the crafted request`,
         remediation: 'Apply context-appropriate output encoding to untrusted values. Keep a restrictive Content-Security-Policy as defence in depth, and validate the browser context before assigning exploit impact.',
         url,
@@ -1392,47 +1410,6 @@ async function checkSRI(baseUrl: string, html: string): Promise<DeepFinding[]> {
 
 // ── Forced browsing / unauthenticated API access (A01) ───────────────────
 
-function classifyUnauthenticatedJson(body: string): 'high' | 'medium' | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    return null;
-  }
-
-  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    const record = parsed as Record<string, unknown>;
-    const keys = Object.keys(record);
-    if (keys.length <= 4 && keys.some(key => /^(?:error|message|status|code)$/i.test(key))) return null;
-  }
-
-  let severity: 'high' | 'medium' | null = null;
-  const accountSignals = new Set<string>();
-  const ignoredValue = /^(?:required|missing|invalid|unauthori[sz]ed|forbidden|redacted|null|none|false|true|\*+)$/i;
-  function visit(value: unknown, depth: number): void {
-    if (depth > 3 || value === null || typeof value !== 'object') return;
-    const entries = Array.isArray(value)
-      ? value.slice(0, 20).map((item, index) => [String(index), item] as const)
-      : Object.entries(value as Record<string, unknown>).slice(0, 50);
-    for (const [key, child] of entries) {
-      const hasMaterialValue = typeof child === 'string'
-        ? child.trim().length > 0 && !ignoredValue.test(child.trim())
-        : typeof child === 'number'
-          || (Array.isArray(child) && child.length > 0)
-          || (child !== null && typeof child === 'object' && Object.keys(child).length > 0);
-      if (hasMaterialValue && /(?:password|passwd|secret|private[_-]?key|access[_-]?token|service[_-]?role)/i.test(key)) {
-        severity = 'high';
-      } else if (hasMaterialValue && /^(?:email|phone|address|full_?name|user_?id|users)$/i.test(key)) {
-        accountSignals.add(key.toLowerCase().replace(/_/g, ''));
-      }
-      visit(child, depth + 1);
-    }
-  }
-  visit(parsed, 0);
-  if (severity !== 'high' && accountSignals.size >= 2) severity = 'medium';
-  return severity;
-}
-
 async function checkForcedBrowsing(baseUrl: string, discoveredRoutes: string[] = []): Promise<DeepFinding[]> {
   const defaultPaths = [
     '/api/admin', '/api/users', '/api/user/list', '/api/orders',
@@ -1477,31 +1454,58 @@ async function checkForcedBrowsing(baseUrl: string, discoveredRoutes: string[] =
 
 // IDOR: insecure direct object reference (A01)
 
-async function checkIDOR(baseUrl: string): Promise<DeepFinding[]> {
-  const ID_PATHS = [
-    '/api/users/', '/api/user/', '/api/orders/', '/api/order/',
-    '/api/posts/', '/api/items/', '/api/records/',
-  ];
+async function checkIDOR(baseUrl: string, discoveredRoutes: readonly string[]): Promise<DeepFinding[]> {
+  const candidates = new Set<string>();
+  for (const route of discoveredRoutes) {
+    let pathname: string;
+    try {
+      pathname = new URL(route, baseUrl).pathname;
+    } catch {
+      continue;
+    }
+    if (!/^\/api\/[A-Za-z0-9_./-]{1,140}$/.test(pathname) || pathname.includes('..')) continue;
+    if (/\/\d+$/.test(pathname)) candidates.add(pathname.replace(/\/\d+$/, '/'));
+    else if (/\/(?:users?|orders?|posts?|items?|records?|accounts?|profiles?)\/?$/i.test(pathname)) {
+      candidates.add(`${pathname.replace(/\/$/, '')}/`);
+    }
+    if (candidates.size >= 4) break;
+  }
 
-  for (const path of ID_PATHS) {
-    const [res1, res2] = await Promise.all([
+  const parseRecord = (text: string): unknown => {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (!parsed || typeof parsed !== 'object') return null;
+      const source = JSON.stringify(parsed);
+      return /"(?:id|email|name|title|user_id|account_id)"\s*:/i.test(source) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  for (const path of candidates) {
+    const [res1, res2, absentRes] = await Promise.all([
       safeFetch(`${baseUrl}${path}1`, { headers: { Accept: 'application/json' } }),
       safeFetch(`${baseUrl}${path}2`, { headers: { Accept: 'application/json' } }),
+      safeFetch(`${baseUrl}${path}99999999`, { headers: { Accept: 'application/json' } }),
     ]);
     if (!res1 || !res2 || res1.status !== 200 || res2.status !== 200) continue;
-    const [t1, t2] = await Promise.all([readProbeText(res1), readProbeText(res2)]);
-    const hasData = (t: string) =>
-      (t.includes('"id"') || t.includes('"email"') || t.includes('"name"')) &&
-      (t.trimStart().startsWith('{') || t.trimStart().startsWith('['));
-    if (!hasData(t1) || !hasData(t2)) continue;
+    const [t1, t2, absentText] = await Promise.all([
+      readProbeText(res1),
+      readProbeText(res2),
+      absentRes?.status === 200 ? readProbeText(absentRes) : Promise.resolve(''),
+    ]);
+    const record1 = parseRecord(t1);
+    const record2 = parseRecord(t2);
+    if (!record1 || !record2 || JSON.stringify(record1) === JSON.stringify(record2)) continue;
+    if (absentText && parseRecord(absentText)) continue;
 
     return [{
       id: 'idor-sequential-ids',
       category: 'authentication',
       severity: 'info',
       title: `Sequential Public Object Responses Need Authorization Review: ${path}{id}`,
-      description: `${path}1 and ${path}2 both return object-like data without authentication. This can be intentional public data and does not establish IDOR without authenticated users and ownership expectations; review whether either record should be access-controlled.`,
-      evidence: `GET ${baseUrl}${path}1 → 200 JSON\nGET ${baseUrl}${path}2 → 200 JSON\nBoth return objects with id/email/name fields`,
+      description: `Two distinct sequential records were returned without authentication from a discovered API collection, while a far-away control ID did not return another record. This may be intentional public data and does not establish IDOR without ownership expectations; review whether either record should be access-controlled.`,
+      evidence: `GET ${baseUrl}${path}1 → 200 JSON record\nGET ${baseUrl}${path}2 → 200 different JSON record\nGET ${baseUrl}${path}99999999 → no comparable record`,
       remediation: 'Check ownership on every resource request, verifying the authenticated user owns the record before returning it. Return 403 for resources belonging to other users. Use non-sequential UUIDs as identifiers.',
       url: `${baseUrl}${path}1`,
     }];
@@ -1512,14 +1516,13 @@ async function checkIDOR(baseUrl: string): Promise<DeepFinding[]> {
 
 // SSRF: server-side request forgery (A10)
 
-async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
-  const SSRF_PARAMS = ['?url=', '?webhook=', '?callback=', '?proxy=', '?fetch=', '?link=', '?image=', '?src='];
+async function checkSSRF(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
   const METADATA_TARGET = 'http://169.254.169.254/latest/meta-data/';
   const METADATA_SIGNATURES = [/ami-id|instance-id|security-credentials|iam\//i];
 
-  for (const param of SSRF_PARAMS) {
+  for (const input of inputs) {
     // Cloud metadata probe
-    const metaUrl = `${baseUrl}${param}${encodeURIComponent(METADATA_TARGET)}`;
+    const metaUrl = inputUrl(input, METADATA_TARGET);
     const metaRes = await safeFetch(metaUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
@@ -1527,7 +1530,7 @@ async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
     if (metaRes?.status === 200) {
       const text = await readBoundedProbeText(metaRes, DIFFERENTIAL_BODY_BYTES);
       if (text && METADATA_SIGNATURES.some(signature => signature.test(text))) {
-        const controlUrl = `${baseUrl}${param}${encodeURIComponent('ironclad-control-value')}`;
+        const controlUrl = inputUrl(input, 'ironclad-control-value');
         const controlRes = await safeFetch(controlUrl, {
           maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
           forbiddenIsBlocked: true,
@@ -1540,7 +1543,7 @@ async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
           category: 'authentication',
           severity: 'high',
           title: 'Differential Cloud-Metadata-Like Response',
-          description: `The ${param.replace('?', '').replace('=', '')} parameter produced cloud-metadata markers that were absent from a control request. This is strong SSRF evidence, but confirm server-side egress and returned data in logs or a consented out-of-band test before treating credential access as proven.`,
+          description: `The discovered “${input.parameter}” URL input produced cloud-metadata markers that were absent from a benign control. This is strong server-side request evidence, but confirm egress and returned data in logs before treating credential access as proven.`,
           evidence: `GET ${metaUrl}\n→ Response contains metadata-like markers absent from the control response`,
           remediation: 'Validate and allowlist outbound URLs, resolve and pin approved public addresses, block private/link-local destinations at the egress layer, and require IMDSv2 for AWS workloads.',
           url: metaUrl,
@@ -1559,12 +1562,11 @@ async function checkSSRF(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── Path traversal (A01 / A05) ────────────────────────────────────────────
 
-async function checkPathTraversal(baseUrl: string): Promise<DeepFinding[]> {
-  const FILE_PARAMS = ['?file=', '?path=', '?page=', '?template=', '?include=', '?doc=', '?read=', '?view='];
+async function checkPathTraversal(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
   const PAYLOADS = ['../../../etc/passwd', '..%2F..%2F..%2Fetc%2Fpasswd', '....//....//....//etc/passwd'];
 
-  for (const param of FILE_PARAMS) {
-    const controlUrl = `${baseUrl}${param}${encodeURIComponent('ironclad-control-file')}`;
+  for (const input of inputs) {
+    const controlUrl = inputUrl(input, 'ironclad-control-file');
     const controlRes = await safeFetch(controlUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
@@ -1572,7 +1574,7 @@ async function checkPathTraversal(baseUrl: string): Promise<DeepFinding[]> {
     const controlText = await readDifferentialControl(controlRes, 'Path traversal');
     if (controlText === null) continue;
     for (const payload of PAYLOADS) {
-      const url = `${baseUrl}${param}${encodeURIComponent(payload)}`;
+      const url = inputUrl(input, payload);
       const res = await safeFetch(url, {
         maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
         forbiddenIsBlocked: true,
@@ -1591,7 +1593,7 @@ async function checkPathTraversal(baseUrl: string): Promise<DeepFinding[]> {
           category: 'exposed-files',
           severity: 'critical',
           title: 'Path Traversal: /etc/passwd Read Successfully',
-          description: `The ${param.replace('?', '').replace('=', '')} parameter returned Unix account-file records only for a traversal-shaped input. This confirms that the selected local file was read; it does not by itself establish access to every file on the host.`,
+          description: `The discovered “${input.parameter}” file/path input returned Unix account-file records only for a traversal-shaped value. This confirms that the selected local file was read; it does not by itself establish access to every file on the host.`,
           evidence: `GET ${url}\n→ Response contains /etc/passwd (root:x:0:0 matched)`,
           remediation: 'Never construct file paths from user input. Validate against an allowlist of permitted files. Use realpath() and confirm the result is within the expected directory.',
           url,
@@ -2157,6 +2159,8 @@ async function checkFirebaseExposure(artifacts: ClientArtifacts): Promise<DeepFi
           url: endpoint.origin,
         });
       }
+    } else {
+      markCurrentPhaseIncomplete('A Firebase Storage bucket was advertised, but its hostname was not valid enough to probe safely');
     }
   }
   return findings;
@@ -2373,7 +2377,11 @@ async function checkAPIDocumentation(baseUrl: string): Promise<DeepFinding[]> {
 
 // ── NoSQL injection ───────────────────────────────────────────────────────
 
-const NOSQL_PAYLOADS = ['[$gt]=', '[$ne]=invalid', '[$regex]=.*'];
+const NOSQL_PAYLOADS = [
+  { operator: '$gt', value: '' },
+  { operator: '$ne', value: 'invalid' },
+  { operator: '$regex', value: '.*' },
+];
 
 const NOSQL_ERROR_PATTERNS = [
   /MongoError/i,
@@ -2383,11 +2391,9 @@ const NOSQL_ERROR_PATTERNS = [
   /\$gt.*is not/i,
 ];
 
-async function checkNoSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
-  const testPaths = ['/api/user', '/api/login', '/api/data', '/api/search', '/api/users'];
-
-  for (const path of testPaths) {
-    const controlUrl = `${baseUrl}${path}?id=ironclad-control-value`;
+async function checkNoSQLInjection(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
+  for (const input of inputs) {
+    const controlUrl = inputUrl(input, 'ironclad-control-value');
     const controlRes = await safeFetch(controlUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
@@ -2395,7 +2401,7 @@ async function checkNoSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
     const controlText = await readDifferentialControl(controlRes, 'NoSQL injection');
     if (controlText === null) continue;
     for (const payload of NOSQL_PAYLOADS) {
-      const url = `${baseUrl}${path}?id${payload}`;
+      const url = inputUrl(input, payload.value, `${input.parameter}[${payload.operator}]`);
       const res = await safeFetch(url, {
         maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
         forbiddenIsBlocked: true,
@@ -2409,7 +2415,7 @@ async function checkNoSQLInjection(baseUrl: string): Promise<DeepFinding[]> {
           category: 'info-disclosure',
           severity: 'medium',
           title: 'Database Error Disclosed After NoSQL-Shaped Input',
-          description: 'A MongoDB/Mongoose-shaped error string appeared after crafted input. This is useful error-disclosure evidence, but it does not prove operator injection, authentication bypass, or data extraction without a differential exploit.',
+          description: `The discovered “${input.parameter}” input produced a MongoDB/Mongoose-specific error after an operator-shaped value, while its benign control did not. This is useful error evidence, but it does not prove authentication bypass or data extraction.`,
           evidence: `GET ${url}\nA MongoDB error signature appeared only after crafted input. Response content was not retained.`,
           remediation: 'Sanitise all user input before using it in database queries. Reject keys starting with $. Use Mongoose with strict schemas and validate input shapes before querying.',
           url,
@@ -2464,12 +2470,11 @@ async function checkHostHeaderInjection(baseUrl: string): Promise<DeepFinding[]>
 
 // ── CRLF injection ────────────────────────────────────────────────────────
 
-async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
-  const CRLF_PAYLOAD = 'test%0d%0aX-Injected%3A%20malicious';
-  const testPaths = ['/?q=', '/?name=', '/?search=', '/?redirect='];
+async function checkCRLFInjection(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
+  const CRLF_PAYLOAD = 'test\r\nX-Injected: malicious';
 
-  for (const path of testPaths) {
-    const url = `${baseUrl}${path}${CRLF_PAYLOAD}`;
+  for (const input of inputs) {
+    const url = inputUrl(input, CRLF_PAYLOAD);
     const res = await safeFetch(url, { redirect: 'manual', forbiddenIsBlocked: true });
     if (!res) continue;
 
@@ -2479,7 +2484,7 @@ async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
         category: 'injection',
         severity: 'high',
         title: 'CRLF Injection: Header Injection Confirmed',
-        description: `A CRLF sequence in the ${path} parameter was reflected into HTTP response headers. Attackers can inject arbitrary headers, set cookies, or split the HTTP response to perform session fixation, cache poisoning, or XSS.`,
+        description: `A newline sequence sent through the discovered “${input.parameter}” input created a new HTTP response header. This can enable cookie injection, cache poisoning, or response splitting.`,
         evidence: `GET ${url}\n→ X-Injected header appeared in response headers`,
         remediation: 'Strip or reject \\r and \\n characters from any user input reflected into HTTP headers or Location values. Modern frameworks handle this automatically; ensure you are not constructing raw header strings from user input.',
         url,
@@ -2494,7 +2499,7 @@ async function checkCRLFInjection(baseUrl: string): Promise<DeepFinding[]> {
         category: 'injection',
         severity: 'info',
         title: 'Decoded Newline Reflected in Response Body',
-        description: `The decoded test string appeared in the response body at ${path}. Body reflection does not establish response-header injection or HTTP response splitting; retain this only as input-handling context.`,
+        description: `The decoded newline test string appeared in the response body through “${input.parameter}”. Body reflection does not establish response-header injection or HTTP response splitting; retain this only as input-handling context.`,
         evidence: `GET ${url}\n→ Decoded newline text reflected in response body`,
         remediation: 'Apply output encoding appropriate to the body context. Separately reject carriage returns/newlines in values used for response headers.',
         url,
@@ -2581,11 +2586,11 @@ function buildChecked(
     item('headers',    'Security Headers',             'CSP, HSTS, X-Frame-Options, XCTO, Referrer-Policy',                     findingsFor('header-'), 'All critical security headers present and correctly configured', 'headers'),
     item('cors',       'CORS Policy',                  'No wildcard+credentials or arbitrary origin reflection on API routes',   findingsFor('cors-', 'crossdomain-'), 'CORS policy is correctly restricted, with no dangerous origin reflection found', 'cors'),
     item('cookies',    'Cookie Security Flags',        'HttpOnly, Secure, SameSite on session/auth cookies',                    findingsFor('cookie-'), 'All cookies have correct HttpOnly, Secure, and SameSite flags', 'cookies'),
-    item('sqli',       'SQL Error Differential',       'SQL-shaped inputs on selected parameters, compared with benign controls', findingsFor('sqli-'), 'No differential SQL error signatures were observed', 'sqli'),
-    item('xss',        'HTML Reflection Review',       'Unique markup-shaped input on selected search/query parameters',         findingsFor('xss-'), 'No unencoded markup-shaped reflection was observed', 'xss'),
+    item('sqli',       'SQL Input Safety',              'SQL-shaped values on discovered public GET inputs, compared with benign controls', findingsFor('sqli-'), 'No differential SQL error signatures were observed', 'sqli'),
+    item('xss',        'HTML Input Handling',           'Unique markup-shaped values on discovered public GET inputs',            findingsFor('xss-'), 'No unencoded markup-shaped reflection was observed', 'xss'),
     item('vibe',       'Exposed Secrets in Client Code', 'Supabase secret keys, Stripe secrets, and API credentials in browser-delivered HTML or bundles', findingsFor('vibe-'), 'No exposed secrets or dangerous keys found in browser-delivered code', 'vibe'),
     item('files',      'Sensitive File Exposure',      '.env, .git, wp-config.php, phpinfo.php, backup.sql, .htaccess',         findingsFor('exposed-'), 'No sensitive files or paths accessible publicly', 'files'),
-    item('admin',      'Admin Panel Exposure',         '/wp-admin, /phpmyadmin, /cpanel, /adminpanel and other software panels', findingsFor('admin-'), 'No unauthenticated admin panels found at tested paths', 'admin'),
+    item('admin',      'Admin Access',                  'Common management paths, requiring privileged-interface evidence rather than a login page', findingsFor('admin-'), 'No unauthenticated admin panels found at tested paths', 'admin'),
     item('dirlist',    'Directory Listing',            '/uploads, /static, /assets, /files, /backup, checking for open indexes',            findingsFor('directory-'), 'No open directory listings detected', 'dirlist'),
     item('redirect',   'Open Redirect',                '?redirect=, ?url=, ?next=, ?return=, ?goto= hijacking',                 findingsFor('open-redirect'), 'No open redirect vectors found; redirect params are absent or validated', 'redirect'),
     item('errors',     'Error Verbosity',              'Stack traces, file paths, framework versions in error pages',            findingsFor('error-'), 'Error responses use generic messages, disclosing no internals', 'errors'),
@@ -2593,13 +2598,13 @@ function buildChecked(
     item('serverstatus', 'Apache Server Status',        'Confirmed mod_status content at /server-status', findingsFor('server-status-'), 'No Apache mod_status response was observed', 'serverstatus'),
     item('sri',        'Subresource Integrity',        'Integrity hashes and crossorigin settings on immutable external scripts and stylesheets', findingsFor('sri-'), 'No missing or invalid integrity evidence was observed on selected immutable external resources', 'sri'),
     item('robots',      'robots.txt Path Disclosure',    'Sensitive admin/backup/config paths in Disallow entries',              findingsFor('robots-'),    'robots.txt does not reveal sensitive internal paths', 'robots'),
-    item('forced',      'Forced Browsing',               'Unauthenticated access to selected common and passively discovered internal API routes', findingsFor('auth-unprotected'), 'No unauthenticated data-exposure evidence was observed on selected routes', 'forced'),
-    item('idor',        'Sequential Object Exposure',    'Reviewing unauthenticated sequential objects on selected API paths',     findingsFor('idor-'),           'No reviewable sequential public object responses were observed', 'idor'),
-    item('ssrf',        'Server-Side Request Forgery',   '?url=, ?webhook=, ?proxy= probed with a cloud-metadata target',           findingsFor('ssrf-'),           'No cloud-metadata SSRF indicators found in the bounded probes', 'ssrf'),
+    item('forced',      'Unauthenticated API Access',     'Material account or secret data on passively discovered and selected API routes', findingsFor('auth-unprotected'), 'No unauthenticated data-exposure evidence was observed on selected routes', 'forced'),
+    item('idor',        'Public Object Access',           'Reviewing selected public object responses for ownership-sensitive data', findingsFor('idor-'), 'No reviewable sequential public object responses were observed', 'idor'),
+    item('ssrf',        'Server-Side URL Fetching',       'Discovered URL-like inputs probed with a cloud-metadata target and benign control', findingsFor('ssrf-'), 'No cloud-metadata SSRF indicators found in the bounded probes', 'ssrf'),
     // Described in prose rather than as a literal traversal sequence: this
     // string is stored with every result, and the WAF in front of the database
     // rejects a request body carrying a recognisable exploit payload.
-    item('traversal',   'Path Traversal',                'Directory traversal sequences in selected file-like parameters with benign controls', findingsFor('path-traversal'), 'No differential local-file signature was observed', 'traversal'),
+    item('traversal',   'File Path Handling',             'Directory traversal sequences in discovered file-like parameters with benign controls', findingsFor('path-traversal'), 'No differential local-file signature was observed', 'traversal'),
     item('components',  'Library Version Review',        'Reviewable jQuery, AngularJS, Lodash, and Moment.js version strings in HTML or bundles', findingsFor('outdated-'), 'No reviewable legacy client-library version strings detected', 'components'),
     item('sourcemaps',  'Source Map Exposure',           'Source map files that may expose source paths, mappings, or embedded sources', findingsFor('source-maps-'), 'No readable source-map evidence was observed for selected scripts', 'sourcemaps'),
     item('supabase',    'Supabase Anonymous Access',     'Bounded reads against passively discovered table names',                 findingsFor('supabase-'),       'No anonymous rows returned from the selected discovered tables', 'supabase'),
@@ -2608,9 +2613,9 @@ function buildChecked(
     item('nextauth',    'Next.js Middleware Auth',       'Differential middleware-bypass testing on routes from the public build manifest', findingsFor('next-middleware-'), 'No protected-route bypass response was observed', 'nextauth'),
     item('graphql',     'GraphQL Introspection',         '{__schema} query on /graphql, /api/graphql, /gql, /query',               findingsFor('graphql-'),        'GraphQL introspection disabled or no GraphQL endpoint found', 'graphql'),
     item('apidocs',     'API Documentation Exposure',    '/swagger, /openapi.json, /api-docs, /redoc, checking for public schema exposure',    findingsFor('api-docs-'),       'No public API documentation found at tested paths', 'apidocs'),
-    item('nosql',       'NoSQL Error Differential',      'MongoDB-shaped operator inputs compared with benign controls',            findingsFor('nosql-'),          'No differential MongoDB error signatures were observed', 'nosql'),
+    item('nosql',       'NoSQL Input Safety',             'MongoDB-shaped operator values on discovered public API inputs compared with benign controls', findingsFor('nosql-'), 'No differential MongoDB error signatures were observed', 'nosql'),
     item('hostheader',  'Host Header Handling',          'Forged Host value reflected in a successful body or external Location header', findingsFor('host-header-'), 'No forged Host reflection or external redirect was observed', 'hostheader'),
-    item('crlf',        'CRLF Injection',                '%0d%0a in query params reflected into response headers',                 findingsFor('crlf-'),           'No CRLF injection; newline sequences are stripped or encoded correctly', 'crlf'),
+    item('crlf',        'Response Header Injection',      'Newline values in discovered response-shaping inputs creating unintended headers', findingsFor('crlf-'), 'No response-header injection evidence was observed', 'crlf'),
   ];
 }
 
@@ -2673,7 +2678,8 @@ export async function deepScanDomain(
 
   return scanRequestContext.run(requestContext, async () => {
   const start = Date.now();
-  let baseUrl = parsedStartUrl.href;
+  let pageUrl = parsedStartUrl.href;
+  let baseUrl = parsedStartUrl.origin;
   const allFindings: DeepFinding[] = [];
 
   const checkCoverage: CheckCoverage[] = [];
@@ -2791,7 +2797,7 @@ export async function deepScanDomain(
 
   const initStartedAt = Date.now();
   emitPhase(SCAN_PHASES[0], [], { status: 'start', durationMs: 0, reason: null });
-  const mainRes = await safeFetch(baseUrl, {
+  const mainRes = await safeFetch(pageUrl, {
     redirect: 'follow',
     allowCanonicalRedirect: true,
     maxResponseBytes: MAX_PROBE_BODY_BYTES,
@@ -2818,23 +2824,30 @@ export async function deepScanDomain(
     reason: null,
   });
   const finalMainUrl = finalResponseUrls.get(mainRes);
-  if (finalMainUrl) baseUrl = new URL(finalMainUrl).origin;
+  if (finalMainUrl) {
+    const finalPage = new URL(finalMainUrl);
+    finalPage.search = '';
+    finalPage.hash = '';
+    pageUrl = finalPage.href;
+  }
+  baseUrl = new URL(pageUrl).origin;
 
   let clientSource = mainHtml;
   let clientArtifacts = extractClientArtifactsFromSources([mainHtml]);
   let clientBundles: ClientBundleSource[] = [];
+  let applicationSurface: ApplicationSurface = discoverApplicationSurface(pageUrl, [mainHtml]);
 
   // Builder provenance is context for the report, never a finding. Knowing a
   // page was generated by Lovable explains a pattern of results; it is not
   // itself a weakness, so it carries no severity and no deduction.
-  const provenance = readProvenance(mainHtml, mainRes, baseUrl);
+  const provenance = readProvenance(mainHtml, mainRes, pageUrl);
 
 
   await run('vibe', async () => {
     // Surface-legal discovery: read only exact-origin script assets already
     // referenced by the page. Transport is capped at 8 x 512 KB; at most
     // 2 MB is retained for evidence extraction and later local checks.
-    const scriptUrls = extractSameOriginScriptUrls(mainHtml, baseUrl, 8);
+    const scriptUrls = extractSameOriginScriptUrls(mainHtml, pageUrl, 8);
     let aggregateBundleBytes = 0;
     const bundleSources: ClientBundleSource[] = [];
     const bundleResults = await mapWithConcurrency(scriptUrls, 3, async scriptUrl => {
@@ -2865,16 +2878,66 @@ export async function deepScanDomain(
     const bundleSourceTexts = bundleSources.map(bundle => bundle.source);
     clientSource = [mainHtml, ...bundleSourceTexts].join('\n');
     clientArtifacts = extractClientArtifactsFromSources([mainHtml, ...bundleSourceTexts]);
-    return checkVibeCodePatterns(baseUrl, clientSource);
+    applicationSurface = discoverApplicationSurface(pageUrl, [mainHtml, ...bundleSourceTexts]);
+    return checkVibeCodePatterns(pageUrl, clientSource);
+  });
+  const reflectionInputs = queryInputsFor(applicationSurface, 'reflection');
+  const sqlInputs = queryInputsFor(applicationSurface, 'sql');
+  const redirectInputs = queryInputsFor(applicationSurface, 'redirect');
+  const ssrfInputs = queryInputsFor(applicationSurface, 'ssrf');
+  const traversalInputs = queryInputsFor(applicationSurface, 'traversal');
+  const noSqlInputs = queryInputsFor(applicationSurface, 'nosql')
+    .filter(input => new URL(input.url).pathname.startsWith('/api/'));
+  const crlfInputs = queryInputsFor(applicationSurface, 'crlf');
+  const loginFormCount = applicationSurface.forms.filter(form => form.purpose === 'login').length;
+  const postFieldNames = applicationSurface.forms
+    .filter(form => form.method === 'POST')
+    .flatMap(form => form.fields.map(field => field.name));
+  const hasPostField = (pattern: RegExp) => postFieldNames.some(name => pattern.test(name));
+  const postReflectionCandidate = hasPostField(/^(?:q|query|search|s|name|message|comment|title|term|keyword|email)$/i);
+  const postRedirectCandidate = hasPostField(/^(?:redirect|redirect_url|return|return_url|returnUrl|next|url|goto|continue|destination|dest)$/i);
+  const postSsrfCandidate = hasPostField(/^(?:url|uri|webhook|callback|proxy|fetch|link|image|src|endpoint|feed)$/i);
+  const postTraversalCandidate = hasPostField(/^(?:file|filename|path|page|template|include|doc|document|read|view|download)$/i);
+  const postCrlfCandidate = hasPostField(/^(?:q|query|search|name|redirect|return|next|url|filename|download)$/i);
+  const discoveredApplicationRoutes = [...new Set([
+    ...applicationSurface.sameOriginRoutes,
+    ...clientArtifacts.routeLiterals,
+  ])];
+  const hasObjectRoute = discoveredApplicationRoutes.some(route => {
+    try {
+      const pathname = new URL(route, baseUrl).pathname;
+      return /^\/api\//.test(pathname)
+        && (/\/\d+$/.test(pathname) || /\/(?:users?|orders?|posts?|items?|records?|accounts?|profiles?)\/?$/i.test(pathname));
+    } catch {
+      return false;
+    }
   });
   await run('files',    () => checkSensitiveFiles(baseUrl));
-  await run('xss',      () => checkXSS(baseUrl));
-  await run('sqli',     () => checkSQLInjection(baseUrl));
+  await run(
+    'xss',
+    () => checkXSS(reflectionInputs),
+    reflectionInputs.length > 0 || postReflectionCandidate,
+    'A POST form input suitable for HTML-reflection testing was discovered, but forms that may change state are not automatically submitted',
+    reflectionInputs.length === 0 && postReflectionCandidate
+      ? 'A POST form input was discovered, but forms that may change state are not automatically submitted'
+      : null,
+  );
+  await run(
+    'sqli',
+    () => checkSQLInjection(sqlInputs),
+    sqlInputs.length > 0 || loginFormCount > 0,
+    loginFormCount > 0
+      ? `${loginFormCount} login form${loginFormCount === 1 ? ' was' : 's were'} discovered, but password forms are not automatically submitted; no safe public GET input suitable for SQL error testing was found`
+      : 'No public GET form or linked parameter suitable for SQL error testing was discovered',
+    sqlInputs.length === 0 && loginFormCount > 0
+      ? 'A login POST form was discovered, but Ironclad does not guess credentials or create failed-login attempts that could lock accounts'
+      : null,
+  );
   await run('cors',     async () => [
-    ...await checkCORS(baseUrl),
+    ...await checkCORS(baseUrl, discoveredApplicationRoutes),
     ...await checkCrossdomain(baseUrl),
   ]);
-  await run('headers',  () => checkSecurityHeaders(mainRes));
+  await run('headers',  () => checkSecurityHeaders(mainRes, pageUrl));
   await run(
     'cookies',
     () => checkCookies(mainRes),
@@ -2884,16 +2947,45 @@ export async function deepScanDomain(
   await run('ssl',      () => checkSSL(domain));
   await run('admin',    () => checkAdminPaths(baseUrl));
   await run('errors',   () => checkErrorVerbosity(baseUrl));
-  await run('redirect', () => checkOpenRedirect(baseUrl));
+  await run(
+    'redirect',
+    () => checkOpenRedirect(redirectInputs),
+    redirectInputs.length > 0 || postRedirectCandidate,
+    'No redirect or return URL parameter was discovered in a public form, link, or browser bundle',
+    redirectInputs.length === 0 && postRedirectCandidate
+      ? 'A redirect-like POST field was discovered, but forms that may change state are not automatically submitted'
+      : null,
+  );
   await run('dirlist',  () => checkDirectoryListing(baseUrl));
   await run('robots',   () => checkRobotsTxt(baseUrl));
-  await run('sri',          () => checkSRI(baseUrl, mainHtml));
+  await run('sri',          () => checkSRI(pageUrl, mainHtml));
   await run('info',         () => checkInfoDisclosure(mainRes));
   await run('serverstatus', () => checkServerStatus(baseUrl));
-  await run('forced',     () => checkForcedBrowsing(baseUrl, clientArtifacts.routeLiterals));
-  await run('idor',       () => checkIDOR(baseUrl));
-  await run('ssrf',       () => checkSSRF(baseUrl));
-  await run('traversal',  () => checkPathTraversal(baseUrl));
+  await run('forced',     () => checkForcedBrowsing(baseUrl, discoveredApplicationRoutes));
+  await run(
+    'idor',
+    () => checkIDOR(baseUrl, discoveredApplicationRoutes),
+    hasObjectRoute,
+    'No public API route suitable for object-access comparison was discovered',
+  );
+  await run(
+    'ssrf',
+    () => checkSSRF(ssrfInputs),
+    ssrfInputs.length > 0 || postSsrfCandidate,
+    'No public URL, webhook, proxy, or fetch parameter was discovered',
+    ssrfInputs.length === 0 && postSsrfCandidate
+      ? 'A URL-like POST field was discovered, but forms that may change state are not automatically submitted'
+      : null,
+  );
+  await run(
+    'traversal',
+    () => checkPathTraversal(traversalInputs),
+    traversalInputs.length > 0 || postTraversalCandidate,
+    'No public file, path, template, or download parameter was discovered',
+    traversalInputs.length === 0 && postTraversalCandidate
+      ? 'A file-like POST field was discovered, but upload and state-changing forms are not automatically submitted'
+      : null,
+  );
   await run('components',  () => checkOutdatedLibraries(clientSource));
   await run(
     'sourcemaps',
@@ -2919,9 +3011,27 @@ export async function deepScanDomain(
   await run('nextauth', () => checkNextMiddlewareBypass(baseUrl, mainHtml), !!extractNextBuildId(mainHtml));
   await run('graphql',    () => checkGraphQL(baseUrl));
   await run('apidocs',    () => checkAPIDocumentation(baseUrl));
-  await run('nosql',      () => checkNoSQLInjection(baseUrl));
+  await run(
+    'nosql',
+    () => checkNoSQLInjection(noSqlInputs),
+    noSqlInputs.length > 0 || loginFormCount > 0,
+    loginFormCount > 0
+      ? `${loginFormCount} login form${loginFormCount === 1 ? ' was' : 's were'} discovered, but password forms are not automatically submitted; no safe public API query input suitable for NoSQL error testing was found`
+      : 'No public API query input suitable for NoSQL error testing was discovered',
+    noSqlInputs.length === 0 && loginFormCount > 0
+      ? 'A login POST form was discovered, but Ironclad does not guess credentials or create failed-login attempts that could lock accounts'
+      : null,
+  );
   await run('hostheader', () => checkHostHeaderInjection(baseUrl));
-  await run('crlf',       () => checkCRLFInjection(baseUrl));
+  await run(
+    'crlf',
+    () => checkCRLFInjection(crlfInputs),
+    crlfInputs.length > 0 || postCrlfCandidate,
+    'No public response-shaping query parameter suitable for newline testing was discovered',
+    crlfInputs.length === 0 && postCrlfCandidate
+      ? 'A response-shaping POST field was discovered, but forms that may change state are not automatically submitted'
+      : null,
+  );
 
   const expectedCoverageIds = phasesForLane(SCAN_PHASES, lane)
     .map(phase => phase.id)
@@ -2964,6 +3074,22 @@ export async function deepScanDomain(
     },
     coverage: { ...requestCoverage, complete: coverageComplete, checks: checkCoverage },
     provenance,
+    application: {
+      pageUrl,
+      formsDiscovered: applicationSurface.forms.length,
+      loginFormsDiscovered: loginFormCount,
+      publicGetParametersDiscovered: applicationSurface.queryInputs.length,
+      applicationRoutesDiscovered: discoveredApplicationRoutes.length,
+      testedParameterNames: [...new Set([
+        ...reflectionInputs,
+        ...sqlInputs,
+        ...redirectInputs,
+        ...ssrfInputs,
+        ...traversalInputs,
+        ...noSqlInputs,
+        ...crlfInputs,
+      ].map(input => input.parameter))].slice(0, 12),
+    },
     findings,
     checked: buildChecked(findings, mainRes, checkCoverage, lane),
   };

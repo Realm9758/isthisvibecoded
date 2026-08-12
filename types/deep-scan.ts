@@ -100,6 +100,15 @@ export interface DeepScanResult {
     checks?: CheckCoverage[];
   };
   provenance?: ScanProvenance;
+  /** What application inputs were passively discovered before active checks. */
+  application?: {
+    pageUrl: string;
+    formsDiscovered: number;
+    loginFormsDiscovered: number;
+    publicGetParametersDiscovered: number;
+    applicationRoutesDiscovered: number;
+    testedParameterNames: string[];
+  };
   findings: DeepFinding[];
   checked: CheckedItem[];
 }

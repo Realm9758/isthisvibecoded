@@ -15,6 +15,21 @@ interface TerminalPhaseLogInput {
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'] as const;
 
+export function explainPhaseReason(reason?: string | null): string | null {
+  const value = reason?.trim();
+  if (!value) return null;
+  if (/blocked before they could be evaluated/i.test(value)) {
+    return 'The site rejected or challenged one or more requests, so this check could not inspect the response.';
+  }
+  if (/control request did not return a usable response|control response could not be read/i.test(value)) {
+    return 'The normal comparison request did not produce a usable response, so this check made no vulnerability claim.';
+  }
+  if (/request failed or timed out/i.test(value)) {
+    return 'A request failed or timed out, so this check could not reach a reliable conclusion.';
+  }
+  return value;
+}
+
 export function formatFindingCount(count: number): string {
   const safeCount = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
   return `${safeCount} finding${safeCount === 1 ? '' : 's'}`;
@@ -55,7 +70,7 @@ export function formatTerminalPhaseLog({
 }: TerminalPhaseLogInput): string {
   const hasFindings = Number.isFinite(findingCount) && findingCount > 0;
   const findings = findingSummary(findingCount, findingSeverities);
-  const explanation = reason?.trim() || null;
+  const explanation = explainPhaseReason(reason);
 
   if (status === 'complete') {
     return hasFindings

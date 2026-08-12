@@ -57,14 +57,72 @@ function gradeColour(score: number): string {
  */
 function verdict(result: AnyScanResult): { headline: string; tone: string } {
   const { critical, high, medium, low } = result.summary;
-  if (result.summary.score === null) return { headline: 'Coverage incomplete', tone: 'var(--faint)' };
+  if (result.summary.score === null) return { headline: 'Partial result', tone: 'var(--med)' };
   if (critical > 0 || high > 0) return { headline: 'Not ironclad', tone: 'var(--crit)' };
   if (medium > 0 || low > 0) return { headline: 'Nearly ironclad', tone: 'var(--med)' };
+  if (
+    (result.lane ?? 'deep') === 'deep'
+    && (result.coverage?.complete === false || result.coverage?.checks?.some(check => check.applicable === false))
+  ) {
+    return { headline: 'No confirmed issues in the tested surface', tone: 'var(--ok)' };
+  }
   return { headline: 'Ironclad', tone: 'var(--ok)' };
 }
 
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
+
+type CoverageLimit = {
+  title: string;
+  explanation: string;
+  checks: string[];
+};
+
+function coverageLimits(result: AnyScanResult): CoverageLimit[] {
+  const grouped = new Map<string, CoverageLimit>();
+  for (const check of result.coverage?.checks ?? []) {
+    if (check.complete || check.applicable === false) continue;
+    const item = result.checked.find(candidate => candidate.id === check.phaseId);
+    const reason = check.reason ?? '';
+    const key = check.requestsBlocked > 0
+      ? 'rejected'
+      : /login POST form|forms? that may change state|failed-login|upload and state-changing/i.test(reason)
+        ? 'interactive'
+      : /control request|control response/i.test(reason)
+        ? 'comparison'
+        : /timed out|failed|read within|malformed|unexpected/i.test(reason)
+          ? 'response'
+          : 'other';
+    const definition: Omit<CoverageLimit, 'checks'> = key === 'rejected'
+      ? {
+          title: 'The site did not accept some automated requests',
+          explanation: 'Those checks received a denial, rate limit, or bot challenge. Nothing here says the site is vulnerable; it means Ironclad could not inspect that response reliably. If you control the firewall, allow the Ironclad-Deep/2.0 user agent for the verified host and rerun the scan.',
+        }
+      : key === 'interactive'
+        ? {
+            title: 'Interactive forms were mapped but not submitted',
+            explanation: 'Ironclad found a login, upload, or other POST flow. It did not guess credentials or submit a form that could create data, send messages, or lock an account. Those flows need an authenticated test setup with safe test credentials.',
+          }
+      : key === 'comparison'
+        ? {
+            title: 'A safe before-and-after comparison was unavailable',
+            explanation: 'These checks only make a claim when a normal value works and a crafted value produces a meaningful difference. The normal comparison failed, so Ironclad correctly made no vulnerability claim.',
+          }
+        : key === 'response'
+          ? {
+              title: 'Some responses could not be read reliably',
+              explanation: 'A request timed out, exceeded a safety limit, or returned data that did not match the advertised format. The affected checks were left unanswered.',
+            }
+          : {
+              title: 'Some checks need more evidence',
+              explanation: 'The automated scan did not collect enough evidence to reach a reliable conclusion for these checks.',
+            };
+    const group = grouped.get(key) ?? { ...definition, checks: [] };
+    group.checks.push(item?.label ?? check.phaseId);
+    grouped.set(key, group);
+  }
+  return [...grouped.values()];
+}
 
 export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
   const [roastMode, setRoastMode] = useState(false);
@@ -78,6 +136,8 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
   );
 
   const blocked = (result.coverage?.checks ?? []).filter(check => !check.complete);
+  const notApplicableCount = (result.coverage?.checks ?? []).filter(check => check.applicable === false).length;
+  const limits = coverageLimits(result);
   const groups = SEVERITY_ORDER
     .map(severity => ({ severity, items: result.findings.filter(f => f.severity === severity) }))
     .filter(group => group.items.length > 0);
@@ -102,7 +162,7 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
 
         <div className="grid grid-cols-3 sm:grid-cols-6 border-b" style={{ borderColor: 'var(--border)' }}>
           <div className="px-5 py-4" style={{ borderRight: '1px solid var(--border)' }}>
-            <p className="label mb-1.5">grade</p>
+            <p className="label mb-1.5">{lane === 'deep' && (notApplicableCount > 0 || result.coverage?.complete === false) ? 'tested grade' : 'grade'}</p>
             {result.summary.score === null ? (
               <p className="font-mono text-lg" style={{ color: 'var(--faint)' }}>n/a</p>
             ) : (
@@ -131,8 +191,8 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
 
         {result.summary.score === null && (
           <p className="px-6 py-4 text-sm leading-relaxed border-b" style={{ color: 'var(--muted)', borderColor: 'var(--border)' }}>
-            {blocked.length} check{blocked.length === 1 ? '' : 's'} could not complete, so no grade is shown.
-            A number built from checks that did not run would flatter the site rather than describe it.
+            Ironclad kept the confirmed findings below, but {blocked.length} check{blocked.length === 1 ? '' : 's'} did not have enough evidence for a reliable answer.
+            No grade is shown because filling those gaps with assumed passes would be misleading.
           </p>
         )}
 
@@ -146,6 +206,30 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
       </section>
 
       {afterSummary}
+
+      {lane === 'deep' && result.application && (
+        <section className="border p-5" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+          <h3 className="text-sm font-semibold text-white mb-2">What this scan actually tested</h3>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
+            Ironclad started at <span className="font-mono text-white/70 break-all">{result.application.pageUrl}</span>, then inspected browser-delivered HTML and scripts.
+            It discovered {result.application.formsDiscovered} form{result.application.formsDiscovered === 1 ? '' : 's'}, {result.application.publicGetParametersDiscovered} public GET parameter{result.application.publicGetParametersDiscovered === 1 ? '' : 's'}, and {result.application.applicationRoutesDiscovered} application route{result.application.applicationRoutesDiscovered === 1 ? '' : 's'}.
+          </p>
+          {result.application.testedParameterNames.length > 0 ? (
+            <p className="text-xs leading-relaxed mt-3" style={{ color: 'var(--faint)' }}>
+              Active input checks used discovered parameter names: <span className="font-mono text-white/60">{result.application.testedParameterNames.join(', ')}</span>.
+            </p>
+          ) : (
+            <p className="text-xs leading-relaxed mt-3" style={{ color: 'var(--faint)' }}>
+              No suitable public GET input was discovered, so input-specific checks were marked not tested instead of firing guessed payloads at the landing page.
+            </p>
+          )}
+          {result.application.loginFormsDiscovered > 0 && (
+            <p className="text-xs leading-relaxed mt-3 border-l-2 pl-3" style={{ color: 'var(--muted)', borderColor: 'var(--med)' }}>
+              {result.application.loginFormsDiscovered} login form{result.application.loginFormsDiscovered === 1 ? ' was' : 's were'} identified, but not submitted. Ironclad does not guess credentials or create failed-login attempts that could lock accounts. SQL and NoSQL conclusions therefore do not cover that login POST flow without a separate authenticated test setup.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Rescan diff */}
       {diff?.comparable && (diff.resolved.length > 0 || diff.added.length > 0) && (
@@ -179,26 +263,26 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
       )}
 
       {/* Coverage banner */}
-      {blocked.length > 0 && (
+      {limits.length > 0 && (
         <section className="border p-5" style={{ borderColor: 'rgba(245,158,11,0.25)', borderRadius: 4 }}>
           <h3 className="text-sm font-semibold mb-1.5" style={{ color: 'var(--high)' }}>
-            {blocked.length} check{blocked.length === 1 ? '' : 's'} could not complete
+            What limited this scan
           </h3>
           <p className="text-xs leading-relaxed mb-3.5" style={{ color: 'var(--muted)' }}>
-            A gap in what was observed, not a clean result. Sites behind a firewall or bot filter often
-            block scanners.
+            These are limits in the assessment, not security findings. Ironclad grouped them so you can see the cause without reading the same technical message repeatedly.
           </p>
-          <ul className="space-y-1.5">
-            {blocked.map(check => {
-              const item = result.checked.find(c => c.id === check.phaseId);
-              return (
-                <li key={check.phaseId} className="font-mono text-xs flex gap-2.5" style={{ color: 'var(--faint)' }}>
-                  <span style={{ color: 'rgba(245,158,11,0.5)' }}>›</span>
-                  <span><span className="text-white/60">{item?.label ?? check.phaseId}</span>: {check.reason}</span>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="space-y-3">
+            {limits.map(limit => (
+              <div key={limit.title} className="border-l-2 pl-3" style={{ borderColor: 'rgba(245,158,11,0.35)' }}>
+                <p className="text-sm text-white/75">{limit.title} <span className="font-mono text-xs" style={{ color: 'var(--faint)' }}>({limit.checks.length})</span></p>
+                <p className="text-xs leading-relaxed mt-1" style={{ color: 'var(--faint)' }}>{limit.explanation}</p>
+                <details className="mt-1.5">
+                  <summary className="font-mono text-[11px] cursor-pointer" style={{ color: 'var(--ghost)' }}>show affected checks</summary>
+                  <p className="font-mono text-[11px] leading-relaxed mt-1" style={{ color: 'var(--ghost)' }}>{limit.checks.join(' · ')}</p>
+                </details>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 

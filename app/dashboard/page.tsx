@@ -165,6 +165,7 @@ function DeepScanPanel({
   const [step, setStep] = useState<Step>('idle');
   const [inputUrl, setInputUrl] = useState('');
   const [scanDomain, setScanDomain] = useState('');
+  const [scanTarget, setScanTarget] = useState('');
   const [urlError, setUrlError] = useState('');
   const [scanError, setScanError] = useState('');
   const [errorMeta, setErrorMeta] = useState<ScanErrorMeta>({});
@@ -176,6 +177,7 @@ function DeepScanPanel({
     const timer = window.setTimeout(() => {
       setInputUrl(initialDomain);
       setScanDomain(initialDomain);
+      setScanTarget(initialDomain);
       setStep(initialIntent === 'verified' ? 'confirmed' : 'verify');
     }, 0);
     return () => window.clearTimeout(timer);
@@ -185,14 +187,20 @@ function DeepScanPanel({
     event.preventDefault();
     setUrlError('');
     let host = '';
+    let target = '';
     try {
-      host = new URL(inputUrl.startsWith('http') ? inputUrl : `https://${inputUrl}`).hostname;
+      const parsed = new URL(inputUrl.startsWith('http') ? inputUrl : `https://${inputUrl}`);
+      host = parsed.hostname;
+      parsed.search = '';
+      parsed.hash = '';
+      target = parsed.href;
     } catch {
       setUrlError('Enter a valid domain, for example example.com');
       return;
     }
     if (!host) { setUrlError('Enter a valid domain'); return; }
     setScanDomain(host);
+    setScanTarget(target);
     setAuthorised(false);
     setStep('verify');
   }
@@ -201,6 +209,7 @@ function DeepScanPanel({
     setStep('idle');
     setInputUrl('');
     setScanDomain('');
+    setScanTarget('');
     setScanError('');
     setErrorMeta({});
     setResult(null);
@@ -364,8 +373,8 @@ function DeepScanPanel({
         {step === 'scanning' && (
           <ScanRunner
             endpoint="/api/deep-scan"
-            label={scanDomain}
-            body={{ domain: scanDomain, authorizationAccepted: authorised, termsVersion: DEEP_SCAN_TERMS_VERSION }}
+            label={scanTarget || scanDomain}
+            body={{ domain: scanTarget || scanDomain, authorizationAccepted: authorised, termsVersion: DEEP_SCAN_TERMS_VERSION }}
             onResult={completed => { setResult(completed); setStep('results'); onComplete(); }}
             onError={(message, meta) => {
               setAuthorised(false);

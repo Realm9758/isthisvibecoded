@@ -29,7 +29,11 @@ test('a deep scan accounts for every advertised phase without silent skips', asy
       && !url.search
       && (init.method ?? 'GET') === 'GET'
     ) {
-      return new Response('<!doctype html><html><head><title>Fixture</title></head><body>ok</body></html>', {
+      return new Response(`<!doctype html><html><head><title>Fixture</title></head><body>
+        <form action="search" method="get"><input name="q"><input name="redirect"><input name="url"><input name="file"></form>
+        <form action="/session" method="post"><input type="email" name="email"><input type="password" name="password"></form>
+        <a href="/api/users?id=1">users</a>
+      </body></html>`, {
         status: 200,
         headers: {
           'content-type': 'text/html; charset=utf-8',
@@ -71,6 +75,10 @@ test('a deep scan accounts for every advertised phase without silent skips', asy
   assert.equal(result.coverage?.checks?.some(check => !check.complete), false);
   assert.ok((result.coverage?.requestsAttempted ?? 0) > 100);
   assert.equal(requested[0], 'GET https://fixture.example/app');
+  assert.equal(result.application?.pageUrl, 'https://fixture.example/app');
+  assert.equal(result.application?.formsDiscovered, 2);
+  assert.equal(result.application?.loginFormsDiscovered, 1);
+  assert.ok((result.application?.publicGetParametersDiscovered ?? 0) >= 5);
 
   const requestProgress = events.filter(event => event.progress.status === 'progress');
   assert.ok(requestProgress.length > 0);
@@ -104,7 +112,12 @@ test('blanket active-probe denials are inconclusive and cannot produce a flatter
       && (init.method ?? 'GET') === 'GET'
       && !new Headers(init.headers).has('host')
     ) {
-      return new Response('<!doctype html><html><body>fixture</body></html>', {
+      return new Response(`<!doctype html><html><body>
+        <form action="/search" method="get">
+          <input name="q"><input name="redirect"><input name="url"><input name="file"><input name="name">
+        </form>
+        <a href="/api/search?id=1">API search</a>
+      </body></html>`, {
         status: 200,
         headers: { 'content-type': 'text/html' },
       });
@@ -134,4 +147,33 @@ test('blanket active-probe denials are inconclusive and cannot produce a flatter
     assert.ok((coverage?.requestsBlocked ?? 0) > 0, phaseId);
   }
   assert.equal(result.summary.score, null);
+});
+
+test('a redirect away from the verified host is a bounded negative response, not a blocked request', async () => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://abcdefghijklmnopqrst.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= `test-service-role-${'x'.repeat(32)}`;
+  const { deepScanDomain } = await import('../lib/deep-scanner');
+
+  const transport = async (input: URL | string, init: PinnedFetchInit = {}): Promise<Response> => {
+    const url = input instanceof URL ? new URL(input.href) : new URL(input);
+    if (url.href === 'https://fixture.example/app' && (init.method ?? 'GET') === 'GET') {
+      return new Response('<!doctype html><html><body>fixture</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    }
+    return new Response(null, {
+      status: 302,
+      headers: { location: 'https://login.example.net/sign-in' },
+    });
+  };
+
+  const result = await deepScanDomain(
+    { hostname: 'fixture.example', startUrl: 'https://fixture.example/app' },
+    'deep',
+    undefined,
+    { transport },
+  );
+  assert.equal(result.coverage?.requestsBlocked, 0);
+  assert.equal(result.coverage?.checks?.some(check => !check.complete), false);
 });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  explainPhaseReason,
   formatFindingCount,
   formatTerminalPhaseLog,
 } from '../lib/scan-progress-presentation';
@@ -41,7 +42,7 @@ test('an incomplete phase without findings uses the inconclusive marker', () => 
     status: 'incomplete',
     findingCount: 0,
     reason: 'One or more requests were blocked before they could be evaluated',
-  }), '[?] Sensitive Files: coverage inconclusive, One or more requests were blocked before they could be evaluated');
+  }), '[?] Sensitive Files: coverage inconclusive, The site rejected or challenged one or more requests, so this check could not inspect the response.');
 });
 
 test('not-applicable remains distinct from both clean and inconclusive', () => {
@@ -66,4 +67,15 @@ test('finding count labels are grammatical and reject invalid values', () => {
   assert.equal(formatFindingCount(1), '1 finding');
   assert.equal(formatFindingCount(2), '2 findings');
   assert.equal(formatFindingCount(Number.NaN), '0 findings');
+});
+
+test('technical transport reasons become plain client-facing explanations', () => {
+  assert.equal(
+    explainPhaseReason('SQL injection control request did not return a usable response'),
+    'The normal comparison request did not produce a usable response, so this check made no vulnerability claim.',
+  );
+  assert.equal(
+    explainPhaseReason('One or more requests were blocked before they could be evaluated'),
+    'The site rejected or challenged one or more requests, so this check could not inspect the response.',
+  );
 });

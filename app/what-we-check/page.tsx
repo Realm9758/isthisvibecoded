@@ -51,6 +51,35 @@ export default function WhatWeCheckPage() {
         </div>
       </section>
 
+      <section className="px-6 py-14 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="max-w-4xl mx-auto">
+          <h2 className="display text-white text-2xl mb-6">How a deep scan chooses what to test</h2>
+          <div className="grid sm:grid-cols-3 border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+            <div className="p-5 sm:border-r" style={{ borderColor: 'var(--border)' }}>
+              <p className="font-mono text-xs mb-2" style={{ color: 'var(--accent)' }}>01 · submitted page</p>
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
+                Ironclad keeps the path you entered. It reads that page’s HTML, headers, cookies, forms, links, and same-origin browser scripts.
+              </p>
+            </div>
+            <div className="p-5 sm:border-r" style={{ borderColor: 'var(--border)' }}>
+              <p className="font-mono text-xs mb-2" style={{ color: 'var(--accent)' }}>02 · discovered inputs</p>
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
+                SQL, NoSQL, reflection, redirect, URL-fetching, file-path, and header-injection checks use real public GET parameters found in forms, links, or bundles instead of guessed landing-page parameters.
+              </p>
+            </div>
+            <div className="p-5">
+              <p className="font-mono text-xs mb-2" style={{ color: 'var(--accent)' }}>03 · origin-wide checks</p>
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
+                Well-known files, admin software, API documentation, robots.txt, and directory indexes are checked at bounded paths on the verified origin.
+              </p>
+            </div>
+          </div>
+          <p className="text-sm leading-relaxed mt-5 max-w-3xl" style={{ color: 'var(--muted)' }}>
+            Login, upload, checkout, and other POST forms are identified but not automatically submitted. Guessing credentials can lock accounts, while submitting a real form can create data or trigger messages. The report calls out these flows and does not pretend its anonymous GET checks covered them.
+          </p>
+        </div>
+      </section>
+
       <section className="px-6 py-16 border-b" style={{ borderColor: 'var(--border)' }}>
         <div className="max-w-4xl mx-auto">
           <div className="flex flex-wrap items-baseline gap-4 mb-8">
