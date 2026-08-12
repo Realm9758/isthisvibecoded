@@ -1,6 +1,6 @@
 import type { CheckCoverage, DeepFinding, DeepScanResult, ScanPhaseProgress } from '@/types/deep-scan';
 import { SCAN_PHASES, type ScanPhase } from '@/lib/scan-phases';
-import { phaseRunsInLane, phasesForLane, type ScanLane } from '@/lib/scan-lanes';
+import { phaseRunsInLane, phasesForLane, SURFACE_PHASE_IDS, type ScanLane } from '@/lib/scan-lanes';
 import { scoreIsWithheld } from '@/lib/scan-coverage';
 import { resolveScanPhaseOutcome, type ScanPhaseRequestCoverage } from '@/lib/scan-progress';
 import { classifyProbeResponse } from '@/lib/scan-http-outcome';
@@ -56,6 +56,17 @@ import {
   type ApplicationSurface,
 } from '@/lib/application-inputs';
 import { classifyUnauthenticatedJson } from '@/lib/unauthenticated-json';
+import {
+  assessRateLimitEvidence,
+  describeRateLimitEvidence,
+  selectRateLimitTarget,
+} from '@/lib/rate-limit-evidence';
+import {
+  fullDeepScanScope,
+  isFullDeepScanScope,
+  parseRequestedDeepScanScope,
+  type DeepScanModuleId,
+} from '@/lib/deep-scan-scope';
 
 const TIMEOUT = 8000;
 const SCAN_BUDGET_MS = 42_000;
@@ -88,6 +99,8 @@ export interface DeepScanOptions {
   transport?: typeof pinnedFetch;
   /** Lets an API route include result persistence in the final streamed step. */
   deferDoneCompletion?: boolean;
+  /** Backend-validated module scope. Omission retains the full lane for fixtures and surface scans. */
+  selectedPhaseIds?: readonly string[];
 }
 
 type RequestCoverage = {
@@ -125,6 +138,8 @@ type SafeFetchOptions = RequestInit & {
   allowCanonicalRedirect?: boolean;
   /** An active payload denied before evaluation is an unknown, not a pass. */
   forbiddenIsBlocked?: boolean;
+  /** A 429 is the expected positive observation only inside the rate-limit module. */
+  rateLimitIsEvidence?: boolean;
 };
 
 const finalResponseUrls = new WeakMap<Response, string>();
@@ -200,6 +215,7 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
       maxResponseBytes = DEFAULT_TRANSPORT_BODY_BYTES,
       allowCanonicalRedirect = false,
       forbiddenIsBlocked = false,
+      rateLimitIsEvidence = false,
       ...requestOptions
     } = options ?? {};
     const requestedRedirectMode = requestOptions.redirect ?? 'follow';
@@ -245,7 +261,10 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
       // rate-limit, explicit bot challenge or server failure must remain a
       // visible coverage gap instead of becoming a clean check.
       incrementCoverage(context, 'requestsCompleted');
-      const responseOutcome = classifyProbeResponse(res.status, res.headers, { forbiddenIsBlocked });
+      const responseOutcome = classifyProbeResponse(res.status, res.headers, {
+        forbiddenIsBlocked,
+        rateLimitIsEvidence,
+      });
       if (responseOutcome === 'blocked') incrementCoverage(context, 'requestsBlocked');
       if (responseOutcome === 'failed') incrementCoverage(context, 'requestsFailed');
 
@@ -1452,6 +1471,24 @@ async function checkForcedBrowsing(baseUrl: string, discoveredRoutes: string[] =
   }];
 }
 
+// ── Low-volume rate-limit signal review ──────────────────────────────────
+
+const RATE_LIMIT_PROBE_COUNT = 6;
+
+async function inspectRateLimitSignals(targetUrl: string): Promise<string> {
+  const responses = await Promise.all(
+    Array.from({ length: RATE_LIMIT_PROBE_COUNT }, () => safeFetch(targetUrl, {
+      redirect: 'manual',
+      headers: { Accept: 'application/json, text/plain;q=0.8, */*;q=0.1' },
+      maxResponseBytes: 16_000,
+      rateLimitIsEvidence: true,
+    })),
+  );
+  const usable = responses.filter((response): response is Response => response !== null);
+  for (const response of usable) await response.body?.cancel().catch(() => undefined);
+  return describeRateLimitEvidence(assessRateLimitEvidence(usable), RATE_LIMIT_PROBE_COUNT);
+}
+
 // IDOR: insecure direct object reference (A01)
 
 async function checkIDOR(baseUrl: string, discoveredRoutes: readonly string[]): Promise<DeepFinding[]> {
@@ -2518,8 +2555,11 @@ function buildChecked(
   mainRes: Response | null,
   checkCoverage: readonly CheckCoverage[],
   lane: ScanLane,
+  selectedPhaseIds: readonly string[],
+  detailOverrides: ReadonlyMap<string, { status: import('@/types/deep-scan').CheckedItem['status']; detail: string }> = new Map(),
 ): import('@/types/deep-scan').CheckedItem[] {
   const coverageByPhase = new Map(checkCoverage.map(entry => [entry.phaseId, entry]));
+  const selected = new Set(selectedPhaseIds);
 
   function findingsFor(...ids: string[]) {
     return findings.filter(f => ids.some(id => f.id.startsWith(id)));
@@ -2534,6 +2574,8 @@ function buildChecked(
     // Retain the call-site description for now, but do not present it as proof
     // that a broad vulnerability class is absent. These are bounded probes.
     void passDetail;
+
+    const override = detailOverrides.get(phaseId);
 
     // A check the lane never ran is the upsell, so it is shown rather than
     // hidden: this is what verifying your domain would additionally buy.
@@ -2569,6 +2611,10 @@ function buildChecked(
       };
     }
 
+    if (override) {
+      return { id, label, description, status: override.status, detail: override.detail };
+    }
+
     if (!relevant.length) {
       return {
         id,
@@ -2599,6 +2645,7 @@ function buildChecked(
     item('sri',        'Subresource Integrity',        'Integrity hashes and crossorigin settings on immutable external scripts and stylesheets', findingsFor('sri-'), 'No missing or invalid integrity evidence was observed on selected immutable external resources', 'sri'),
     item('robots',      'robots.txt Path Disclosure',    'Sensitive admin/backup/config paths in Disallow entries',              findingsFor('robots-'),    'robots.txt does not reveal sensitive internal paths', 'robots'),
     item('forced',      'Unauthenticated API Access',     'Material account or secret data on passively discovered and selected API routes', findingsFor('auth-unprotected'), 'No unauthenticated data-exposure evidence was observed on selected routes', 'forced'),
+    item('ratelimit',   'Rate-Limit Signals',              'A six-request burst against one discovered public GET API route', findingsFor('rate-limit-'), 'Rate-limit behaviour was observed on one selected public route', 'ratelimit'),
     item('idor',        'Public Object Access',           'Reviewing selected public object responses for ownership-sensitive data', findingsFor('idor-'), 'No reviewable sequential public object responses were observed', 'idor'),
     item('ssrf',        'Server-Side URL Fetching',       'Discovered URL-like inputs probed with a cloud-metadata target and benign control', findingsFor('ssrf-'), 'No cloud-metadata SSRF indicators found in the bounded probes', 'ssrf'),
     // Described in prose rather than as a literal traversal sequence: this
@@ -2616,7 +2663,7 @@ function buildChecked(
     item('nosql',       'NoSQL Input Safety',             'MongoDB-shaped operator values on discovered public API inputs compared with benign controls', findingsFor('nosql-'), 'No differential MongoDB error signatures were observed', 'nosql'),
     item('hostheader',  'Host Header Handling',          'Forged Host value reflected in a successful body or external Location header', findingsFor('host-header-'), 'No forged Host reflection or external redirect was observed', 'hostheader'),
     item('crlf',        'Response Header Injection',      'Newline values in discovered response-shaping inputs creating unintended headers', findingsFor('crlf-'), 'No response-header injection evidence was observed', 'crlf'),
-  ];
+  ].filter(item => selected.has(item.id));
 }
 
 // ── Check phases (for streaming progress) ────────────────────────────────
@@ -2660,6 +2707,15 @@ export async function deepScanDomain(
   if (parsedStartUrl.hostname.toLowerCase() !== domain.toLowerCase()) {
     throw new Error('The scan page URL does not match the authorized hostname.');
   }
+  const selectedPhaseIds: DeepScanModuleId[] = lane === 'deep'
+    ? options.selectedPhaseIds === undefined
+      ? fullDeepScanScope()
+      : parseRequestedDeepScanScope(options.selectedPhaseIds)
+    : [...SURFACE_PHASE_IDS];
+  const selectedPhaseSet = new Set<string>(selectedPhaseIds);
+  const fullInventory = lane === 'deep'
+    ? isFullDeepScanScope(selectedPhaseIds)
+    : selectedPhaseIds.length === SURFACE_PHASE_IDS.length;
   const requestCoverage: RequestCoverage = {
     requestsAttempted: 0,
     requestsCompleted: 0,
@@ -2681,6 +2737,7 @@ export async function deepScanDomain(
   let pageUrl = parsedStartUrl.href;
   let baseUrl = parsedStartUrl.origin;
   const allFindings: DeepFinding[] = [];
+  const checkedDetailOverrides = new Map<string, { status: import('@/types/deep-scan').CheckedItem['status']; detail: string }>();
 
   const checkCoverage: CheckCoverage[] = [];
 
@@ -2707,7 +2764,7 @@ export async function deepScanDomain(
     const phase = SCAN_PHASES.find(p => p.id === phaseId)!;
     // Permission, not payment, decides this. A surface scan never reaches a
     // deep-lane check even if the caller is paying.
-    if (!phaseRunsInLane(phaseId, lane)) return [] as unknown as T;
+    if (!phaseRunsInLane(phaseId, lane) || !selectedPhaseSet.has(phaseId)) return [] as unknown as T;
 
     if (!applicable) {
       const coverage: ScanPhaseRequestCoverage = {
@@ -2906,6 +2963,15 @@ export async function deepScanDomain(
     ...applicationSurface.sameOriginRoutes,
     ...clientArtifacts.routeLiterals,
   ])];
+  const postActions = applicationSurface.forms
+    .filter(form => form.method === 'POST')
+    .map(form => form.action);
+  const rateLimitTarget = selectRateLimitTarget(
+    baseUrl,
+    applicationSurface.queryInputs,
+    discoveredApplicationRoutes,
+    postActions,
+  );
   const hasObjectRoute = discoveredApplicationRoutes.some(route => {
     try {
       const pathname = new URL(route, baseUrl).pathname;
@@ -2965,6 +3031,16 @@ export async function deepScanDomain(
   await run('info',         () => checkInfoDisclosure(mainRes));
   await run('serverstatus', () => checkServerStatus(baseUrl));
   await run('forced',     () => checkForcedBrowsing(baseUrl, discoveredApplicationRoutes));
+  await run(
+    'ratelimit',
+    async () => {
+      const detail = await inspectRateLimitSignals(rateLimitTarget!);
+      checkedDetailOverrides.set('ratelimit', { status: 'observe', detail });
+      return [];
+    },
+    rateLimitTarget !== null,
+    'No safe public GET API route was discovered for a bounded rate-limit review',
+  );
   await run(
     'idor',
     () => checkIDOR(baseUrl, discoveredApplicationRoutes),
@@ -3038,7 +3114,7 @@ export async function deepScanDomain(
 
   const expectedCoverageIds = phasesForLane(SCAN_PHASES, lane)
     .map(phase => phase.id)
-    .filter(phaseId => phaseId !== 'init' && phaseId !== 'done');
+    .filter(phaseId => phaseId !== 'init' && phaseId !== 'done' && selectedPhaseSet.has(phaseId));
   const recordedCoverageIds = checkCoverage.map(check => check.phaseId);
   if (
     recordedCoverageIds.length !== expectedCoverageIds.length
@@ -3067,13 +3143,14 @@ export async function deepScanDomain(
       coverage: DEEP_COVERAGE_VERSION,
       lane,
     },
+    scope: { phaseIds: selectedPhaseIds, fullInventory },
     summary: {
       critical: count('critical'),
       high: count('high'),
       medium: count('medium'),
       low: count('low'),
       info: count('info'),
-      score: scoreIsWithheld(checkCoverage) ? null : calculateDeepScore(findings),
+      score: !fullInventory || scoreIsWithheld(checkCoverage) ? null : calculateDeepScore(findings),
     },
     coverage: { ...requestCoverage, complete: coverageComplete, checks: checkCoverage },
     provenance,
@@ -3094,7 +3171,7 @@ export async function deepScanDomain(
       ].map(input => input.parameter))].slice(0, 12),
     },
     findings,
-    checked: buildChecked(findings, mainRes, checkCoverage, lane),
+    checked: buildChecked(findings, mainRes, checkCoverage, lane, selectedPhaseIds, checkedDetailOverrides),
   };
   if (!options.deferDoneCompletion) {
     emitPhase(donePhase, [], {

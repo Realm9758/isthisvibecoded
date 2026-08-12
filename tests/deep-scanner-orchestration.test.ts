@@ -75,9 +75,9 @@ test('a deep scan accounts for every advertised phase without silent skips', asy
     ['complete', 'incomplete', 'not_applicable'].includes(event.progress.status)
   );
   assert.deepEqual(terminal.map(event => event.id), SCAN_PHASES.map(phase => phase.id));
-  assert.equal(result.coverage?.checks?.length, 31);
-  assert.equal(result.checked.length, 31);
-  assert.equal(new Set(result.checked.map(item => item.id)).size, 31);
+  assert.equal(result.coverage?.checks?.length, 32);
+  assert.equal(result.checked.length, 32);
+  assert.equal(new Set(result.checked.map(item => item.id)).size, 32);
   assert.equal(result.coverage?.checks?.some(check => !check.complete), false);
   assert.equal(result.coverage?.checks?.every(check => typeof check.durationMs === 'number' && check.durationMs >= 0), true);
   assert.ok((result.coverage?.requestsAttempted ?? 0) > 100);
@@ -106,6 +106,38 @@ test('a deep scan accounts for every advertised phase without silent skips', asy
     ['start'],
     'the API route owns the final completion event when persistence is included in that step',
   );
+});
+
+test('a custom scope executes and persists only the backend-selected modules', async () => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://abcdefghijklmnopqrst.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= `test-service-role-${'x'.repeat(32)}`;
+  const { deepScanDomain } = await import('../lib/deep-scanner');
+
+  const transport = async (input: URL | string): Promise<Response> => {
+    const url = input instanceof URL ? new URL(input.href) : new URL(input);
+    if (url.protocol === 'http:') {
+      return new Response(null, { status: 301, headers: { location: `https://${url.hostname}/` } });
+    }
+    return new Response('<!doctype html><html><body>scoped fixture</body></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html', 'strict-transport-security': 'max-age=31536000' },
+    });
+  };
+  const terminal: string[] = [];
+  const result = await deepScanDomain(
+    { hostname: 'fixture.example', startUrl: 'https://fixture.example/app' },
+    'deep',
+    (phase, _findings, progress) => {
+      if (['complete', 'incomplete', 'not_applicable'].includes(progress.status)) terminal.push(phase.id);
+    },
+    { transport, selectedPhaseIds: ['ssl', 'headers'] },
+  );
+
+  assert.deepEqual(terminal, ['init', 'headers', 'ssl', 'done']);
+  assert.deepEqual(result.scope, { phaseIds: ['headers', 'ssl'], fullInventory: false });
+  assert.deepEqual(result.coverage?.checks?.map(check => check.phaseId), ['headers', 'ssl']);
+  assert.deepEqual(result.checked.map(item => item.id), ['ssl', 'headers']);
+  assert.equal(result.summary.score, null);
 });
 
 test('blanket active-probe denials are inconclusive and cannot produce a flattering grade', async () => {

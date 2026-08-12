@@ -36,7 +36,7 @@ export const SURFACE_PHASE_IDS = [
 export const DEEP_ONLY_PHASE_IDS = [
   'xss', 'sqli', 'nosql', 'traversal', 'ssrf', 'crlf', 'hostheader',
   'redirect', 'errors', 'admin', 'forced', 'idor', 'cors', 'graphql',
-  'supabase', 'firebase', 'storage', 'nextauth', 'serverstatus',
+  'supabase', 'firebase', 'storage', 'nextauth', 'serverstatus', 'ratelimit',
 ] as const satisfies readonly string[];
 
 /** Present in both lanes: they frame the run rather than probing anything. */

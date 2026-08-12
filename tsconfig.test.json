@@ -27,6 +27,8 @@
     "lib/scan-progress.ts",
     "lib/scan-progress-presentation.ts",
     "lib/scan-receipt.ts",
+    "lib/deep-scan-scope.ts",
+    "lib/rate-limit-evidence.ts",
     "lib/scan-http-outcome.ts",
     "lib/source-map-evidence.ts",
     "lib/subresource-integrity.ts",

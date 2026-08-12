@@ -26,6 +26,14 @@ export function diffScans(previous: DeepScanResult | null, current: DeepScanResu
   if (!previous) return EMPTY;
   // Legacy rows carry no lane and are deep scans by definition.
   if ((previous.lane ?? 'deep') !== (current.lane ?? 'deep')) return EMPTY;
+  const previousScope = previous.scope?.phaseIds;
+  const currentScope = current.scope?.phaseIds;
+  if (previousScope || currentScope) {
+    if (!previousScope || !currentScope) return EMPTY;
+    if (previousScope.length !== currentScope.length) return EMPTY;
+    const currentSet = new Set(currentScope);
+    if (previousScope.some(phaseId => !currentSet.has(phaseId))) return EMPTY;
+  }
   // Rule, scoring, or coverage changes can make a finding appear or disappear
   // without the site changing. Do not call that movement resolved/new.
   const beforeVersions = previous.versions;

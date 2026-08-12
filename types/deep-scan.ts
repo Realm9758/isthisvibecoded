@@ -29,7 +29,7 @@ export interface CheckedItem {
   id: string;
   label: string;
   description: string;
-  status: 'pass' | 'warn' | 'fail' | 'skip';
+  status: 'pass' | 'warn' | 'fail' | 'skip' | 'observe';
   detail: string;
 }
 
@@ -82,6 +82,12 @@ export interface DeepScanResult {
     scoring: string;
     coverage: string;
     lane?: ScanLane;
+  };
+  /** Exact module scope selected for this run. Missing on legacy scans. */
+  scope?: {
+    phaseIds: string[];
+    /** False for a deliberately scoped scan; partial scopes never receive an overall grade. */
+    fullInventory: boolean;
   };
   summary: {
     critical: number;

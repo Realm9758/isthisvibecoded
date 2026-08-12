@@ -58,6 +58,14 @@ test('scans from different lanes are never compared', () => {
   assert.deepEqual(diff.stillOpen, []);
 });
 
+test('different custom module scopes are never compared', () => {
+  const previous = scan('deep', [finding('a')]);
+  const current = scan('deep', [finding('a')]);
+  previous.scope = { phaseIds: ['headers'], fullInventory: false };
+  current.scope = { phaseIds: ['headers', 'cookies'], fullInventory: false };
+  assert.equal(diffScans(previous, current).comparable, false);
+});
+
 test('a row with no lane still counts as deep when scanner versions match', () => {
   const againstDeep = diffScans(scan(undefined, [finding('a')]), scan('deep', [finding('a')]));
   assert.equal(againstDeep.comparable, true);

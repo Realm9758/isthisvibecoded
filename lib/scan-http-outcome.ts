@@ -11,7 +11,7 @@ type HeaderReader = Pick<Headers, 'get'>;
 export function classifyProbeResponse(
   status: number,
   headers: HeaderReader,
-  options: { forbiddenIsBlocked?: boolean } = {},
+  options: { forbiddenIsBlocked?: boolean; rateLimitIsEvidence?: boolean } = {},
 ): ProbeResponseOutcome {
   const challenge = [
     headers.get('cf-mitigated'),
@@ -21,7 +21,8 @@ export function classifyProbeResponse(
     headers.get('x-captcha'),
   ].some(value => value !== null && value.trim() !== '');
 
-  if (status === 429 || challenge || (status === 403 && options.forbiddenIsBlocked)) return 'blocked';
+  if (challenge || (status === 403 && options.forbiddenIsBlocked)) return 'blocked';
+  if (status === 429 && !options.rateLimitIsEvidence) return 'blocked';
   if (status >= 500) return 'failed';
   return 'completed';
 }

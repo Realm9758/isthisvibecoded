@@ -12,6 +12,8 @@ import { LANE_CHECK_COUNTS, DEEP_ONLY_PHASE_IDS, type ScanLane } from '@/lib/sca
 import { FREE_LIFETIME_LIMIT } from '@/lib/scan-quota';
 import type { DeepScanResult } from '@/types/deep-scan';
 import { apiPath } from '@/lib/site';
+import { DeepScanScopeSelector } from '@/components/DeepScanScopeSelector';
+import { DEEP_SCAN_PROFILES, type DeepScanModuleId } from '@/lib/deep-scan-scope';
 
 interface ScanSummary {
   id: string;
@@ -171,6 +173,7 @@ function DeepScanPanel({
   const [errorMeta, setErrorMeta] = useState<ScanErrorMeta>({});
   const [result, setResult] = useState<CompletedScan | null>(null);
   const [authorised, setAuthorised] = useState(false);
+  const [selectedPhaseIds, setSelectedPhaseIds] = useState<DeepScanModuleId[]>(() => [...DEEP_SCAN_PROFILES.full.phaseIds]);
 
   useEffect(() => {
     if (!initialDomain) return;
@@ -202,6 +205,7 @@ function DeepScanPanel({
     setScanDomain(host);
     setScanTarget(target);
     setAuthorised(false);
+    setSelectedPhaseIds([...DEEP_SCAN_PROFILES.full.phaseIds]);
     setStep('verify');
   }
 
@@ -311,7 +315,7 @@ function DeepScanPanel({
         )}
 
         {step === 'confirmed' && (
-          <div className="space-y-4 max-w-xl">
+          <div className="space-y-4 max-w-3xl">
             <p className="font-mono text-sm" style={{ color: 'var(--ok)' }}>
               domain control verified for {scanDomain}
             </p>
@@ -327,6 +331,8 @@ function DeepScanPanel({
               </div>
             )}
 
+            <DeepScanScopeSelector selected={selectedPhaseIds} onChange={setSelectedPhaseIds} />
+
             <label
               className="flex items-start gap-3 border p-4 cursor-pointer"
               style={{ borderColor: 'var(--border-2)', borderRadius: 4 }}
@@ -340,7 +346,7 @@ function DeepScanPanel({
               />
               <span className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>
                 I confirm I am authorised to test <span className="font-mono text-white/80">{scanDomain}</span> and
-                its publicly configured Supabase, Firebase, or storage projects, and to run the bounded active requests described in the{' '}
+                its publicly configured Supabase, Firebase, or storage projects, and to run the {selectedPhaseIds.length} selected bounded modules described in the{' '}
                 <Link href="/what-we-check" className="underline underline-offset-2" style={{ color: 'var(--accent)' }}>
                   active-check inventory
                 </Link>
@@ -354,11 +360,11 @@ function DeepScanPanel({
             <div className="flex gap-3">
               <button
                 onClick={() => { setScanError(''); setStep('scanning'); }}
-                disabled={!authorised}
+                disabled={!authorised || selectedPhaseIds.length === 0}
                 className="px-6 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-35 disabled:cursor-not-allowed"
                 style={{ background: 'var(--accent)', borderRadius: 4 }}
               >
-                Start {LANE_CHECK_COUNTS.deep}-check deep scan
+                Start {selectedPhaseIds.length}-module scan
               </button>
               <button
                 onClick={reset}
@@ -375,7 +381,12 @@ function DeepScanPanel({
           <ScanRunner
             endpoint="/api/deep-scan"
             label={scanTarget || scanDomain}
-            body={{ domain: scanTarget || scanDomain, authorizationAccepted: authorised, termsVersion: DEEP_SCAN_TERMS_VERSION }}
+            body={{
+              domain: scanTarget || scanDomain,
+              authorizationAccepted: authorised,
+              termsVersion: DEEP_SCAN_TERMS_VERSION,
+              selectedPhaseIds,
+            }}
             onResult={completed => { setResult(completed); setStep('results'); onComplete(); }}
             onError={(message, meta) => {
               setAuthorised(false);

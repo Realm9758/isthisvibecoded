@@ -58,6 +58,7 @@ function gradeColour(score: number): string {
  */
 function verdict(result: AnyScanResult): { headline: string; tone: string } {
   const { critical, high, medium, low } = result.summary;
+  if (result.scope?.fullInventory === false) return { headline: 'Scoped result', tone: 'var(--accent)' };
   if (result.summary.score === null) return { headline: 'Partial result', tone: 'var(--med)' };
   if (critical > 0 || high > 0) return { headline: 'Not ironclad', tone: 'var(--crit)' };
   if (medium > 0 || low > 0) return { headline: 'Nearly ironclad', tone: 'var(--med)' };
@@ -129,6 +130,7 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
   const [roastMode, setRoastMode] = useState(false);
   const redacted = result.redacted === true;
   const lane = result.lane ?? 'deep';
+  const scoped = result.scope?.fullInventory === false;
   const { headline, tone } = verdict(result);
 
   const roasts = useMemo(
@@ -157,7 +159,7 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
           <h2 className="display text-2xl" style={{ color: tone }}>{headline}</h2>
           <span className="font-mono text-sm text-white/60 truncate">{result.domain}</span>
           <span className="ml-auto font-mono text-xs" style={{ color: 'var(--ghost)' }}>
-            {lane === 'surface' ? `surface · ${LANE_CHECK_COUNTS.surface} modules` : `deep · ${LANE_CHECK_COUNTS.deep} modules`}
+            {lane} · {result.checked.length} module{result.checked.length === 1 ? '' : 's'}
             {' · '}{result.coverage?.requestsAttempted ?? 0} HTTP attempts
             {' · '}{(result.duration / 1_000).toFixed(1)}s
             {' · '}{formatDate(result.scannedAt)}
@@ -166,7 +168,7 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
 
         <div className="grid grid-cols-3 sm:grid-cols-6 border-b" style={{ borderColor: 'var(--border)' }}>
           <div className="px-5 py-4" style={{ borderRight: '1px solid var(--border)' }}>
-            <p className="label mb-1.5">{lane === 'deep' && (notApplicableCount > 0 || result.coverage?.complete === false) ? 'tested grade' : 'grade'}</p>
+            <p className="label mb-1.5">{scoped ? 'overall grade' : lane === 'deep' && (notApplicableCount > 0 || result.coverage?.complete === false) ? 'tested grade' : 'grade'}</p>
             {result.summary.score === null ? (
               <p className="font-mono text-lg" style={{ color: 'var(--faint)' }}>n/a</p>
             ) : (
@@ -193,7 +195,13 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
           ))}
         </div>
 
-        {result.summary.score === null && (
+        {scoped && (
+          <p className="px-6 py-4 text-sm leading-relaxed border-b" style={{ color: 'var(--muted)', borderColor: 'var(--border)' }}>
+            This run intentionally selected {result.checked.length} of {LANE_CHECK_COUNTS.deep} modules. Confirmed findings and coverage remain useful, but Ironclad does not calculate an overall grade from a narrower scope because omitted modules cannot be assumed to pass.
+          </p>
+        )}
+
+        {result.summary.score === null && !scoped && (
           <p className="px-6 py-4 text-sm leading-relaxed border-b" style={{ color: 'var(--muted)', borderColor: 'var(--border)' }}>
             Ironclad kept the confirmed findings below, but {blocked.length} module{blocked.length === 1 ? '' : 's'} did not have enough evidence for a reliable answer.
             No grade is shown because filling those gaps with assumed passes would be misleading.
@@ -384,10 +392,11 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
                     item.status === 'pass' ? 'var(--ok)'
                     : item.status === 'warn' ? 'var(--med)'
                     : item.status === 'fail' ? 'var(--crit)'
+                    : item.status === 'observe' ? 'var(--accent)'
                     : 'var(--ghost)',
                 }}
               >
-                {item.status === 'pass' ? '✓' : item.status === 'warn' ? '!' : item.status === 'fail' ? '✕' : '○'}
+                {item.status === 'pass' ? '✓' : item.status === 'warn' ? '!' : item.status === 'fail' ? '✕' : item.status === 'observe' ? 'i' : '○'}
               </span>
               <div className="min-w-0 flex-1">
                 <p className="font-mono text-[13px]" style={{ color: item.status === 'skip' ? 'var(--ghost)' : 'var(--muted)' }}>

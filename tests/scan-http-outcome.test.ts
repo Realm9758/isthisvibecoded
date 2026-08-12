@@ -19,6 +19,11 @@ test('rate limits and explicit bot challenges are coverage gaps', () => {
   );
 });
 
+test('a 429 is usable only when rate limiting is the evidence being measured', () => {
+  assert.equal(classifyProbeResponse(429, new Headers(), { rateLimitIsEvidence: true }), 'completed');
+  assert.equal(classifyProbeResponse(429, new Headers({ 'cf-mitigated': 'challenge' }), { rateLimitIsEvidence: true }), 'blocked');
+});
+
 test('server and upstream failures are not clean probe results', () => {
   assert.equal(classifyProbeResponse(500, new Headers()), 'failed');
   assert.equal(classifyProbeResponse(502, new Headers()), 'failed');

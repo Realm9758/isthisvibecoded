@@ -34,6 +34,7 @@ export const SCAN_PHASES: ScanPhase[] = [
   { id: 'info',       label: 'Info Disclosure',         detail: 'Reading Server, X-Powered-By, and X-AspNet-Version, checking for version numbers in headers…' },
   { id: 'serverstatus', label: 'Server Status Exposure', detail: 'Requesting Apache /server-status and requiring real mod_status content before reporting exposure…' },
   { id: 'forced',     label: 'Unauthenticated API Access', detail: 'Checking passively discovered and selected API paths for material account or secret data returned without authentication…' },
+  { id: 'ratelimit',  label: 'Rate-Limit Signals',        detail: 'Sending a six-request bounded burst to one discovered public API route and recording 429, Retry-After, or standard rate-limit headers…' },
   { id: 'idor',       label: 'Public Object Access',    detail: 'Comparing selected public object responses to identify records that may need an ownership and authorization review…' },
   { id: 'ssrf',       label: 'Server-Side URL Fetching', detail: 'Testing discovered URL, webhook, proxy, or image parameters for a differential cloud-metadata response…' },
   { id: 'traversal',  label: 'File Path Handling',      detail: 'Testing discovered file, path, template, or download parameters for a differential local-file response…' },

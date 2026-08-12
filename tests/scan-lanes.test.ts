@@ -18,7 +18,7 @@ const EXPECTED_SURFACE = [
 const EXPECTED_DEEP_ONLY = [
   'xss', 'sqli', 'nosql', 'traversal', 'ssrf', 'crlf', 'hostheader',
   'redirect', 'errors', 'admin', 'forced', 'idor', 'cors', 'graphql',
-  'supabase', 'firebase', 'storage', 'nextauth', 'serverstatus',
+  'supabase', 'firebase', 'storage', 'nextauth', 'serverstatus', 'ratelimit',
 ];
 
 test('the surface lane contains only browser or crawler class reads', () => {
@@ -28,7 +28,7 @@ test('the surface lane contains only browser or crawler class reads', () => {
 
 test('the deep lane adds payload, application-entry, and provider checks', () => {
   assert.deepEqual([...DEEP_ONLY_PHASE_IDS].sort(), [...EXPECTED_DEEP_ONLY].sort());
-  assert.equal(DEEP_ONLY_PHASE_IDS.length, 19);
+  assert.equal(DEEP_ONLY_PHASE_IDS.length, 20);
 });
 
 test('no check is in both lanes', () => {
@@ -80,5 +80,5 @@ test('phasesForLane streams only the phases that will actually run', () => {
 
 test('the advertised check counts match the lanes', () => {
   assert.equal(LANE_CHECK_COUNTS.surface, 12);
-  assert.equal(LANE_CHECK_COUNTS.deep, 31);
+  assert.equal(LANE_CHECK_COUNTS.deep, 32);
 });

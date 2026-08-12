@@ -16,6 +16,11 @@ import { revalidateProviderDomain } from '@/lib/provider-verification';
 import { sanitizeFindings, sanitizeScanResult } from '@/lib/evidence-redaction';
 import { encodeScanResultForStorage, summarizeScanStorageError } from '@/lib/scan-result-storage';
 import type { DeepFinding, ScanPhaseProgress } from '@/types/deep-scan';
+import {
+  parseRequestedDeepScanScope,
+  phasesForDeepScanScope,
+  type DeepScanModuleId,
+} from '@/lib/deep-scan-scope';
 
 export const runtime = 'nodejs';
 export const maxDuration = 55;
@@ -68,6 +73,7 @@ export async function POST(request: Request) {
   let domain: string;
   let startUrl: string;
   let authorizationAcceptedAt: number;
+  let selectedPhaseIds: DeepScanModuleId[];
   try {
     const body = await readBoundedJson(request) as Record<string, unknown>;
     if (typeof body?.domain !== 'string' || !body.domain.trim()) {
@@ -88,6 +94,7 @@ export async function POST(request: Request) {
         { status: 409 },
       );
     }
+    selectedPhaseIds = parseRequestedDeepScanScope(body.selectedPhaseIds);
     authorizationAcceptedAt = Date.now();
     const target = normalizePublicUrl(body.domain);
     domain = target.hostname.toLowerCase();
@@ -288,7 +295,7 @@ export async function POST(request: Request) {
       heartbeat = setInterval(() => enqueue(': keepalive\n\n'), SSE_HEARTBEAT_MS);
 
       try {
-        emit('phases', SCAN_PHASES);
+        emit('phases', phasesForDeepScanScope(selectedPhaseIds));
 
         const rawResult = await deepScanDomain({ hostname: domain, startUrl }, 'deep', (
           phase,
@@ -314,7 +321,7 @@ export async function POST(request: Request) {
               errorName: error instanceof Error ? error.name : 'UnknownError',
             });
           }
-        }, { deferDoneCompletion: true });
+        }, { deferDoneCompletion: true, selectedPhaseIds });
         const result = sanitizeScanResult(rawResult);
 
         // Persist to DB
