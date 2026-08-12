@@ -57,6 +57,6 @@ export function surfaceTargetHourlyKey(domain: string, now: Date): string {
   return `scan-target-surface:${domain.toLowerCase()}:${hour(now)}`;
 }
 
-export function providerTargetHourlyKey(hostname: string, now: Date): string {
-  return `provider-target:${hostname.toLowerCase()}:${hour(now)}`;
+export function providerTargetHourlyKey(providerIdentity: string, now: Date): string {
+  return `provider-target:${providerIdentity.toLowerCase()}:${hour(now)}`;
 }

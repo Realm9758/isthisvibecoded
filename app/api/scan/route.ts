@@ -16,7 +16,7 @@ import { reserveUsageBatch, type UsageReservation } from '@/lib/scan-reservation
 import { mutationRequestError, readBoundedJson } from '@/lib/request-security';
 import { sanitizeFindings, sanitizeScanResult } from '@/lib/evidence-redaction';
 import { encodeScanResultForStorage, summarizeScanStorageError } from '@/lib/scan-result-storage';
-import type { DeepFinding } from '@/types/deep-scan';
+import type { DeepFinding, ScanPhaseProgress } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
 export const maxDuration = 55;
@@ -33,9 +33,21 @@ export const maxDuration = 55;
  */
 
 const CLAIM_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000;
+const SSE_HEARTBEAT_MS = 15_000;
+const SSE_RESPONSE_HEADERS = {
+  'Content-Type': 'text/event-stream; charset=utf-8',
+  'Cache-Control': 'no-cache, no-transform',
+  'Connection': 'keep-alive',
+  'X-Accel-Buffering': 'no',
+} as const;
 
 function sse(event: string, data: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  if (!/^[a-z][a-z0-9_-]*$/i.test(event)) throw new Error('Invalid SSE event name');
+  const json = JSON.stringify(data, (_key, value) =>
+    typeof value === 'bigint' ? value.toString() : value
+  );
+  if (json === undefined) throw new Error('SSE event data is not serializable');
+  return `event: ${event}\ndata: ${json.replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')}\n\n`;
 }
 
 export async function POST(request: Request) {
@@ -48,6 +60,7 @@ export async function POST(request: Request) {
   const userId = payload?.userId ?? null;
 
   let domain: string;
+  let startUrl: string;
   try {
     const body = await readBoundedJson(request) as Record<string, unknown>;
     if (typeof body?.url !== 'string' || !body.url.trim()) {
@@ -56,6 +69,7 @@ export async function POST(request: Request) {
     const target = normalizePublicUrl(body.url);
     await assertPublicTarget(target, 4_000);
     domain = target.hostname.toLowerCase();
+    startUrl = target.href;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid request body';
     return Response.json({ error: message }, { status: message.includes('timed out') ? 408 : 400 });
@@ -115,18 +129,80 @@ export async function POST(request: Request) {
   }
 
   const encoder = new TextEncoder();
-  const stream = new ReadableStream({
+  let streamOpen = true;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let persisted = false;
-      const emit = (event: string, data: unknown) =>
-        controller.enqueue(encoder.encode(sse(event, data)));
+      let doneStartedAt: number | null = null;
+      let doneTerminalEmitted = false;
+      function enqueue(frame: string): boolean {
+        if (!streamOpen) return false;
+        try {
+          controller.enqueue(encoder.encode(frame));
+          return true;
+        } catch {
+          streamOpen = false;
+          return false;
+        }
+      }
+      function emit(event: string, data: unknown): boolean {
+        try {
+          return enqueue(sse(event, data));
+        } catch (error) {
+          console.error('Surface scan stream event could not be serialized', {
+            tag: 'scan:sse',
+            event,
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+          });
+          throw new Error('The scan stream could not serialize an event.');
+        }
+      }
+      function emitDone(status: 'complete' | 'incomplete', reason: string | null): void {
+        if (doneTerminalEmitted) return;
+        const phase = SCAN_PHASES[SCAN_PHASES.length - 1];
+        emit('phase', {
+          id: phase.id,
+          label: phase.label,
+          detail: phase.detail,
+          findings: [],
+          status,
+          durationMs: doneStartedAt === null ? 0 : Date.now() - doneStartedAt,
+          reason,
+        });
+        doneTerminalEmitted = true;
+      }
+      enqueue(': connected\n\n');
+      heartbeat = setInterval(() => enqueue(': keepalive\n\n'), SSE_HEARTBEAT_MS);
 
       try {
         emit('phases', phasesForLane(SCAN_PHASES, 'surface'));
 
-        const rawResult = await deepScanDomain(domain, 'surface', (phase, findings: DeepFinding[], status) => {
-          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings: sanitizeFindings(findings), status });
-        });
+        const rawResult = await deepScanDomain({ hostname: domain, startUrl }, 'surface', (
+          phase,
+          findings: DeepFinding[],
+          progress: ScanPhaseProgress,
+        ) => {
+          if (phase.id === 'done' && progress.status === 'start') doneStartedAt = Date.now();
+          try {
+            emit('phase', {
+              id: phase.id,
+              label: phase.label,
+              detail: phase.detail,
+              findings: sanitizeFindings(Array.isArray(findings) ? findings : []),
+              status: progress.status,
+              coverage: progress.coverage,
+              durationMs: progress.durationMs,
+              reason: progress.reason,
+            });
+          } catch (error) {
+            console.error('Surface scan phase event could not be prepared', {
+              tag: 'scan:sse-phase',
+              phaseId: phase.id,
+              errorName: error instanceof Error ? error.name : 'UnknownError',
+            });
+          }
+        }, { deferDoneCompletion: true });
         const result = sanitizeScanResult(rawResult);
 
         const scanId = crypto.randomUUID();
@@ -159,6 +235,7 @@ export async function POST(request: Request) {
               // A failed refund costs the caller an allowance, not the report.
             }
           }
+          emitDone('incomplete', 'The report was generated but could not be saved to scan history');
           emit('result', {
             ...(userId ? result : redactForAnonymous(result)),
             notSaved: 'This result could not be saved to your history, so it will disappear when you leave this page.',
@@ -177,11 +254,19 @@ export async function POST(request: Request) {
           .lt('claim_expires_at', Date.now())
           .then(undefined, () => undefined);
 
+        emitDone('complete', null);
         emit('result', userId
           ? { ...result, scanId }
           : { ...redactForAnonymous(result), scanId, claimToken });
       } catch (err) {
         let errorMessage = err instanceof Error ? err.message : 'Scan failed';
+        if (doneStartedAt !== null && !doneTerminalEmitted) {
+          try {
+            emitDone('incomplete', 'The report could not be finalized or delivered');
+          } catch {
+            // The client may already be disconnected.
+          }
+        }
         if (quotaKey && !persisted) {
           try {
             const { error: refundError } = await supabase.rpc('refund_usage', { usage_key: quotaKey });
@@ -198,16 +283,20 @@ export async function POST(request: Request) {
           // The client may have disconnected after the result was persisted.
         }
       } finally {
+        if (heartbeat) clearInterval(heartbeat);
+        heartbeat = null;
+        streamOpen = false;
         try { controller.close(); } catch { /* already cancelled */ }
       }
+    },
+    cancel() {
+      streamOpen = false;
+      if (heartbeat) clearInterval(heartbeat);
+      heartbeat = null;
     },
   });
 
   return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
+    headers: SSE_RESPONSE_HEADERS,
   });
 }

@@ -15,13 +15,26 @@ import { reserveUsageBatch, type UsageReservation } from '@/lib/scan-reservation
 import { revalidateProviderDomain } from '@/lib/provider-verification';
 import { sanitizeFindings, sanitizeScanResult } from '@/lib/evidence-redaction';
 import { encodeScanResultForStorage, summarizeScanStorageError } from '@/lib/scan-result-storage';
-import type { DeepFinding } from '@/types/deep-scan';
+import type { DeepFinding, ScanPhaseProgress } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
 export const maxDuration = 55;
 
+const SSE_HEARTBEAT_MS = 15_000;
+const SSE_RESPONSE_HEADERS = {
+  'Content-Type': 'text/event-stream; charset=utf-8',
+  'Cache-Control': 'no-cache, no-transform',
+  'Connection': 'keep-alive',
+  'X-Accel-Buffering': 'no',
+} as const;
+
 function sse(event: string, data: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  if (!/^[a-z][a-z0-9_-]*$/i.test(event)) throw new Error('Invalid SSE event name');
+  const json = JSON.stringify(data, (_key, value) =>
+    typeof value === 'bigint' ? value.toString() : value
+  );
+  if (json === undefined) throw new Error('SSE event data is not serializable');
+  return `event: ${event}\ndata: ${json.replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')}\n\n`;
 }
 
 export async function POST(request: Request) {
@@ -53,6 +66,7 @@ export async function POST(request: Request) {
   }
 
   let domain: string;
+  let startUrl: string;
   let authorizationAcceptedAt: number;
   try {
     const body = await readBoundedJson(request) as Record<string, unknown>;
@@ -77,6 +91,7 @@ export async function POST(request: Request) {
     authorizationAcceptedAt = Date.now();
     const target = normalizePublicUrl(body.domain);
     domain = target.hostname.toLowerCase();
+    startUrl = target.href;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid request body';
     return Response.json({ error: message }, { status: message.includes('timed out') ? 408 : 400 });
@@ -226,19 +241,80 @@ export async function POST(request: Request) {
 
   // Stream SSE
   const encoder = new TextEncoder();
-  const stream = new ReadableStream({
+  let streamOpen = true;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let persisted = false;
-      function emit(event: string, data: unknown) {
-        controller.enqueue(encoder.encode(sse(event, data)));
+      let doneStartedAt: number | null = null;
+      let doneTerminalEmitted = false;
+      function enqueue(frame: string): boolean {
+        if (!streamOpen) return false;
+        try {
+          controller.enqueue(encoder.encode(frame));
+          return true;
+        } catch {
+          streamOpen = false;
+          return false;
+        }
       }
+      function emit(event: string, data: unknown): boolean {
+        try {
+          return enqueue(sse(event, data));
+        } catch (error) {
+          console.error('Deep scan stream event could not be serialized', {
+            tag: 'deep-scan:sse',
+            event,
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+          });
+          throw new Error('The scan stream could not serialize an event.');
+        }
+      }
+      function emitDone(status: 'complete' | 'incomplete', reason: string | null): void {
+        if (doneTerminalEmitted) return;
+        const phase = SCAN_PHASES[SCAN_PHASES.length - 1];
+        emit('phase', {
+          id: phase.id,
+          label: phase.label,
+          detail: phase.detail,
+          findings: [],
+          status,
+          durationMs: doneStartedAt === null ? 0 : Date.now() - doneStartedAt,
+          reason,
+        });
+        doneTerminalEmitted = true;
+      }
+      enqueue(': connected\n\n');
+      heartbeat = setInterval(() => enqueue(': keepalive\n\n'), SSE_HEARTBEAT_MS);
 
       try {
         emit('phases', SCAN_PHASES);
 
-        const rawResult = await deepScanDomain(domain, 'deep', (phase, findings: DeepFinding[], status) => {
-          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings: sanitizeFindings(findings), status });
-        });
+        const rawResult = await deepScanDomain({ hostname: domain, startUrl }, 'deep', (
+          phase,
+          findings: DeepFinding[],
+          progress: ScanPhaseProgress,
+        ) => {
+          if (phase.id === 'done' && progress.status === 'start') doneStartedAt = Date.now();
+          try {
+            emit('phase', {
+              id: phase.id,
+              label: phase.label,
+              detail: phase.detail,
+              findings: sanitizeFindings(Array.isArray(findings) ? findings : []),
+              status: progress.status,
+              coverage: progress.coverage,
+              durationMs: progress.durationMs,
+              reason: progress.reason,
+            });
+          } catch (error) {
+            console.error('Deep scan phase event could not be prepared', {
+              tag: 'deep-scan:sse-phase',
+              phaseId: phase.id,
+              errorName: error instanceof Error ? error.name : 'UnknownError',
+            });
+          }
+        }, { deferDoneCompletion: true });
         const result = sanitizeScanResult(rawResult);
 
         // Persist to DB
@@ -276,9 +352,17 @@ export async function POST(request: Request) {
         }
         persisted = true;
 
+        emitDone('complete', null);
         emit('result', { ...result, scanId });
       } catch (err) {
         let errorMessage = err instanceof Error ? err.message : 'Scan failed';
+        if (doneStartedAt !== null && !doneTerminalEmitted) {
+          try {
+            emitDone('incomplete', 'The report could not be finalized or saved');
+          } catch {
+            // The client may already be disconnected.
+          }
+        }
         if (deepQuotaKey && !persisted) {
           try {
             const { error: refundError } = await supabase.rpc('refund_usage', { usage_key: deepQuotaKey });
@@ -295,16 +379,20 @@ export async function POST(request: Request) {
           // The client may have disconnected after the result was persisted.
         }
       } finally {
+        if (heartbeat) clearInterval(heartbeat);
+        heartbeat = null;
+        streamOpen = false;
         try { controller.close(); } catch { /* already cancelled */ }
       }
+    },
+    cancel() {
+      streamOpen = false;
+      if (heartbeat) clearInterval(heartbeat);
+      heartbeat = null;
     },
   });
 
   return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
+    headers: SSE_RESPONSE_HEADERS,
   });
 }

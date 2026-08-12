@@ -49,6 +49,19 @@ export interface CheckCoverage {
   reason: string | null;
 }
 
+/** Live, server-reported outcome for one streamed scanner phase. */
+export interface ScanPhaseProgress {
+  status: 'start' | 'progress' | 'complete' | 'incomplete' | 'not_applicable';
+  coverage?: Pick<
+    CheckCoverage,
+    'requestsAttempted' | 'requestsCompleted' | 'requestsFailed' | 'requestsBlocked'
+  >;
+  /** Measured on the server for this phase. */
+  durationMs?: number;
+  /** Explains an incomplete or non-applicable phase. */
+  reason?: string | null;
+}
+
 /** Public builder provenance. Context for the report, never a finding. */
 export interface ScanProvenance {
   builder: string | null;

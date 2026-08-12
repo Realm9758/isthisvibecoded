@@ -66,7 +66,7 @@ const KEY_PATTERNS: KeyPattern[] = [
   },
   {
     type: 'GitHub Token',
-    pattern: /ghp_[A-Za-z0-9]{36,}/g,
+    pattern: /(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255})/g,
     risk: 'high',
     truncate: (m) => m.slice(0, 8) + '...',
   },
@@ -88,6 +88,11 @@ export function scanForPublicKeys(html: string): PublicKey[] {
 
     while ((match = regex.exec(html)) !== null) {
       const raw = match[0];
+      const candidateBody = raw.replace(/^[A-Za-z]+(?:_[A-Za-z]+)*_/, '');
+      if (
+        /(?:replace|placeholder|example|your[_-]?(?:token|key))/i.test(candidateBody)
+        || /^([A-Za-z0-9])\1{19,}$/.test(candidateBody.replace(/_/g, ''))
+      ) continue;
       const truncated = truncate(raw);
       const key = `${type}:${raw.slice(0, 10)}`;
 

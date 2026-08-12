@@ -117,6 +117,17 @@ export function extractClientArtifacts(source: string): ClientArtifacts {
   };
 }
 
+/**
+ * Extract correlated provider configuration after all browser-delivered
+ * sources have been collected. A build can put the project URL in the HTML
+ * bootstrap and the public key in a separate JavaScript chunk. Parsing each
+ * source independently loses that configuration even though a browser gets
+ * both values.
+ */
+export function extractClientArtifactsFromSources(sources: readonly string[]): ClientArtifacts {
+  return extractClientArtifacts(sources.join('\n'));
+}
+
 export function mergeClientArtifacts(...sets: ClientArtifacts[]): ClientArtifacts {
   const supabase = sets.find(set => set.supabase)?.supabase;
   if (supabase) {

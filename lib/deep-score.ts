@@ -16,7 +16,7 @@ function correlationFamily(finding: DeepFinding): string {
   // Repeated cookie names often reflect one site-wide missing attribute. Keep
   // only the strongest instance of each attribute so cookie count cannot
   // dominate the grade. Other stable rule IDs represent independent checks.
-  const cookieFamily = finding.id.match(/^cookie-(httponly|secure|samesite)-/);
+  const cookieFamily = finding.id.match(/^cookie-(httponly|secure|samesite|prefix)-/);
   return cookieFamily ? `cookie-${cookieFamily[1]}` : finding.id;
 }
 

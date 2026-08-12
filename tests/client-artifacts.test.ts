@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   extractClientArtifacts,
+  extractClientArtifactsFromSources,
   extractNextBuildId,
   extractNextManifestRoutes,
   extractSameOriginScriptUrls,
@@ -33,6 +34,18 @@ test('client artifacts retain public provider config but not secret values in ou
   assert.deepEqual(artifacts.supabase?.tables, ['profiles']);
   assert.deepEqual(artifacts.supabase?.storageBuckets, ['public-assets']);
   assert.equal(artifacts.firebase?.storageBucket, 'demo.firebasestorage.app');
+});
+
+test('provider configuration can be correlated across separate browser assets', () => {
+  const artifacts = extractClientArtifactsFromSources([
+    'window.projectUrl = "https://abcdefghijklmnopqrst.supabase.co";',
+    `window.publicKey = "sb_publishable_${'p'.repeat(32)}";`,
+    'client.from("private_profiles");',
+  ]);
+
+  assert.equal(artifacts.supabase?.url, 'https://abcdefghijklmnopqrst.supabase.co');
+  assert.equal(artifacts.supabase?.keyKind, 'publishable');
+  assert.deepEqual(artifacts.supabase?.tables, ['private_profiles']);
 });
 
 test('Next.js discovery accepts structured build ids and concrete manifest routes only', () => {

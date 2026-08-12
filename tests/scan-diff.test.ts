@@ -22,6 +22,7 @@ function scan(lane: ScanLane | undefined, findings: DeepFinding[]): DeepScanResu
     lane,
     scannedAt: '2026-08-11T00:00:00.000Z',
     duration: 1,
+    versions: { scanner: '4', scoring: '3', coverage: '3', lane },
     summary: { critical: 0, high: 0, medium: findings.length, low: 0, info: 0, score: 70 },
     findings,
     checked: [],
@@ -57,13 +58,24 @@ test('scans from different lanes are never compared', () => {
   assert.deepEqual(diff.stillOpen, []);
 });
 
-test('a legacy row with no lane counts as a deep scan', () => {
+test('a row with no lane still counts as deep when scanner versions match', () => {
   const againstDeep = diffScans(scan(undefined, [finding('a')]), scan('deep', [finding('a')]));
   assert.equal(againstDeep.comparable, true);
   assert.deepEqual(againstDeep.stillOpen.map(f => f.id), ['a']);
 
   const againstSurface = diffScans(scan(undefined, [finding('a')]), scan('surface', [finding('a')]));
   assert.equal(againstSurface.comparable, false);
+});
+
+test('different scanner instruments are not presented as site changes', () => {
+  const previous = scan('deep', [finding('a')]);
+  const current = scan('deep', []);
+  current.versions = { scanner: '5', scoring: '3', coverage: '3', lane: 'deep' };
+  assert.equal(diffScans(previous, current).comparable, false);
+
+  const legacy = scan('deep', [finding('a')]);
+  delete legacy.versions;
+  assert.equal(diffScans(legacy, scan('deep', [])).comparable, false);
 });
 
 test('a first scan has nothing to compare against', () => {

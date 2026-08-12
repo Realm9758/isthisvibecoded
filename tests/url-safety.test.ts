@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolvePublicTarget } from '../lib/url-safety';
+import { normalizePublicUrl, resolvePublicTarget } from '../lib/url-safety';
+
+test('normalization preserves the submitted page path and scheme but removes private query data', () => {
+  const target = normalizePublicUrl('http://example.com/app/dashboard?preview_token=secret#section');
+  assert.equal(target.href, 'http://example.com/app/dashboard');
+  assert.equal(normalizePublicUrl('example.com/app').href, 'https://example.com/app');
+});
 
 test('direct public addresses can be pinned without a second DNS lookup', async () => {
   assert.deepEqual(

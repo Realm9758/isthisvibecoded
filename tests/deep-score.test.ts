@@ -42,3 +42,12 @@ test('cookie count cannot dominate the score for one repeated attribute', () => 
   ]);
   assert.equal(many, one);
 });
+
+test('repeated invalid cookie-prefix contracts count as one rule family', () => {
+  const one = calculateDeepScore([finding('cookie-prefix-__Host-session', 'medium')]);
+  const many = calculateDeepScore([
+    finding('cookie-prefix-__Host-session', 'medium'),
+    finding('cookie-prefix-__Secure-account', 'medium'),
+  ]);
+  assert.equal(many, one);
+});

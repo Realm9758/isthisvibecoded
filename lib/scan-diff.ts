@@ -4,7 +4,7 @@ export interface ScanDiff {
   resolved: DeepFinding[];
   added: DeepFinding[];
   stillOpen: DeepFinding[];
-  /** False when there is no prior scan, or the two scans used different lanes. */
+  /** False when there is no prior scan, or the scans used different instruments. */
   comparable: boolean;
 }
 
@@ -26,6 +26,16 @@ export function diffScans(previous: DeepScanResult | null, current: DeepScanResu
   if (!previous) return EMPTY;
   // Legacy rows carry no lane and are deep scans by definition.
   if ((previous.lane ?? 'deep') !== (current.lane ?? 'deep')) return EMPTY;
+  // Rule, scoring, or coverage changes can make a finding appear or disappear
+  // without the site changing. Do not call that movement resolved/new.
+  const beforeVersions = previous.versions;
+  const afterVersions = current.versions;
+  if (!beforeVersions || !afterVersions) return EMPTY;
+  if (
+    beforeVersions.scanner !== afterVersions.scanner
+    || beforeVersions.scoring !== afterVersions.scoring
+    || beforeVersions.coverage !== afterVersions.coverage
+  ) return EMPTY;
 
   const before = new Map(previous.findings.map(finding => [key(finding), finding]));
   const after = new Map(current.findings.map(finding => [key(finding), finding]));

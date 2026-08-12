@@ -29,11 +29,12 @@ export const SCORED_PHASE_IDS: ReadonlySet<string> = new Set([
 
 /**
  * Why a check could not be completed, in words a site owner can act on. The
- * reader does not need the status code; they need to know whether their own
- * firewall hid the answer.
+ * reader does not need the status code; they need to know that the scanner
+ * could not evaluate the response. A block may come from the site, a safety
+ * boundary, or a provider quota, so the fallback must not guess which one.
  */
 export function describeCoverageFailure(counts: { blocked: number; failed: number }): string | null {
-  if (counts.blocked > 0) return 'Blocked by the site or its firewall';
+  if (counts.blocked > 0) return 'One or more requests were blocked before they could be evaluated';
   if (counts.failed > 0) return 'The request failed or timed out';
   return null;
 }

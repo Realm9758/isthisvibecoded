@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findStripeSecretEvidence, validateSensitiveFileEvidence } from '../lib/deep-evidence';
+import {
+  findGenericClientKeyEvidence,
+  findStripeSecretEvidence,
+  validateSensitiveFileEvidence,
+} from '../lib/deep-evidence';
 
 test('environment files classify configuration separately from confirmed secrets', () => {
   assert.equal(
@@ -59,6 +63,50 @@ test('empty and placeholder credential fields do not become exposures', () => {
   );
 });
 
+test('a misleading HTML content type does not hide strong plain-file evidence', () => {
+  const env = validateSensitiveFileEvidence(
+    '/.env',
+    `JWT_SECRET=${'s'.repeat(32)}`,
+    'text/html; charset=utf-8',
+  );
+  assert.ok(env);
+
+  assert.equal(
+    validateSensitiveFileEvidence('/.env', '<!doctype html><html><body>not found</body></html>', 'text/plain'),
+    null,
+  );
+});
+
+test('infrastructure metadata is not scored like a confirmed credential', () => {
+  const gitHead = validateSensitiveFileEvidence('/.git/HEAD', 'ref: refs/heads/main', 'text/plain');
+  assert.equal(gitHead?.severity, 'info');
+  assert.match(gitHead?.description ?? '', /does not prove/);
+
+  const compose = validateSensitiveFileEvidence(
+    '/docker-compose.yml',
+    'services:\n  web:\n    image: example/app:latest',
+    'text/yaml',
+  );
+  assert.equal(compose?.severity, 'info');
+
+  const dockerfile = validateSensitiveFileEvidence('/Dockerfile', 'FROM node:22\nRUN npm ci', 'text/plain');
+  assert.equal(dockerfile?.severity, 'info');
+
+  const credentialedDockerfile = validateSensitiveFileEvidence(
+    '/Dockerfile',
+    `FROM node:22\nENV API_KEY=${'a-realistic-secret-'.repeat(2)}`,
+    'text/plain',
+  );
+  assert.equal(credentialedDockerfile?.severity, undefined);
+
+  const databaseTemplate = validateSensitiveFileEvidence(
+    '/config/database.yml',
+    'adapter: postgresql\ndatabase: app\nusername: app\npassword: replace-me',
+    'text/yaml',
+  );
+  assert.equal(databaseTemplate?.severity, 'medium');
+});
+
 test('Stripe test and live secrets receive different bounded classifications', () => {
   const testKey = findStripeSecretEvidence(`window.key='sk_test_${'A1b2'.repeat(8)}'`);
   const liveKey = findStripeSecretEvidence(`window.key='sk_live_${'C3d4'.repeat(8)}'`);
@@ -75,4 +123,13 @@ test('Stripe test and live secrets receive different bounded classifications', (
     `sk_test_${'A1b2'.repeat(8)} sk_live_${'Z9y8'.repeat(8)}`,
   );
   assert.equal(liveAfterTest?.severity, 'critical');
+});
+
+test('generic client-key candidates are evaluated independently', () => {
+  const evidence = findGenericClientKeyEvidence([
+    'apiKey="REPLACE_ME_REPLACE_ME"',
+    `secret_key="${'A1b2'.repeat(8)}"`,
+  ].join('\n'));
+  assert.equal(evidence?.redacted, 'A1b2...A1b2');
+  assert.equal(findGenericClientKeyEvidence('apiKey="your-api-key-placeholder"'), null);
 });

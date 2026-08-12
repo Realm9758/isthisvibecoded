@@ -28,7 +28,7 @@ test('a complete scan keeps its score', () => {
 
 test('a blocked scored check withholds the score', () => {
   const blocked = coverage('files', {
-    requestsBlocked: 1, complete: false, reason: 'Blocked by the site or its firewall',
+    requestsBlocked: 1, complete: false, reason: 'One or more requests were blocked before they could be evaluated',
   });
   assert.equal(scoreIsWithheld([coverage('headers'), blocked]), true);
 });
@@ -56,19 +56,19 @@ test('informational-only discovery phases do not withhold the score', () => {
 });
 
 test('a blocked check reports a plain-language reason, not a status code', () => {
-  assert.equal(describeCoverageFailure({ blocked: 1, failed: 0 }), 'Blocked by the site or its firewall');
+  assert.equal(describeCoverageFailure({ blocked: 1, failed: 0 }), 'One or more requests were blocked before they could be evaluated');
   assert.equal(describeCoverageFailure({ blocked: 0, failed: 1 }), 'The request failed or timed out');
   assert.equal(describeCoverageFailure({ blocked: 0, failed: 0 }), null);
 });
 
 test('being blocked outranks having failed when both happened', () => {
-  assert.equal(describeCoverageFailure({ blocked: 1, failed: 3 }), 'Blocked by the site or its firewall');
+  assert.equal(describeCoverageFailure({ blocked: 1, failed: 3 }), 'One or more requests were blocked before they could be evaluated');
 });
 
 test('the coverage banner lists every check that produced no answer', () => {
   const checks = [
     coverage('headers'),
-    coverage('files', { complete: false, reason: 'Blocked by the site or its firewall' }),
+    coverage('files', { complete: false, reason: 'One or more requests were blocked before they could be evaluated' }),
     coverage('robots', { complete: false, reason: 'The request failed or timed out' }),
   ];
   assert.deepEqual(incompleteChecks(checks).map(c => c.phaseId), ['files', 'robots']);
