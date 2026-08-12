@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { claimHeldScan } from '@/lib/claim-scan';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { ACCOUNT_POLICY_VERSION, isValidDisplayHandle } from '@/lib/policy';
 import { apiPath } from '@/lib/site';
+import { LANE_CHECK_COUNTS } from '@/lib/scan-lanes';
 
 function PasswordStrength({ password }: { password: string }) {
   const strength = useMemo(() => {
@@ -73,6 +74,12 @@ export default function SignupPage() {
 
   const { signup } = useAuth();
   const router = useRouter();
+  const [returnTo, setReturnTo] = useState('/');
+
+  useEffect(() => {
+    const candidate = new URLSearchParams(window.location.search).get('returnTo');
+    if (candidate?.startsWith('/') && !candidate.startsWith('//')) setReturnTo(candidate);
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -106,7 +113,7 @@ export default function SignupPage() {
         body: JSON.stringify({ notifInApp, notifEmail }),
       });
       if (!response.ok) throw new Error('Could not save notification preferences');
-      router.push(await claimHeldScan());
+      router.push(await claimHeldScan(returnTo));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save notification preferences');
     } finally {
@@ -115,7 +122,7 @@ export default function SignupPage() {
   }
 
   async function skipPrefs() {
-    router.push(await claimHeldScan());
+    router.push(await claimHeldScan(returnTo));
   }
 
   return (
@@ -155,7 +162,7 @@ export default function SignupPage() {
           <>
             {/* Free tier perks */}
             <div className="flex items-center justify-center gap-4 mb-6 flex-wrap">
-              {['3 full scans', 'All 28 checks', 'Private by default'].map(perk => (
+              {['3 full scans', `All ${LANE_CHECK_COUNTS.deep} checks`, 'Private by default'].map(perk => (
                 <span key={perk} className="flex items-center gap-1.5 text-xs text-white/40">
                   <span className="text-emerald-400 text-xs">✓</span>
                   {perk}
@@ -311,7 +318,7 @@ export default function SignupPage() {
 
             <p className="text-center text-sm text-white/30 mt-6">
               Already have an account?{' '}
-              <Link href="/login" className="hover:opacity-70 transition-opacity font-medium" style={{ color: 'var(--accent)' }}>
+              <Link href={`/login?returnTo=${encodeURIComponent(returnTo)}`} className="hover:opacity-70 transition-opacity font-medium" style={{ color: 'var(--accent)' }}>
                 Sign in →
               </Link>
             </p>

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { DeepScanResult, DeepFinding } from '@/types/deep-scan';
 import type { ScanPhase } from '@/lib/scan-phases';
 import { apiPath } from '@/lib/site';
+import { MUTATION_GUARD_HEADER, MUTATION_GUARD_VALUE } from '@/lib/request-security-constants';
 
 /**
  * Consumes a scan's SSE stream and renders live progress.
@@ -50,6 +51,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
   const [phases, setPhases] = useState<PhaseState[]>([]);
   const [currentDetail, setCurrentDetail] = useState('Initialising scanner…');
   const [log, setLog] = useState<string[]>([]);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const logRef = useRef<HTMLDivElement>(null);
 
   // The parent usually passes inline literals for these. Holding them in refs
@@ -59,6 +61,12 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
   const bodyRef = useRef(body);
   const onResultRef = useRef(onResult);
   const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000)), 1_000);
+    return () => window.clearInterval(timer);
+  }, [endpoint, label]);
 
   useEffect(() => {
     bodyRef.current = body;
@@ -76,7 +84,10 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
 
       const res = await fetch(apiPath(endpoint), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          [MUTATION_GUARD_HEADER]: MUTATION_GUARD_VALUE,
+        },
         body: JSON.stringify(bodyRef.current),
         signal: ctrl.signal,
       }).catch(() => null);
@@ -154,7 +165,9 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
                   ? 'grade withheld because coverage was incomplete'
                   : `grade ${completed.summary.score}/100`
               }`);
-              onResultRef.current(completed);
+              setCurrentDetail('Report ready');
+              await new Promise(resolve => setTimeout(resolve, 600));
+              if (!ctrl.signal.aborted) onResultRef.current(completed);
             }
 
             if (event === 'error') {
@@ -182,19 +195,28 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: 'smooth' });
   }, [log]);
 
-  const doneCount = phases.filter(p => p.status === 'done' || p.status === 'found').length;
-  const progress = phases.length ? Math.round((doneCount / phases.length) * 100) : 0;
+  const checkPhases = phases.filter(p => p.phase.id !== 'init' && p.phase.id !== 'done');
+  const doneCount = checkPhases.filter(p => p.status === 'done' || p.status === 'found').length;
+  const progress = checkPhases.length ? Math.round((doneCount / checkPhases.length) * 100) : 0;
+  const findingCount = checkPhases.reduce((sum, phase) => sum + phase.findingCount, 0);
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
-      {/* Terminal */}
-      <div className="border overflow-hidden" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
-        <div className="flex items-center gap-3 px-5 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>
+      <div className="border p-5 space-y-3" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }} aria-live="polite">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
           <span className="w-2 h-2 rounded-full animate-pulse-glow shrink-0" style={{ background: 'var(--accent)' }} />
           <span className="font-mono text-sm text-white truncate">{label}</span>
-          <span className="ml-auto label shrink-0">live</span>
+          <span className="ml-auto font-mono text-xs" style={{ color: 'var(--faint)' }}>
+            {doneCount} of {checkPhases.length || '...'} checks · {elapsedSeconds}s · {findingCount} potential issue{findingCount === 1 ? '' : 's'}
+          </span>
         </div>
+        <p className="text-sm" style={{ color: 'var(--muted)' }}>{currentDetail}</p>
+        <p className="text-xs" style={{ color: 'var(--ghost)' }}>Usually under 45 seconds. Keep this tab open. Requests may appear in your logs or WAF.</p>
+      </div>
 
+      {/* Technical log */}
+      <details className="border overflow-hidden" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+        <summary className="label cursor-pointer px-5 py-3.5">Show technical log</summary>
         <div ref={logRef} className="h-48 overflow-y-auto px-5 py-4 space-y-1">
           {log.map((line, i) => {
             const colour =
@@ -211,7 +233,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
           })}
           <span className="inline-block w-1.5 h-3.5 align-middle animate-pulse-glow" style={{ background: 'var(--ghost)' }} />
         </div>
-      </div>
+      </details>
 
       {/* Progress */}
       <div>
@@ -219,10 +241,18 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
           <span className="font-mono text-xs truncate" style={{ color: 'var(--faint)' }}>{currentDetail}</span>
           <span className="font-mono text-xs shrink-0 text-white/70">{progress}%</span>
         </div>
-        <div className="h-px w-full" style={{ background: 'var(--border)' }}>
+        <div
+          className="h-2 w-full"
+          style={{ background: 'var(--border)', borderRadius: 999 }}
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progress}
+          aria-label="Scan progress"
+        >
           <div
-            className="h-px transition-all duration-700"
-            style={{ width: `${progress}%`, background: 'var(--accent)' }}
+            className="h-2 transition-all duration-700"
+            style={{ width: `${progress}%`, background: 'var(--accent)', borderRadius: 999 }}
           />
         </div>
       </div>

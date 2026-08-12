@@ -20,6 +20,8 @@ export const USER_BURST_LIMIT = 1;
 
 /** Every caller combined, per target domain, per hour. Never relax this. */
 export const TARGET_HOURLY_LIMIT = 10;
+/** Unverified Surface traffic may use only part of the shared target budget. */
+export const SURFACE_TARGET_HOURLY_LIMIT = 6;
 
 const day = (now: Date) => now.toISOString().slice(0, 10);
 const hour = (now: Date) => now.toISOString().slice(0, 13);
@@ -44,4 +46,12 @@ export function userBurstKey(userId: string, now: Date): string {
 
 export function targetHourlyKey(domain: string, now: Date): string {
   return `scan-target:${domain.toLowerCase()}:${hour(now)}`;
+}
+
+export function surfaceTargetHourlyKey(domain: string, now: Date): string {
+  return `scan-target-surface:${domain.toLowerCase()}:${hour(now)}`;
+}
+
+export function providerTargetHourlyKey(hostname: string, now: Date): string {
+  return `provider-target:${hostname.toLowerCase()}:${hour(now)}`;
 }

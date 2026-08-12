@@ -9,21 +9,26 @@ import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
 import { getAnonymousRateLimitKey } from '@/lib/rate-limit';
 import {
   ANONYMOUS_DAILY_LIMIT, FREE_LIFETIME_LIMIT, USER_BURST_LIMIT, TARGET_HOURLY_LIMIT,
-  anonymousDailyKey, freeLifetimeKey, userBurstKey, targetHourlyKey,
+  SURFACE_TARGET_HOURLY_LIMIT, anonymousDailyKey, freeLifetimeKey, userBurstKey,
+  targetHourlyKey, surfaceTargetHourlyKey,
 } from '@/lib/scan-quota';
+import { reserveUsageBatch, type UsageReservation } from '@/lib/scan-reservation';
+import { mutationRequestError, readBoundedJson } from '@/lib/request-security';
+import { sanitizeFindings, sanitizeScanResult } from '@/lib/evidence-redaction';
 import type { DeepFinding } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
 export const maxDuration = 55;
 
 /**
- * The surface lane: fifteen read-only checks, open to any URL, no account.
+ * The surface lane contains only bounded read-only checks and is open to any
+ * public URL without domain verification.
  *
  * No domain-control evidence is required because nothing here sends a payload
  * or touches an application entry point. Every request is of the class a
- * browser or a search crawler already makes. The thirteen checks that do send
- * payloads live behind /api/deep-scan and its verification gate, and no
- * amount of money moves them.
+ * browser or a search crawler already makes. Payload and application-entry
+ * checks live behind /api/deep-scan and its verification gate, and no amount
+ * of money moves them.
  */
 
 const CLAIM_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -33,6 +38,9 @@ function sse(event: string, data: unknown): string {
 }
 
 export async function POST(request: Request) {
+  const requestError = mutationRequestError(request);
+  if (requestError) return Response.json({ error: requestError }, { status: 403 });
+
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE)?.value;
   const payload = token ? await verifyToken(token) : null;
@@ -40,7 +48,7 @@ export async function POST(request: Request) {
 
   let domain: string;
   try {
-    const body = await request.json();
+    const body = await readBoundedJson(request) as Record<string, unknown>;
     if (typeof body?.url !== 'string' || !body.url.trim()) {
       return Response.json({ error: 'A URL is required' }, { status: 400 });
     }
@@ -54,64 +62,19 @@ export async function POST(request: Request) {
 
   const now = new Date();
 
-  // Reserved before anything else, and for every caller. This is the control
-  // that stops Ironclad being pointed at one victim over and over, so it is
-  // not a billing limit and paying does not relax it.
-  const { data: targetBurst, error: targetError } = await supabase.rpc('consume_usage', {
-    usage_key: targetHourlyKey(domain, now),
-    usage_limit: TARGET_HOURLY_LIMIT,
-  });
-  if (targetError) {
-    console.error('Usage reservation failed', { tag: 'scan:target', reason: targetError.message });
-    return Response.json({ error: 'Could not reserve the scan rate allowance' }, { status: 503 });
-  }
-  if (Number(targetBurst) < 0) {
-    return Response.json(
-      { error: 'This domain has been scanned too many times in the past hour. Try again later.' },
-      { status: 429 },
-    );
-  }
-
-  // The one key refunded if the scan fails. The per-target cap is not
-  // refunded: the target absorbed the traffic either way.
   let quotaKey: string | null = null;
-
+  const reservations: UsageReservation[] = [
+    { key: targetHourlyKey(domain, now), limit: TARGET_HOURLY_LIMIT },
+    { key: surfaceTargetHourlyKey(domain, now), limit: SURFACE_TARGET_HOURLY_LIMIT },
+  ];
   if (!userId) {
     const rateLimitKey = getAnonymousRateLimitKey(request);
     if (!rateLimitKey) {
       return Response.json({ error: 'Anonymous scanning is unavailable' }, { status: 503 });
     }
     quotaKey = anonymousDailyKey(rateLimitKey, now);
-    const { data: remaining, error } = await supabase.rpc('consume_usage', {
-      usage_key: quotaKey,
-      usage_limit: ANONYMOUS_DAILY_LIMIT,
-    });
-    if (error) {
-      console.error('Usage reservation failed', { tag: 'scan:anonymous', reason: error.message });
-      return Response.json({ error: 'Could not reserve the scan allowance' }, { status: 503 });
-    }
-    if (Number(remaining) < 0) {
-      return Response.json(
-        {
-          error: `You have used your free scan for today. Create an account for ${FREE_LIFETIME_LIMIT} full scans.`,
-          signupRequired: true,
-        },
-        { status: 429 },
-      );
-    }
+    reservations.push({ key: quotaKey, limit: ANONYMOUS_DAILY_LIMIT });
   } else {
-    const { data: burst, error: burstError } = await supabase.rpc('consume_usage', {
-      usage_key: userBurstKey(userId, now),
-      usage_limit: USER_BURST_LIMIT,
-    });
-    if (burstError) {
-      console.error('Usage reservation failed', { tag: 'scan:burst', reason: burstError.message });
-      return Response.json({ error: 'Could not reserve the scan rate allowance' }, { status: 503 });
-    }
-    if (Number(burst) < 0) {
-      return Response.json({ error: 'Wait a moment before starting another scan.' }, { status: 429 });
-    }
-
     const { data: userRow, error: userError } = await supabase
       .from('users')
       .select('plan')
@@ -120,27 +83,34 @@ export async function POST(request: Request) {
     if (userError) {
       return Response.json({ error: 'Could not verify account plan' }, { status: 503 });
     }
-
+    reservations.push({ key: userBurstKey(userId, now), limit: USER_BURST_LIMIT });
     if (!userRow || userRow.plan === 'free') {
       quotaKey = freeLifetimeKey(userId);
-      const { data: remaining, error } = await supabase.rpc('consume_usage', {
-        usage_key: quotaKey,
-        usage_limit: FREE_LIFETIME_LIMIT,
-      });
-      if (error) {
-        console.error('Usage reservation failed', { tag: 'scan:lifetime', reason: error.message });
-        return Response.json({ error: 'Could not reserve the scan allowance' }, { status: 503 });
-      }
-      if (Number(remaining) < 0) {
-        return Response.json(
-          {
-            error: `You have used all ${FREE_LIFETIME_LIMIT} free scans. Pro removes the limit.`,
-            upgradeRequired: true,
-          },
-          { status: 403 },
-        );
-      }
+      reservations.push({ key: quotaKey, limit: FREE_LIFETIME_LIMIT });
     }
+  }
+
+  const reservation = await reserveUsageBatch(reservations);
+  if (reservation.error) {
+    console.error('Usage reservation failed', { tag: 'scan:batch', reason: reservation.error });
+    return Response.json({ error: 'Could not reserve the scan allowance' }, { status: 503 });
+  }
+  if (!reservation.allowed) {
+    if (quotaKey && reservation.deniedKey === quotaKey) {
+      return Response.json(
+        userId
+          ? { error: `You have used all ${FREE_LIFETIME_LIMIT} free scans. Pro removes the limit.`, upgradeRequired: true }
+          : { error: `You have used your free scan for today. Create an account for ${FREE_LIFETIME_LIMIT} full scans.`, signupRequired: true },
+        { status: userId ? 403 : 429 },
+      );
+    }
+    if (reservation.deniedKey?.startsWith('scan-burst:')) {
+      return Response.json({ error: 'Wait a moment before starting another scan.' }, { status: 429 });
+    }
+    return Response.json(
+      { error: 'This domain has reached its safe Surface scan allowance for the hour. Try again later.' },
+      { status: 429 },
+    );
   }
 
   const encoder = new TextEncoder();
@@ -153,9 +123,10 @@ export async function POST(request: Request) {
       try {
         emit('phases', phasesForLane(SCAN_PHASES, 'surface'));
 
-        const result = await deepScanDomain(domain, 'surface', (phase, findings: DeepFinding[], status) => {
-          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings, status });
+        const rawResult = await deepScanDomain(domain, 'surface', (phase, findings: DeepFinding[], status) => {
+          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings: sanitizeFindings(findings), status });
         });
+        const result = sanitizeScanResult(rawResult);
 
         const scanId = crypto.randomUUID();
         const claimToken = userId ? null : crypto.randomUUID().replace(/-/g, '');

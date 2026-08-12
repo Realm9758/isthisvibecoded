@@ -89,6 +89,13 @@ function isPrivateIp(address: string): boolean {
     const normalized = address.toLowerCase();
     return normalized === '::1' ||
       normalized === '::' ||
+      // Reject IPv4-compatible, NAT64, 6to4, and Teredo transition ranges.
+      // Their eventual IPv4 destination can depend on deployment-specific
+      // translation outside this process, so they are unsafe scanner targets.
+      normalized.startsWith('::') ||
+      normalized.startsWith('64:ff9b:') ||
+      normalized.startsWith('2002:') ||
+      normalized.startsWith('2001:0:') ||
       normalized.startsWith('fc') ||
       normalized.startsWith('fd') ||
       /^fe[89ab]/.test(normalized) ||

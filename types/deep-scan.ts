@@ -11,7 +11,8 @@ export type DeepFindingCategory =
   | 'info-disclosure'
   | 'ssl'
   | 'authentication'
-  | 'injection';
+  | 'injection'
+  | 'cloud-data';
 
 export interface DeepFinding {
   id: string;
@@ -40,6 +41,8 @@ export interface CheckCoverage {
   requestsCompleted: number;
   requestsFailed: number;
   requestsBlocked: number;
+  /** False when a provider or framework-specific check did not apply. */
+  applicable?: boolean;
   /** False when a probe failed or was blocked, so this check is inconclusive. */
   complete: boolean;
   /** Plain-language reason shown to the reader. Null when the check completed. */

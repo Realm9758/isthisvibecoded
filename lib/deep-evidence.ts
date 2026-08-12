@@ -13,7 +13,8 @@ export interface StripeSecretEvidence {
   description: string;
 }
 
-const SECRET_ENV_NAME = /^(?:JWT_SECRET|API_SECRET|SECRET_KEY|PRIVATE_KEY|STRIPE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY|[A-Z0-9_]*(?:PASSWORD|PRIVATE_KEY|CLIENT_SECRET|ACCESS_TOKEN|AUTH_TOKEN|SERVICE_ROLE_KEY))$/;
+const SECRET_ENV_NAME = /^(?:JWT_SECRET|API_SECRET|SECRET_KEY|PRIVATE_KEY|STRIPE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY|AWS_SECRET_ACCESS_KEY|[A-Z0-9_]*(?:PASSWORD|PRIVATE_KEY|CLIENT_SECRET|ACCESS_TOKEN|AUTH_TOKEN|SERVICE_ROLE_KEY|API_KEY))$/;
+const PUBLIC_ENV_PREFIX = /^(?:NEXT_PUBLIC_|VITE_|PUBLIC_)/;
 const PLACEHOLDER_VALUE = /^(?:change-?me|example|placeholder|replace-?me|test|your[-_].*|x{8,}|\$\{[^}]+\})$/i;
 
 function meaningfulValue(rawValue: string): string | null {
@@ -33,13 +34,14 @@ function environmentEvidence(body: string): SensitiveFileEvidence | null {
     if (!match) continue;
     assignments++;
     const value = meaningfulValue(match[2]);
+    const isSecretName = SECRET_ENV_NAME.test(match[1]) && !PUBLIC_ENV_PREFIX.test(match[1]);
     if (!value) {
-      if (SECRET_ENV_NAME.test(match[1]) || match[1] === 'DATABASE_URL') {
+      if (isSecretName || match[1] === 'DATABASE_URL') {
         templatePlaceholder = true;
       }
       continue;
     }
-    if (SECRET_ENV_NAME.test(match[1])) {
+    if (isSecretName) {
       return { evidence: `${assignments} or more environment assignments including a non-placeholder secret value detected` };
     }
     if (match[1] === 'DATABASE_URL') {
@@ -175,8 +177,10 @@ function isObviousPlaceholder(value: string): boolean {
 
 /** Classify client-visible Stripe secrets without conflating test and live access. */
 export function findStripeSecretEvidence(html: string): StripeSecretEvidence | null {
-  const match = html.match(/sk_(live|test)_[A-Za-z0-9]{24,}/);
-  if (!match || isObviousPlaceholder(match[0])) return null;
+  const matches = [...html.matchAll(/sk_(live|test)_[A-Za-z0-9]{24,}/g)]
+    .filter(match => !isObviousPlaceholder(match[0]));
+  const match = matches.find(candidate => candidate[1] === 'live') ?? matches[0];
+  if (!match) return null;
 
   const mode = match[1];
   const redacted = `sk_${mode}_...${match[0].slice(-6)}`;

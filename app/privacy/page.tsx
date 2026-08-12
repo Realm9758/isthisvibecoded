@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
+import { SITE_ORIGIN } from '@/lib/site';
 
-const BASE = 'https://isthisvibecoded-one.vercel.app';
+const BASE = SITE_ORIGIN;
 
 export const metadata: Metadata = {
   title: 'Privacy Policy | Ironclad',
@@ -62,15 +63,15 @@ export default function PrivacyPage() {
               What we scan, and what we do not
             </h2>
             <p className="mb-3">
-              Passive scans are read-only but are not a single-request operation. We fetch the submitted public page, follow a bounded number
-              of validated redirects, and make up to 15 HEAD or GET requests to a fixed list of public paths on the same origin:
+              Surface scans are read-only but are not a single-request operation. We fetch the submitted public page, follow a bounded number
+              of validated redirects, and make bounded GET requests to exact-origin scripts and a fixed list of public file paths:
             </p>
             <ul className="space-y-1.5 mb-3">
               {[
                 'HTTP response headers (security headers, server info)',
                 'HTML source code (publicly rendered in any browser)',
-                'A fixed list of public paths such as robots.txt, sitemap.xml, security.txt, login, admin, and selected configuration paths',
-                'JavaScript references and potential public key or token patterns already present in the returned HTML',
+                'A fixed list of static paths such as robots.txt, .env, .git metadata, source maps, and public API schemas',
+                'Exact-origin JavaScript references and public key or token patterns present in returned HTML and bundles',
               ].map(item => (
                 <li key={item} className="flex gap-2">
                   <span className="shrink-0" style={{ color: 'var(--ghost)' }}>›</span>
@@ -107,7 +108,7 @@ export default function PrivacyPage() {
             <ul className="space-y-1.5 mb-3">
               {[
                 'You are logged in to a verified Ironclad account',
-                'You have demonstrated control of the domain by placing a unique token in DNS, an HTML meta tag, or a hosted verification file',
+                'You have demonstrated current control through Vercel or Netlify, or by placing a unique token in DNS, a real HTML head meta tag, or a hosted verification file',
                 'You have explicitly requested the scan and accepted these terms',
               ].map(item => (
                 <li key={item} className="flex gap-2">
@@ -121,7 +122,10 @@ export default function PrivacyPage() {
               to run active tests; placing a token on a site without that authorisation does not grant it. Deep checks are best-effort indicators and are not
               a complete OWASP audit, a penetration test, or a guarantee that findings contain no false positives or negatives.
             </p>
-            <p>Deep scan results are stored privately in the requesting user&apos;s account.</p>
+            <p>
+              Some deep checks make bounded read or list requests to exact Supabase, Firebase, or S3 endpoints discovered in the site&apos;s own public configuration.
+              Provider credentials and raw returned records are not included in finding evidence. Deep scan results are stored privately in the requesting user&apos;s account.
+            </p>
           </section>
 
           <section>
@@ -151,6 +155,7 @@ export default function PrivacyPage() {
                 'Your display name, optional avatar, and notification preferences',
                 'Scan results linked to your account. Every result is private to you; there is no publish action',
                 'Subscription status if you upgrade, via Stripe, so we never see your card details',
+                'If you choose hosting verification, an encrypted Vercel or Netlify access token used only to confirm that the domain remains attached to an accessible project',
               ].map(item => (
                 <li key={item} className="flex gap-2">
                   <span className="shrink-0" style={{ color: 'var(--ghost)' }}>›</span>

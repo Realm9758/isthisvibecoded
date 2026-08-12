@@ -13,3 +13,11 @@ test('a token pattern that includes secret material remains high risk', () => {
   assert.equal(findings.find(finding => finding.type === 'GitHub Token')?.risk, 'high');
 });
 
+test('modern Supabase secret keys are distinguished from publishable keys', () => {
+  const findings = scanForPublicKeys([
+    `sb_secret_${'s'.repeat(32)}`,
+    `sb_publishable_${'p'.repeat(32)}`,
+  ].join(' '));
+  assert.equal(findings.find(finding => finding.type === 'Supabase Secret Key')?.risk, 'high');
+  assert.equal(findings.find(finding => finding.type === 'Supabase Publishable Key')?.risk, 'info');
+});

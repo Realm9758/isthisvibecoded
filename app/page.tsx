@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { ScanRunner, type CompletedScan, type ScanErrorMeta } from '@/components/ScanRunner';
 import { ScanReport } from '@/components/ScanReport';
 import { useAuth } from '@/contexts/AuthContext';
-import { DEEP_ONLY_PHASE_IDS, LANE_CHECK_COUNTS } from '@/lib/scan-lanes';
+import { DEEP_ONLY_PHASE_IDS, LANE_CHECK_COUNTS, SURFACE_PHASE_IDS } from '@/lib/scan-lanes';
+import { SCAN_PHASES } from '@/lib/scan-phases';
 import { FREE_LIFETIME_LIMIT } from '@/lib/scan-quota';
 import { holdClaim } from '@/lib/claim-scan';
 
@@ -21,8 +22,8 @@ const STEPS = [
   },
   {
     n: '02',
-    title: 'Prove the domain is yours',
-    body: 'One TXT record, one meta tag, or one file at /.well-known. That unlocks the checks that send real payloads, because we will not fire those at a server you have not proved you control.',
+    title: 'Prove you control the domain',
+    body: 'Connect Vercel or Netlify, or use a TXT record, meta tag, or file. The live proof is checked again before active requests begin.',
   },
   {
     n: '03',
@@ -32,36 +33,10 @@ const STEPS = [
 ];
 
 /** The real check inventory, grouped for the coverage matrix. */
-const COVERAGE = [
-  { name: 'Secrets in HTML',     lane: 'surface' },
-  { name: 'Exposed .env',        lane: 'surface' },
-  { name: 'Exposed .git',        lane: 'surface' },
-  { name: 'Source maps',         lane: 'surface' },
-  { name: 'Security headers',    lane: 'surface' },
-  { name: 'Cookie flags',        lane: 'surface' },
-  { name: 'HTTPS / HSTS',        lane: 'surface' },
-  { name: 'CORS policy',         lane: 'surface' },
-  { name: 'Vulnerable libs',     lane: 'surface' },
-  { name: 'Directory listing',   lane: 'surface' },
-  { name: 'GraphQL schema',      lane: 'surface' },
-  { name: 'Public API docs',     lane: 'surface' },
-  { name: 'Version disclosure',  lane: 'surface' },
-  { name: 'robots.txt leaks',    lane: 'surface' },
-  { name: 'HTTP methods',        lane: 'surface' },
-  { name: 'SQL injection',       lane: 'deep' },
-  { name: 'NoSQL injection',     lane: 'deep' },
-  { name: 'Reflected XSS',       lane: 'deep' },
-  { name: 'Path traversal',      lane: 'deep' },
-  { name: 'SSRF',                lane: 'deep' },
-  { name: 'CRLF injection',      lane: 'deep' },
-  { name: 'Host header inj.',    lane: 'deep' },
-  { name: 'Open redirect',       lane: 'deep' },
-  { name: 'IDOR',                lane: 'deep' },
-  { name: 'Forced browsing',     lane: 'deep' },
-  { name: 'Admin discovery',     lane: 'deep' },
-  { name: 'Error verbosity',     lane: 'deep' },
-  { name: 'Rate-limit abuse',    lane: 'deep' },
-];
+const SURFACE_SET = new Set<string>(SURFACE_PHASE_IDS);
+const COVERAGE = SCAN_PHASES
+  .filter(phase => phase.id !== 'init' && phase.id !== 'done')
+  .map(phase => ({ name: phase.label, lane: SURFACE_SET.has(phase.id) ? 'surface' : 'deep' }));
 
 /** Shown in the hero as a worked example, never presented as a live result. */
 const EXAMPLE_FINDINGS = [
@@ -78,7 +53,7 @@ const FAQ = [
   },
   {
     q: 'Does paying unlock more checks?',
-    a: 'No. Permission decides which checks run; payment decides how many scans you get. Verifying a domain unlocks all 28 on the free plan too.',
+    a: `No. Permission decides which checks run; payment decides how many scans you get. Verifying a domain unlocks all ${TOTAL} on the free plan too.`,
   },
   {
     q: 'What if my firewall blocks the scanner?',
@@ -210,7 +185,7 @@ export default function Home() {
                 className="px-7 py-3.5 text-sm font-semibold text-white shrink-0 transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ background: 'var(--accent)', borderRadius: 4 }}
               >
-                {status === 'scanning' ? 'Scanning…' : 'Scan my domain'}
+                {status === 'scanning' ? 'Scanning…' : `Run ${SURFACE} safe checks`}
               </button>
             </div>
 
@@ -231,7 +206,7 @@ export default function Home() {
             )}
 
             <p id="scan-terms" className="mt-5 font-mono text-xs leading-relaxed" style={{ color: 'var(--ghost)' }}>
-              {FREE_LIFETIME_LIMIT} free scans · no card · one DNS record proves you own the domain
+              no account · usually under 45 seconds · active checks require current domain control
             </p>
           </div>
 

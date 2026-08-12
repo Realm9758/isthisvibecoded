@@ -4,10 +4,16 @@ import { supabase } from '@/lib/supabase';
 import { deepScanDomain, SCAN_PHASES } from '@/lib/deep-scanner';
 import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
 import { DEEP_SCAN_TERMS_VERSION, VERIFICATION_MAX_AGE_MS } from '@/lib/policy';
+import { mutationRequestError, readBoundedJson } from '@/lib/request-security';
+import { checkManualVerificationProof, type ManualVerificationMethod } from '@/lib/verification-proof';
+import { reserveUsage } from '@/lib/store';
 import {
   FREE_LIFETIME_LIMIT, USER_BURST_LIMIT, TARGET_HOURLY_LIMIT,
   freeLifetimeKey, userBurstKey, targetHourlyKey,
 } from '@/lib/scan-quota';
+import { reserveUsageBatch, type UsageReservation } from '@/lib/scan-reservation';
+import { revalidateProviderDomain } from '@/lib/provider-verification';
+import { sanitizeFindings, sanitizeScanResult } from '@/lib/evidence-redaction';
 import type { DeepFinding } from '@/types/deep-scan';
 
 export const runtime = 'nodejs';
@@ -18,6 +24,9 @@ function sse(event: string, data: unknown): string {
 }
 
 export async function POST(request: Request) {
+  const requestError = mutationRequestError(request);
+  if (requestError) return Response.json({ error: requestError }, { status: 403 });
+
   // Auth required
   const cookieStore = await cookies();
   const token = cookieStore.get(AUTH_COOKIE)?.value;
@@ -26,10 +35,26 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Authentication required' }, { status: 401 });
   }
 
+  // This cheap account gate runs before JSON parsing, DNS, and ownership
+  // lookups. Invalid or unverified random domains cannot create unbounded
+  // resolver and database work without ever reaching a scan quota.
+  const ingressMinute = new Date().toISOString().slice(0, 16);
+  const ingressRemaining = await reserveUsage(
+    `deep-ingress:${payload.userId}:${ingressMinute}`,
+    12,
+    'deep-scan:ingress',
+  );
+  if (ingressRemaining === null) {
+    return Response.json({ error: 'Could not reserve the request allowance' }, { status: 503 });
+  }
+  if (ingressRemaining < 0) {
+    return Response.json({ error: 'Too many deep-scan requests. Wait before trying again.' }, { status: 429 });
+  }
+
   let domain: string;
   let authorizationAcceptedAt: number;
   try {
-    const body = await request.json();
+    const body = await readBoundedJson(request) as Record<string, unknown>;
     if (typeof body?.domain !== 'string' || !body.domain.trim()) {
       return Response.json({ error: 'Domain is required' }, { status: 400 });
     }
@@ -50,7 +75,6 @@ export async function POST(request: Request) {
     }
     authorizationAcceptedAt = Date.now();
     const target = normalizePublicUrl(body.domain);
-    await assertPublicTarget(target, 4_000);
     domain = target.hostname.toLowerCase();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Invalid request body';
@@ -58,21 +82,21 @@ export async function POST(request: Request) {
   }
 
   // Deep scan limit for free users
-  const { data: userRow, error: userError } = await supabase
-    .from('users')
-    .select('plan')
-    .eq('id', payload.userId)
-    .maybeSingle();
+  const [userQuery, verificationQuery] = await Promise.all([
+    supabase.from('users').select('plan').eq('id', payload.userId).maybeSingle(),
+    supabase
+      .from('verification_tokens')
+      .select('id, token, verified, verified_at, verification_method')
+      .eq('domain', domain)
+      .eq('user_id', payload.userId)
+      .maybeSingle(),
+  ]);
+  const { data: userRow, error: userError } = userQuery;
   if (userError) {
     return Response.json({ error: 'Could not verify account plan' }, { status: 503 });
   }
   // Fresh domain-control check: it must belong to this authenticated user.
-  const { data: verif, error: verificationError } = await supabase
-    .from('verification_tokens')
-    .select('verified, verified_at')
-    .eq('domain', domain)
-    .eq('user_id', payload.userId)
-    .maybeSingle();
+  const { data: verif, error: verificationError } = verificationQuery;
 
   if (verificationError) {
     return Response.json({ error: 'Could not verify domain control' }, { status: 503 });
@@ -98,49 +122,93 @@ export async function POST(request: Request) {
     );
   }
 
+  const verificationMethod = verif?.verification_method;
+  const isManualMethod = ['dns', 'meta', 'file'].includes(verificationMethod ?? '');
+  const provider = verificationMethod === 'vercel-oauth'
+    ? 'vercel'
+    : verificationMethod === 'netlify-oauth'
+      ? 'netlify'
+      : null;
+  if (!isManualMethod && !provider) {
+    return Response.json(
+      { error: 'This verification method cannot be revalidated. Reconnect or renew domain control.' },
+      { status: 403 },
+    );
+  }
+  const liveProof = provider
+    ? await revalidateProviderDomain(payload.userId, provider, domain)
+    : await checkManualVerificationProof(
+        domain,
+        String(verif?.token ?? ''),
+        verificationMethod as ManualVerificationMethod,
+      );
+  if (!liveProof.verified) {
+    await supabase
+      .from('verification_tokens')
+      .update({ verified: false, verified_at: null })
+      .eq('id', verif?.id)
+      .eq('user_id', payload.userId);
+    return Response.json(
+      {
+        error: `Domain control could not be revalidated. ${liveProof.error ?? 'Renew the proof and try again.'}`,
+        verificationExpired: true,
+        reasonCode: 'reasonCode' in liveProof ? liveProof.reasonCode : 'provider_revalidation_failed',
+      },
+      { status: 403 },
+    );
+  }
+
+  try {
+    await assertPublicTarget(new URL(`https://${domain}`), 4_000);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Domain is no longer a public target';
+    return Response.json({ error: message }, { status: message.includes('timed out') ? 408 : 400 });
+  }
+
+  // Record the exact live proof that gates this scan. This also closes a race
+  // where the token or current claim changes after the initial row read.
+  const { data: revalidationEventId, error: revalidationEventError } = await supabase.rpc(
+    'complete_domain_verification_with_event',
+    {
+      claim_domain: domain,
+      claimant_user_id: payload.userId,
+      claimant_token: String(verif?.token ?? ''),
+      verification_method: verificationMethod,
+      verified_timestamp: authorizationAcceptedAt,
+      proof_subject: liveProof.proofSubject ?? domain,
+    },
+  );
+  if (
+    revalidationEventError
+    || !Number.isFinite(Number(revalidationEventId))
+    || Number(revalidationEventId) <= 0
+  ) {
+    return Response.json(
+      { error: 'The domain claim changed while it was being revalidated. Verify it again.' },
+      { status: 409 },
+    );
+  }
+
   // Plan entitlement controls the daily/lifetime quota, not operational
   // safety. Every account and target remains burst-limited so a paid account
   // cannot launch an unbounded number of outbound active scans.
   const now = new Date();
-  const [{ data: userBurst, error: userBurstError }, { data: targetBurst, error: targetBurstError }] = await Promise.all([
-    supabase.rpc('consume_usage', {
-      usage_key: userBurstKey(payload.userId, now),
-      usage_limit: USER_BURST_LIMIT,
-    }),
-    supabase.rpc('consume_usage', {
-      usage_key: targetHourlyKey(domain, now),
-      usage_limit: TARGET_HOURLY_LIMIT,
-    }),
-  ]);
-  if (userBurstError || targetBurstError) {
-    console.error('Usage reservation failed', {
-      tag: 'deep-scan:burst',
-      reason: (userBurstError ?? targetBurstError)?.message,
-    });
-    return Response.json({ error: 'Could not reserve the active-scan rate allowance' }, { status: 503 });
-  }
-  if (Number(userBurst) < 0 || Number(targetBurst) < 0) {
-    return Response.json(
-      { error: 'Active-scan burst limit reached. Wait before starting another scan.' },
-      { status: 429 },
-    );
-  }
-
   let deepQuotaKey: string | null = null;
+  const reservations: UsageReservation[] = [
+    { key: userBurstKey(payload.userId, now), limit: USER_BURST_LIMIT },
+    { key: targetHourlyKey(domain, now), limit: TARGET_HOURLY_LIMIT },
+  ];
   if (!userRow || userRow.plan === 'free') {
     deepQuotaKey = freeLifetimeKey(payload.userId);
-    const { data: remaining, error: countError } = await supabase.rpc('consume_usage', {
-      usage_key: deepQuotaKey,
-      usage_limit: FREE_LIFETIME_LIMIT,
-    });
-    if (countError) {
-      console.error('Usage reservation failed', {
-        tag: 'deep-scan:lifetime',
-        reason: countError.message,
-      });
-      return Response.json({ error: 'Could not reserve deep scan allowance' }, { status: 503 });
-    }
-    if (Number(remaining) < 0) {
+    reservations.push({ key: deepQuotaKey, limit: FREE_LIFETIME_LIMIT });
+  }
+  const reservation = await reserveUsageBatch(reservations);
+  if (reservation.error) {
+    console.error('Usage reservation failed', { tag: 'deep-scan:batch', reason: reservation.error });
+    return Response.json({ error: 'Could not reserve the active-scan allowance' }, { status: 503 });
+  }
+  if (!reservation.allowed) {
+    if (deepQuotaKey && reservation.deniedKey === deepQuotaKey) {
       return Response.json(
         {
           error: `You have used all ${FREE_LIFETIME_LIMIT} free scans. Pro removes the limit; operational rate limits still apply.`,
@@ -149,6 +217,10 @@ export async function POST(request: Request) {
         { status: 403 },
       );
     }
+    return Response.json(
+      { error: 'Active-scan burst limit reached. Wait before starting another scan.' },
+      { status: 429 },
+    );
   }
 
   // Stream SSE
@@ -163,9 +235,10 @@ export async function POST(request: Request) {
       try {
         emit('phases', SCAN_PHASES);
 
-        const result = await deepScanDomain(domain, 'deep', (phase, findings: DeepFinding[], status) => {
-          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings, status });
+        const rawResult = await deepScanDomain(domain, 'deep', (phase, findings: DeepFinding[], status) => {
+          emit('phase', { id: phase.id, label: phase.label, detail: phase.detail, findings: sanitizeFindings(findings), status });
         });
+        const result = sanitizeScanResult(rawResult);
 
         // Persist to DB
         const scanId = crypto.randomUUID();
@@ -176,6 +249,15 @@ export async function POST(request: Request) {
           lane: 'deep',
           authorization_terms_version: DEEP_SCAN_TERMS_VERSION,
           authorization_accepted_at: authorizationAcceptedAt,
+          verification_snapshot: {
+            verificationId: verif?.id,
+            verificationEventId: Number(revalidationEventId),
+            method: verificationMethod,
+            verifiedAt: authorizationAcceptedAt,
+            previousVerifiedAt: verifiedAt,
+            revalidatedAt: authorizationAcceptedAt,
+            proofSubject: liveProof.proofSubject ?? domain,
+          },
           result,
           created_at: Date.now(),
         });

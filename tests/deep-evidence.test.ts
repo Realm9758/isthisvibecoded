@@ -16,6 +16,24 @@ test('environment files classify configuration separately from confirmed secrets
   assert.match(uncredentialed?.evidence ?? '', /no password or token/);
   const credentialed = validateSensitiveFileEvidence('/.env', 'DATABASE_URL=postgres://user:secretpass@db.internal/acme', 'text/plain');
   assert.equal(credentialed?.severity, undefined);
+  const openAiSecret = validateSensitiveFileEvidence(
+    '/.env',
+    `OPENAI_API_KEY=sk-proj-${'a'.repeat(32)}`,
+    'text/plain',
+  );
+  assert.ok(openAiSecret);
+  assert.equal(openAiSecret.severity, undefined);
+  const awsSecret = validateSensitiveFileEvidence(
+    '/.env',
+    `AWS_ACCESS_KEY_ID=AKIA${'A'.repeat(16)}\nAWS_SECRET_ACCESS_KEY=${'b'.repeat(40)}`,
+    'text/plain',
+  );
+  assert.ok(awsSecret);
+  assert.equal(awsSecret.severity, undefined);
+  assert.equal(
+    validateSensitiveFileEvidence('/.env', `NEXT_PUBLIC_FIREBASE_API_KEY=${'c'.repeat(32)}`, 'text/plain'),
+    null,
+  );
 });
 
 test('schema-only SQL is not classified as exposed database rows', () => {
@@ -49,4 +67,12 @@ test('Stripe test and live secrets receive different bounded classifications', (
   assert.equal(liveKey?.severity, 'critical');
   assert.match(liveKey?.description ?? '', /within the key permissions/);
   assert.equal(findStripeSecretEvidence(`sk_test_${'x'.repeat(32)}`), null);
+  const liveAfterPlaceholder = findStripeSecretEvidence(
+    `sk_test_${'x'.repeat(32)} sk_live_${'Z9y8'.repeat(8)}`,
+  );
+  assert.equal(liveAfterPlaceholder?.severity, 'critical');
+  const liveAfterTest = findStripeSecretEvidence(
+    `sk_test_${'A1b2'.repeat(8)} sk_live_${'Z9y8'.repeat(8)}`,
+  );
+  assert.equal(liveAfterTest?.severity, 'critical');
 });

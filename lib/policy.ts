@@ -4,7 +4,7 @@
  * be inferred from an old checkbox or a direct, unversioned request.
  */
 export const ACCOUNT_POLICY_VERSION = '2026-08-08-v1';
-export const DEEP_SCAN_TERMS_VERSION = '2026-08-08-v1';
+export const DEEP_SCAN_TERMS_VERSION = '2026-08-12-v2';
 
 /** Domain-control evidence must be renewed before another active scan. */
 export const VERIFICATION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;

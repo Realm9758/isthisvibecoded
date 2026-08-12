@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { claimHeldScan } from '@/lib/claim-scan';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -14,6 +14,12 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
   const router = useRouter();
+  const [returnTo, setReturnTo] = useState('/');
+
+  useEffect(() => {
+    const candidate = new URLSearchParams(window.location.search).get('returnTo');
+    if (candidate?.startsWith('/') && !candidate.startsWith('//')) setReturnTo(candidate);
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,7 +27,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      router.push(await claimHeldScan());
+      router.push(await claimHeldScan(returnTo));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
@@ -186,7 +192,7 @@ export default function LoginPage() {
 
         <p className="text-center text-sm text-white/30 mt-6">
           Don&apos;t have an account?{' '}
-          <Link href="/signup" className="hover:opacity-70 transition-opacity font-medium" style={{ color: 'var(--accent)' }}>
+          <Link href={`/signup?returnTo=${encodeURIComponent(returnTo)}`} className="hover:opacity-70 transition-opacity font-medium" style={{ color: 'var(--accent)' }}>
             Sign up free →
           </Link>
         </p>

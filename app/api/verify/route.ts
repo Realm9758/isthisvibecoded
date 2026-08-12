@@ -1,13 +1,12 @@
-import { resolveTxt } from 'dns/promises';
 import { cookies } from 'next/headers';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
 import { VERIFICATION_MAX_AGE_MS } from '@/lib/policy';
 import { reserveUsage } from '@/lib/store';
-import { pinnedFetch } from '@/lib/pinned-fetch';
 import type { VerificationToken } from '@/types/analysis';
-import { SCANNER_INFO_URL } from '@/lib/site';
+import { checkManualVerificationProof, type ManualVerificationMethod } from '@/lib/verification-proof';
+import { mutationRequestError, readBoundedJson } from '@/lib/request-security';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -19,63 +18,6 @@ function randomToken(): string {
 
 function getDomain(url: string): string {
   return normalizePublicUrl(url).hostname.toLowerCase();
-}
-
-function normalizeVerificationTarget(rawUrl: string): URL {
-  const requested = new URL(rawUrl);
-  const target = normalizePublicUrl(requested.href);
-  // Redirect query parameters can be required by a public site's routing. Keep
-  // them only for this outbound request; they are never returned or persisted.
-  target.search = requested.search;
-  return target;
-}
-
-async function fetchVerificationTarget(rawUrl: string): Promise<Response> {
-  let target = normalizeVerificationTarget(rawUrl);
-  const originalHost = target.host.toLowerCase();
-  const originalProtocol = target.protocol;
-
-  for (let redirects = 0; redirects <= 5; redirects++) {
-    const response = await pinnedFetch(target, {
-      headers: { 'User-Agent': `Ironclad-Verifier/2.0 (+${SCANNER_INFO_URL})` },
-      signal: AbortSignal.timeout(8_000),
-      redirect: 'manual',
-    });
-    if (response.status < 300 || response.status >= 400) return response;
-    const location = response.headers.get('location');
-    if (!location) return response;
-    const nextTarget = normalizeVerificationTarget(new URL(location, target).href);
-    if (nextTarget.host.toLowerCase() !== originalHost || nextTarget.protocol !== originalProtocol) {
-      throw new Error('Verification redirects must stay on the exact original HTTPS host');
-    }
-    await response.body?.cancel().catch(() => undefined);
-    target = nextTarget;
-  }
-  throw new Error('Too many redirects');
-}
-
-async function readVerificationBody(response: Response, maxBytes: number): Promise<string> {
-  const declaredLength = Number(response.headers.get('content-length') ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) throw new Error('Verification response is too large');
-  if (!response.body) return '';
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let bytesRead = 0;
-  let text = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    bytesRead += value.byteLength;
-    if (bytesRead > maxBytes) {
-      await reader.cancel();
-      throw new Error('Verification response is too large');
-    }
-    text += decoder.decode(value, { stream: true });
-  }
-
-  return text + decoder.decode();
 }
 
 function isFreshVerification(row: { verified?: unknown; verified_at?: unknown }): boolean {
@@ -93,22 +35,6 @@ function storedCreatedAt(value: unknown): string {
   return Number.isFinite(timestamp) && timestamp > 0
     ? new Date(timestamp).toISOString()
     : new Date().toISOString();
-}
-
-function readMetaAttribute(tag: string, attribute: 'name' | 'content'): string | null {
-  const pattern = attribute === 'name'
-    ? /\sname\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i
-    : /\scontent\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i;
-  const match = tag.match(pattern);
-  return match ? (match[1] ?? match[2] ?? match[3] ?? '') : null;
-}
-
-function hasVerificationMeta(html: string, token: string): boolean {
-  const tags = html.match(/<meta\b[^>]*>/gi) ?? [];
-  return tags.some(tag =>
-    readMetaAttribute(tag, 'name')?.trim().toLowerCase() === 'vibecoded-verification'
-      && readMetaAttribute(tag, 'content')?.trim() === token
-  );
 }
 
 async function getAuthUserId(): Promise<string | null> {
@@ -134,9 +60,12 @@ function isPrivateDomain(hostname: string): boolean {
   return false;
 }
 
-// ── POST /api/verify — generate or fetch a token for a domain ─────────────
+// POST /api/verify: generate or fetch a token for a domain
 
 export async function POST(request: Request) {
+  const requestError = mutationRequestError(request);
+  if (requestError) return Response.json({ error: requestError }, { status: 403 });
+
   const userId = await getAuthUserId();
   if (!userId) {
     return Response.json({ error: 'You must be logged in to verify a domain' }, { status: 401 });
@@ -153,7 +82,7 @@ export async function POST(request: Request) {
 
   let domain: string;
   try {
-    const body = await request.json();
+    const body = await readBoundedJson(request) as Record<string, unknown>;
     if (typeof body?.domain !== 'string' || !body.domain.trim()) {
       return Response.json({ error: 'Domain is required' }, { status: 400 });
     }
@@ -335,21 +264,26 @@ export async function POST(request: Request) {
   return Response.json(result);
 }
 
-// ── DELETE /api/verify — revoke this user's domain verification/token ─────
+// DELETE /api/verify: revoke this user's domain verification/token
 
 export async function DELETE(request: Request) {
+  const requestError = mutationRequestError(request);
+  if (requestError) return Response.json({ error: requestError }, { status: 403 });
+
   const userId = await getAuthUserId();
   if (!userId) {
     return Response.json({ error: 'Unauthorised' }, { status: 401 });
   }
 
   let domain: string;
+  let disconnectProvider = false;
   try {
-    const body = await request.json();
+    const body = await readBoundedJson(request) as Record<string, unknown>;
     if (typeof body?.domain !== 'string' || !body.domain.trim()) {
       return Response.json({ error: 'Domain required' }, { status: 400 });
     }
     domain = getDomain(body.domain);
+    disconnectProvider = body.disconnectProvider === true;
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
@@ -360,7 +294,7 @@ export async function DELETE(request: Request) {
 
   const { data: existing, error: existingError } = await supabase
     .from('verification_tokens')
-    .select('verified')
+    .select('verified, verification_method')
     .eq('domain', domain)
     .eq('user_id', userId)
     .maybeSingle();
@@ -373,6 +307,30 @@ export async function DELETE(request: Request) {
     return Response.json({ error: 'No token found for this domain' }, { status: 404 });
   }
 
+  const provider = existing.verification_method === 'vercel-oauth'
+    ? 'vercel'
+    : existing.verification_method === 'netlify-oauth'
+      ? 'netlify'
+      : null;
+  if (disconnectProvider && provider) {
+    const { error: connectionError } = await supabase
+      .from('verification_provider_connections')
+      .delete()
+      .eq('user_id', userId)
+      .eq('provider', provider);
+    if (connectionError) {
+      return Response.json({ error: `Could not disconnect ${provider}` }, { status: 503 });
+    }
+    const { error: invalidateError } = await supabase
+      .from('verification_tokens')
+      .update({ verified: false, verified_at: null, verification_method: null })
+      .eq('user_id', userId)
+      .eq('verification_method', `${provider}-oauth`);
+    if (invalidateError) {
+      return Response.json({ error: `The ${provider} connection was removed, but its domain claims could not be refreshed` }, { status: 503 });
+    }
+  }
+
   const { error: deleteError } = await supabase
     .from('verification_tokens')
     .delete()
@@ -383,12 +341,19 @@ export async function DELETE(request: Request) {
     return Response.json({ error: 'Could not revoke domain verification' }, { status: 503 });
   }
 
-  return Response.json({ ok: true, revokedVerifiedClaim: existing.verified === true });
+  return Response.json({
+    ok: true,
+    revokedVerifiedClaim: existing.verified === true,
+    disconnectedProvider: disconnectProvider ? provider : null,
+  });
 }
 
-// ── GET /api/verify — check verification (auth required, own token only) ──
+// ── PATCH /api/verify: check verification (auth required, own token only) ──
 
-export async function GET(request: Request) {
+export async function PATCH(request: Request) {
+  const requestError = mutationRequestError(request);
+  if (requestError) return Response.json({ error: requestError }, { status: 403 });
+
   const userId = await getAuthUserId();
   if (!userId) {
     return Response.json({ error: 'You must be logged in to verify a domain' }, { status: 401 });
@@ -403,15 +368,17 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Too many verification checks. Try again later.' }, { status: 429 });
   }
 
-  const { searchParams } = new URL(request.url);
   let domain: string;
+  let clientToken: string;
+  let requestedMethod: string;
   try {
-    domain = getDomain((searchParams.get('domain') ?? '').trim());
+    const body = await readBoundedJson(request) as Record<string, unknown>;
+    domain = getDomain(typeof body.domain === 'string' ? body.domain.trim() : '');
+    clientToken = typeof body.token === 'string' ? body.token.trim() : '';
+    requestedMethod = typeof body.method === 'string' ? body.method : 'dns';
   } catch {
-    return Response.json({ error: 'Invalid domain' }, { status: 400 });
+    return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
-  const clientToken = (searchParams.get('token') ?? '').trim();
-  const requestedMethod = searchParams.get('method') ?? 'dns';
 
   if (!domain || !clientToken) {
     return Response.json({ error: 'domain and token are required' }, { status: 400 });
@@ -429,7 +396,7 @@ export async function GET(request: Request) {
   if (!['dns', 'meta', 'file'].includes(requestedMethod)) {
     return Response.json({ error: 'Invalid method' }, { status: 400 });
   }
-  const method = requestedMethod as 'dns' | 'meta' | 'file';
+  const method = requestedMethod as ManualVerificationMethod;
 
   // Validate token: it must be owned by this user and match exactly
   const { data: stored, error: storedError } = await supabase
@@ -462,55 +429,24 @@ export async function GET(request: Request) {
     return Response.json({ verified: false, error: 'Could not check existing domain claim' }, { status: 503 });
   }
 
-  let verified = false;
-
-  if (method === 'dns') {
-    try {
-      const records = await resolveTxt(`_vibecoded-verification.${domain}`);
-      const expected = `vibecoded-verification=${clientToken}`;
-      verified = records.some(chunks => chunks.join('').trim() === expected);
-    } catch {
-      return Response.json({ verified: false, method: 'dns', error: 'DNS record not found' });
-    }
-  } else if (method === 'meta') {
-    try {
-      const res = await fetchVerificationTarget(`https://${domain}`);
-      if (!res.ok) return Response.json({ verified: false, method: 'meta', error: `Site returned HTTP ${res.status}` });
-      const html = await readVerificationBody(res, 512_000);
-      verified = hasVerificationMeta(html, clientToken);
-    } catch {
-      return Response.json({ verified: false, method: 'meta', error: 'Could not fetch site' });
-    }
-  } else {
-    try {
-      const res = await fetchVerificationTarget(`https://${domain}/.well-known/vibecoded.txt`);
-      if (!res.ok) return Response.json({ verified: false, method: 'file', error: `Verification path returned HTTP ${res.status}` });
-      // Only accept plain text responses to avoid HTML catch-all pages
-      const ct = res.headers.get('content-type') ?? '';
-      if (ct.includes('text/html')) {
-        return Response.json({ verified: false, method: 'file', error: 'Verification file not found (got HTML response)' });
-      }
-      const text = (await readVerificationBody(res, 4_096)).trim();
-      verified = text === clientToken;
-    } catch {
-      return Response.json({ verified: false, method: 'file', error: 'Could not fetch verification file' });
-    }
-  }
+  const proof = await checkManualVerificationProof(domain, clientToken, method);
+  const verified = proof.verified;
 
   if (verified) {
     const verifiedAt = Date.now();
-    const { data: completed, error: completeError } = await supabase.rpc('complete_domain_verification', {
+    const { data: eventId, error: completeError } = await supabase.rpc('complete_domain_verification_with_event', {
       claim_domain: domain,
       claimant_user_id: userId,
       claimant_token: clientToken,
       verification_method: method,
       verified_timestamp: verifiedAt,
+      proof_subject: proof.proofSubject ?? domain,
     });
 
     if (completeError) {
       return Response.json({ verified: false, error: 'Could not save domain verification' }, { status: 503 });
     }
-    if (completed !== true) {
+    if (!Number.isFinite(Number(eventId)) || Number(eventId) <= 0) {
       return Response.json({ verified: false, error: 'Verification token changed; generate a new token and try again.' }, { status: 409 });
     }
 
@@ -520,8 +456,16 @@ export async function GET(request: Request) {
       verifiedAt,
       expiresAt: verifiedAt + VERIFICATION_MAX_AGE_MS,
       ownershipTransferred: !!priorOwner,
+      proofSubject: proof.proofSubject,
+      verificationEventId: Number(eventId),
     });
   }
 
-  return Response.json({ verified: false, method, ownershipTransferred: false });
+  return Response.json({
+    verified: false,
+    method,
+    ownershipTransferred: false,
+    error: proof.error,
+    reasonCode: proof.reasonCode,
+  });
 }

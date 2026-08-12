@@ -18,7 +18,7 @@ const key = (finding: DeepFinding) => `${finding.id}::${finding.url ?? ''}`;
  *
  * Lanes are never compared. A surface grade and a deep grade are different
  * measurements taken with different instruments, so diffing across them would
- * report thirteen checks worth of findings as newly appeared the first time
+ * report a lane's additional findings as newly appeared the first time
  * somebody verifies their domain, and as all resolved the first time they
  * scan without it.
  */

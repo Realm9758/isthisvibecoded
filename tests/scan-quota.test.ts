@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ANONYMOUS_DAILY_LIMIT, FREE_LIFETIME_LIMIT, USER_BURST_LIMIT, TARGET_HOURLY_LIMIT,
-  anonymousDailyKey, freeLifetimeKey, userBurstKey, targetHourlyKey,
+  SURFACE_TARGET_HOURLY_LIMIT, anonymousDailyKey, freeLifetimeKey, userBurstKey,
+  targetHourlyKey, surfaceTargetHourlyKey,
+  providerTargetHourlyKey,
 } from '../lib/scan-quota';
 
 const NOW = new Date('2026-08-11T14:37:05.000Z');
@@ -28,8 +30,11 @@ test('burst keys are per minute and target keys are per hour', () => {
 
 test('the per-target cap is an abuse control shared by every caller', () => {
   assert.equal(TARGET_HOURLY_LIMIT, 10);
+  assert.equal(SURFACE_TARGET_HOURLY_LIMIT, 6);
   // Case cannot be used to mint a fresh allowance against the same victim.
   assert.equal(targetHourlyKey('Example.COM', NOW), 'scan-target:example.com:2026-08-11T14');
+  assert.equal(surfaceTargetHourlyKey('Example.COM', NOW), 'scan-target-surface:example.com:2026-08-11T14');
+  assert.equal(providerTargetHourlyKey('Project.Supabase.CO', NOW), 'provider-target:project.supabase.co:2026-08-11T14');
 });
 
 test('keys roll over on their own boundary and not before', () => {

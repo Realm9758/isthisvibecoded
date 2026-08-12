@@ -21,6 +21,9 @@ test('private, link-local, metadata, and documentation addresses are rejected', 
     '[fec0::1]',
     '[feff::1]',
     '[2001:db8::1]',
+    '[::7f00:1]',
+    '[64:ff9b::7f00:1]',
+    '[2002:7f00:1::1]',
   ]) {
     await assert.rejects(
       resolvePublicTarget(new URL(`http://${address}/`)),

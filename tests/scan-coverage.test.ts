@@ -42,6 +42,19 @@ test('a blocked unscored check leaves the score intact', () => {
   assert.equal(scoreIsWithheld([coverage('headers'), blocked]), false);
 });
 
+test('a provider check that does not apply leaves the score intact', () => {
+  assert.equal(scoreIsWithheld([
+    coverage('supabase', { applicable: false, complete: true, reason: 'Not applicable' }),
+  ]), false);
+});
+
+test('informational-only discovery phases do not withhold the score', () => {
+  for (const phaseId of ['graphql', 'apidocs', 'idor', 'components', 'info']) {
+    assert.equal(SCORED_PHASE_IDS.has(phaseId), false, phaseId);
+  }
+  assert.equal(SCORED_PHASE_IDS.has('serverstatus'), true);
+});
+
 test('a blocked check reports a plain-language reason, not a status code', () => {
   assert.equal(describeCoverageFailure({ blocked: 1, failed: 0 }), 'Blocked by the site or its firewall');
   assert.equal(describeCoverageFailure({ blocked: 0, failed: 1 }), 'The request failed or timed out');

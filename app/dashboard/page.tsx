@@ -55,7 +55,7 @@ function gradeColour(score: number) {
 
 // ── Signed out ─────────────────────────────────────────────────────────
 
-function AuthGate() {
+function AuthGate({ returnTo }: { returnTo: string }) {
   return (
     <main className="min-h-screen flex items-center justify-center px-6" style={{ background: 'var(--bg)' }}>
       <div className="max-w-md text-center">
@@ -67,14 +67,14 @@ function AuthGate() {
         </p>
         <div className="flex gap-3 justify-center">
           <Link
-            href="/signup"
+            href={`/signup?returnTo=${encodeURIComponent(returnTo)}`}
             className="px-6 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
             style={{ background: 'var(--accent)', borderRadius: 4 }}
           >
             Create a free account
           </Link>
           <Link
-            href="/login"
+            href={`/login?returnTo=${encodeURIComponent(returnTo)}`}
             className="px-6 py-3 font-mono text-sm border transition-colors hover:bg-white/4"
             style={{ borderColor: 'var(--border-2)', color: 'var(--muted)', borderRadius: 4 }}
           >
@@ -89,7 +89,11 @@ function AuthGate() {
 // ── Paste-into-your-tool prompt ────────────────────────────────────────
 
 function FixPrompt({ result }: { result: DeepScanResult }) {
-  const [tool, setTool] = useState<AiTool>('cursor');
+  const detectedTool = (() => {
+    const builder = result.provenance?.builder?.toLowerCase() ?? '';
+    return TOOLS.find(entry => builder.includes(entry.id))?.id ?? 'cursor';
+  })();
+  const [tool, setTool] = useState<AiTool>(detectedTool);
   const [copied, setCopied] = useState(false);
   const prompt = buildFixPrompt(tool, result);
   const actionable = result.summary.critical + result.summary.high + result.summary.medium;
@@ -147,7 +151,17 @@ function FixPrompt({ result }: { result: DeepScanResult }) {
 
 // ── Deep scan flow ─────────────────────────────────────────────────────
 
-function DeepScanPanel({ onComplete }: { onComplete: () => void }) {
+function DeepScanPanel({
+  onComplete,
+  initialDomain,
+  initialIntent,
+  verificationNotice,
+}: {
+  onComplete: () => void;
+  initialDomain: string;
+  initialIntent: string;
+  verificationNotice: string;
+}) {
   const [step, setStep] = useState<Step>('idle');
   const [inputUrl, setInputUrl] = useState('');
   const [scanDomain, setScanDomain] = useState('');
@@ -156,6 +170,16 @@ function DeepScanPanel({ onComplete }: { onComplete: () => void }) {
   const [errorMeta, setErrorMeta] = useState<ScanErrorMeta>({});
   const [result, setResult] = useState<CompletedScan | null>(null);
   const [authorised, setAuthorised] = useState(false);
+
+  useEffect(() => {
+    if (!initialDomain) return;
+    const timer = window.setTimeout(() => {
+      setInputUrl(initialDomain);
+      setScanDomain(initialDomain);
+      setStep(initialIntent === 'verified' ? 'confirmed' : 'verify');
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [initialDomain, initialIntent]);
 
   function submitUrl(event: React.FormEvent) {
     event.preventDefault();
@@ -201,7 +225,7 @@ function DeepScanPanel({ onComplete }: { onComplete: () => void }) {
         {step === 'idle' && (
           <div>
             <p className="text-sm leading-relaxed mb-6 max-w-xl" style={{ color: 'var(--muted)' }}>
-              Injection, traversal, SSRF, access control and brute-force resistance, sent as real test
+              Injection, traversal, SSRF, access control and header-manipulation checks, sent as real test
               payloads. Prove you control the domain and they run, on the free plan too.
             </p>
             <button
@@ -255,10 +279,15 @@ function DeepScanPanel({ onComplete }: { onComplete: () => void }) {
 
         {step === 'verify' && (
           <div className="space-y-4">
+            {verificationNotice && (
+              <p role="alert" className="border px-4 py-3 text-xs" style={{ borderColor: 'rgba(239,68,68,0.3)', color: 'var(--crit)', borderRadius: 4 }}>
+                {verificationNotice}
+              </p>
+            )}
             <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
-              Place a token on <span className="font-mono text-white/80">{scanDomain}</span> before any active
-              test runs. This proves token placement, not legal ownership: you remain responsible for having
-              permission to test the target.
+              Prove current control of <span className="font-mono text-white/80">{scanDomain}</span> through
+              its hosting account or a token you publish before any active test runs. This is a technical gate,
+              not a legal determination: you remain responsible for having permission to test the target.
             </p>
             <OwnershipVerify domain={scanDomain} onVerified={() => setStep('confirmed')} />
             <button
@@ -301,9 +330,9 @@ function DeepScanPanel({ onComplete }: { onComplete: () => void }) {
               />
               <span className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>
                 I confirm I am authorised to test <span className="font-mono text-white/80">{scanDomain}</span> and
-                to run the active requests described in the{' '}
+                its publicly configured Supabase, Firebase, or storage projects, and to run the bounded active requests described in the{' '}
                 <Link href="/what-we-check" className="underline underline-offset-2" style={{ color: 'var(--accent)' }}>
-                  deep-scan terms
+                  active-check inventory
                 </Link>
                 . This confirmation is recorded with the result.
                 <span className="block mt-1.5 font-mono text-[10px]" style={{ color: 'var(--ghost)' }}>
@@ -319,7 +348,7 @@ function DeepScanPanel({ onComplete }: { onComplete: () => void }) {
                 className="px-6 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-35 disabled:cursor-not-allowed"
                 style={{ background: 'var(--accent)', borderRadius: 4 }}
               >
-                Run deep scan
+                Start {LANE_CHECK_COUNTS.deep}-check deep scan
               </button>
               <button
                 onClick={reset}
@@ -348,10 +377,11 @@ function DeepScanPanel({ onComplete }: { onComplete: () => void }) {
         )}
 
         {step === 'results' && result && (
-          <div className="space-y-5">
-            <ScanReport result={result} onReset={reset} />
-            <FixPrompt result={result} />
-          </div>
+          <ScanReport
+            result={result}
+            onReset={reset}
+            afterSummary={<FixPrompt result={result} />}
+          />
         )}
       </div>
     </section>
@@ -398,6 +428,18 @@ export default function DashboardPage() {
   const { user, loading } = useAuth();
   const [scans, setScans] = useState<ScanSummary[]>([]);
   const [scansLoading, setScansLoading] = useState(true);
+  const [entry, setEntry] = useState({ domain: '', intent: '', error: '', returnTo: '/dashboard' });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      const domain = params.get('domain') ?? '';
+      const intent = params.get('intent') ?? '';
+      const error = params.get('verificationError') ?? '';
+      setEntry({ domain, intent, error, returnTo: `/dashboard${window.location.search}` });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const loadScans = useCallback(() => {
     fetch(apiPath('/api/user/scans'))
@@ -420,7 +462,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!user) return <AuthGate />;
+  if (!user) return <AuthGate returnTo={entry.returnTo} />;
 
   return (
     <main className="min-h-screen px-6 py-12" style={{ background: 'var(--bg)' }}>
@@ -448,7 +490,12 @@ export default function DashboardPage() {
           )}
         </header>
 
-        <DeepScanPanel onComplete={loadScans} />
+        <DeepScanPanel
+          onComplete={loadScans}
+          initialDomain={entry.domain}
+          initialIntent={entry.intent}
+          verificationNotice={entry.error}
+        />
 
         <section className="border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
           <div className="flex items-center justify-between px-5 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>

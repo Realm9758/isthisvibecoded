@@ -21,10 +21,10 @@ import type { CheckCoverage } from '@/types/deep-scan';
  * informational, and a gap in one leaves the grade meaningful.
  */
 export const SCORED_PHASE_IDS: ReadonlySet<string> = new Set([
-  'vibe', 'files', 'cors', 'headers', 'cookies', 'methods', 'ssl',
-  'dirlist', 'sourcemaps', 'graphql', 'apidocs', 'components',
-  'xss', 'sqli', 'nosql', 'traversal', 'ssrf', 'crlf', 'hostheader',
-  'redirect', 'errors', 'admin', 'forced', 'idor', 'ratelimit',
+  'vibe', 'files', 'cors', 'headers', 'cookies', 'ssl', 'serverstatus',
+  'dirlist', 'sourcemaps', 'sqli', 'nosql', 'traversal', 'ssrf',
+  'crlf', 'hostheader', 'redirect', 'errors', 'admin', 'forced',
+  'supabase', 'firebase', 'storage', 'nextauth',
 ]);
 
 /**
@@ -39,7 +39,7 @@ export function describeCoverageFailure(counts: { blocked: number; failed: numbe
 }
 
 export function scoreIsWithheld(checks: readonly CheckCoverage[]): boolean {
-  return checks.some(check => !check.complete && SCORED_PHASE_IDS.has(check.phaseId));
+  return checks.some(check => check.applicable !== false && !check.complete && SCORED_PHASE_IDS.has(check.phaseId));
 }
 
 /** Checks that produced no answer, for the report's coverage banner. */

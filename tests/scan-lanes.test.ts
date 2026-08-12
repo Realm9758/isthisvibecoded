@@ -10,24 +10,25 @@ import {
 import { SCAN_PHASES } from '../lib/scan-phases';
 
 const EXPECTED_SURFACE = [
-  'vibe', 'files', 'cors', 'headers', 'cookies', 'methods', 'ssl',
+  'vibe', 'files', 'headers', 'cookies', 'ssl',
   'dirlist', 'robots', 'sri', 'info', 'components', 'sourcemaps',
-  'graphql', 'apidocs',
+  'apidocs',
 ];
 
 const EXPECTED_DEEP_ONLY = [
   'xss', 'sqli', 'nosql', 'traversal', 'ssrf', 'crlf', 'hostheader',
-  'redirect', 'errors', 'admin', 'forced', 'idor', 'ratelimit',
+  'redirect', 'errors', 'admin', 'forced', 'idor', 'cors', 'graphql',
+  'supabase', 'firebase', 'storage', 'nextauth', 'serverstatus',
 ];
 
-test('the surface lane contains exactly the fifteen agreed checks', () => {
+test('the surface lane contains only browser or crawler class reads', () => {
   assert.deepEqual([...SURFACE_PHASE_IDS].sort(), [...EXPECTED_SURFACE].sort());
-  assert.equal(SURFACE_PHASE_IDS.length, 15);
+  assert.equal(SURFACE_PHASE_IDS.length, 12);
 });
 
-test('the deep lane adds exactly the thirteen payload-sending checks', () => {
+test('the deep lane adds payload, application-entry, and provider checks', () => {
   assert.deepEqual([...DEEP_ONLY_PHASE_IDS].sort(), [...EXPECTED_DEEP_ONLY].sort());
-  assert.equal(DEEP_ONLY_PHASE_IDS.length, 13);
+  assert.equal(DEEP_ONLY_PHASE_IDS.length, 19);
 });
 
 test('no check is in both lanes', () => {
@@ -69,7 +70,7 @@ test('framing phases run in both lanes', () => {
 
 test('phasesForLane streams only the phases that will actually run', () => {
   const surface = phasesForLane(SCAN_PHASES, 'surface').map(p => p.id);
-  assert.equal(surface.length, 17, 'fifteen checks plus init and done');
+  assert.equal(surface.length, 14, 'twelve checks plus init and done');
   assert.equal(surface.includes('sqli'), false);
   assert.equal(surface.includes('files'), true);
 
@@ -78,6 +79,6 @@ test('phasesForLane streams only the phases that will actually run', () => {
 });
 
 test('the advertised check counts match the lanes', () => {
-  assert.equal(LANE_CHECK_COUNTS.surface, 15);
-  assert.equal(LANE_CHECK_COUNTS.deep, 28);
+  assert.equal(LANE_CHECK_COUNTS.surface, 12);
+  assert.equal(LANE_CHECK_COUNTS.deep, 31);
 });

@@ -51,14 +51,14 @@ Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
               <span className="text-white/80">Surface</span> means somebody asked us to look at your site
               from the outside. They did not have to prove they own it, so that lane makes read-only requests
               only. <span className="text-white/80">Deep</span> means the requester proved control of the
-              domain within the last 30 days.
+              domain and that proof was checked again before active requests began.
             </p>
           </Block>
 
           <Block title="what the surface lane requests">
             <p>
-              {SURFACE_PHASE_IDS.length} checks, all read-only. It fetches your homepage, issues one OPTIONS
-              request, and requests a fixed list of well-known paths such as{' '}
+              {SURFACE_PHASE_IDS.length} checks, all read-only. It fetches your homepage, exact-origin script
+              assets referenced by that page, and a fixed list of public file paths such as{' '}
               <span className="font-mono text-xs text-white/70">/.env</span>,{' '}
               <span className="font-mono text-xs text-white/70">/robots.txt</span>,{' '}
               <span className="font-mono text-xs text-white/70">/.git/HEAD</span> and{' '}
@@ -74,7 +74,7 @@ Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
           <Block title="what needs permission">
             <p>
               The other {DEEP_ONLY_PHASE_IDS.length} checks send real test payloads: injection strings, path
-              traversal, forged headers, and repeated requests against authentication endpoints. Those run
+              traversal, forged headers, GraphQL introspection, and bounded provider-rule reads. Those run
               only against a domain whose control the requester has proved, and no plan or payment changes
               that.
             </p>

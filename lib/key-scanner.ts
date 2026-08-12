@@ -9,6 +9,18 @@ interface KeyPattern {
 
 const KEY_PATTERNS: KeyPattern[] = [
   {
+    type: 'Supabase Publishable Key',
+    pattern: /sb_publishable_[A-Za-z0-9_-]{20,}/g,
+    risk: 'info',
+    truncate: (m) => `${m.slice(0, 18)}...${m.slice(-4)}`,
+  },
+  {
+    type: 'Supabase Secret Key',
+    pattern: /sb_secret_[A-Za-z0-9_-]{20,}/g,
+    risk: 'high',
+    truncate: (m) => `${m.slice(0, 10)}...${m.slice(-4)}`,
+  },
+  {
     type: 'Supabase URL',
     pattern: /https:\/\/[a-z0-9]{20,}\.supabase\.co/g,
     risk: 'info',

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { generateRoasts } from '@/lib/roast';
 import { LANE_CHECK_COUNTS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
@@ -22,14 +22,15 @@ interface Props {
   result: AnyScanResult;
   diff?: ScanDiff;
   onReset?: () => void;
+  afterSummary?: ReactNode;
 }
 
 const SEVERITY_ORDER: DeepFindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info'];
 
 const SEVERITY: Record<DeepFindingSeverity, { colour: string; label: string; chip: string }> = {
-  critical: { colour: 'var(--crit)', label: 'Critical', chip: 'crit' },
+  critical: { colour: 'var(--crit)', label: 'Critical', chip: 'critical' },
   high:     { colour: 'var(--high)', label: 'High',     chip: 'high' },
-  medium:   { colour: 'var(--med)',  label: 'Medium',   chip: 'med' },
+  medium:   { colour: 'var(--med)',  label: 'Medium',   chip: 'medium' },
   low:      { colour: 'var(--low)',  label: 'Low',      chip: 'low' },
   info:     { colour: 'var(--faint)', label: 'Info',    chip: 'info' },
 };
@@ -65,7 +66,7 @@ function verdict(result: AnyScanResult): { headline: string; tone: string } {
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
 
-export function ScanReport({ result, diff, onReset }: Props) {
+export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
   const [roastMode, setRoastMode] = useState(false);
   const redacted = result.redacted === true;
   const lane = result.lane ?? 'deep';
@@ -93,6 +94,8 @@ export function ScanReport({ result, diff, onReset }: Props) {
           <span className="font-mono text-sm text-white/60 truncate">{result.domain}</span>
           <span className="ml-auto font-mono text-xs" style={{ color: 'var(--ghost)' }}>
             {lane === 'surface' ? `surface · ${LANE_CHECK_COUNTS.surface} checks` : `deep · ${LANE_CHECK_COUNTS.deep} checks`}
+            {' · '}{result.coverage?.requestsAttempted ?? 0} requests
+            {' · '}{(result.duration / 1_000).toFixed(1)}s
             {' · '}{formatDate(result.scannedAt)}
           </span>
         </div>
@@ -140,27 +143,9 @@ export function ScanReport({ result, diff, onReset }: Props) {
           </p>
         )}
 
-        <div className="px-6 py-4">
-          <button
-            onClick={() => setRoastMode(r => !r)}
-            className="font-mono text-xs px-3 py-1.5 border transition-colors"
-            style={{
-              borderRadius: 3,
-              borderColor: roastMode ? 'rgba(245,158,11,0.35)' : 'var(--border-2)',
-              color: roastMode ? 'var(--high)' : 'var(--faint)',
-            }}
-          >
-            roast mode {roastMode ? 'on' : 'off'}
-          </button>
-          {roastMode && (
-            <ul className="mt-3.5 space-y-2">
-              {roasts.map(line => (
-                <li key={line} className="text-sm leading-relaxed" style={{ color: 'var(--high)' }}>{line}</li>
-              ))}
-            </ul>
-          )}
-        </div>
       </section>
+
+      {afterSummary}
 
       {/* Rescan diff */}
       {diff?.comparable && (diff.resolved.length > 0 || diff.added.length > 0) && (
@@ -172,6 +157,24 @@ export function ScanReport({ result, diff, onReset }: Props) {
           <span style={{ color: 'var(--high)' }}>{diff.added.length} new</span>
           <span style={{ color: 'var(--faint)' }}>{diff.stillOpen.length} still open</span>
           <span className="ml-auto" style={{ color: 'var(--ghost)' }}>since your last scan</span>
+        </section>
+      )}
+
+      {lane === 'surface' && (
+        <section className="border p-7" style={{ borderColor: 'var(--accent-line)', borderRadius: 6 }}>
+          <h3 className="text-base font-semibold text-white mb-2.5">
+            Verify {result.domain} for {DEEP_ONLY_PHASE_IDS.length} active checks
+          </h3>
+          <p className="text-sm leading-relaxed max-w-2xl mb-6" style={{ color: 'var(--muted)' }}>
+            Injection, access-control and provider-rule checks send bounded test inputs. They run only after a current domain-control proof and explicit authorisation.
+          </p>
+          <Link
+            href={`/dashboard?domain=${encodeURIComponent(result.domain)}&intent=verify`}
+            className="inline-block px-6 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            style={{ background: 'var(--accent)', borderRadius: 4 }}
+          >
+            Verify this domain
+          </Link>
         </section>
       )}
 
@@ -244,8 +247,10 @@ export function ScanReport({ result, diff, onReset }: Props) {
       )}
 
       {/* Checked list */}
-      <section className="border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
-        <p className="label px-5 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>every check that ran</p>
+      <details className="border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+        <summary className="label px-5 py-3.5 cursor-pointer" style={{ borderColor: 'var(--border)' }}>
+          {result.checked.length} checks and coverage details
+        </summary>
         <ul>
           {result.checked.map((item, i) => (
             <li
@@ -276,28 +281,7 @@ export function ScanReport({ result, diff, onReset }: Props) {
             </li>
           ))}
         </ul>
-      </section>
-
-      {/* Deep lane upsell */}
-      {lane === 'surface' && (
-        <section className="border p-7" style={{ borderColor: 'var(--border)', borderRadius: 6 }}>
-          <h3 className="text-base font-semibold text-white mb-2.5">
-            {DEEP_ONLY_PHASE_IDS.length} more checks need your permission
-          </h3>
-          <p className="text-sm leading-relaxed max-w-2xl mb-6" style={{ color: 'var(--muted)' }}>
-            SQL injection, cross-site scripting, path traversal, SSRF, access control and brute-force
-            resistance all send test payloads at a server. We only do that against a domain you have proved
-            you control. It is a legal boundary, not a paywall, so verifying unlocks them on the free plan too.
-          </p>
-          <Link
-            href="/dashboard"
-            className="inline-block px-6 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-            style={{ background: 'var(--accent)', borderRadius: 4 }}
-          >
-            Verify a domain
-          </Link>
-        </section>
-      )}
+      </details>
 
       {/* Provenance */}
       {result.provenance?.builder && (
@@ -308,6 +292,22 @@ export function ScanReport({ result, diff, onReset }: Props) {
           </p>
         </section>
       )}
+
+      <details className="border px-5 py-4" style={{ borderColor: 'var(--border)', borderRadius: 4 }}>
+        <summary className="font-mono text-xs cursor-pointer" style={{ color: 'var(--faint)' }}>Optional: roast mode</summary>
+        <button
+          onClick={() => setRoastMode(r => !r)}
+          className="font-mono text-xs px-3 py-1.5 border mt-3"
+          style={{ borderColor: 'var(--border-2)', color: 'var(--faint)', borderRadius: 3 }}
+        >
+          {roastMode ? 'Hide roast' : 'Generate roast'}
+        </button>
+        {roastMode && (
+          <ul className="mt-3 space-y-2">
+            {roasts.map(line => <li key={line} className="text-sm" style={{ color: 'var(--high)' }}>{line}</li>)}
+          </ul>
+        )}
+      </details>
 
       {onReset && (
         <div className="flex justify-center pt-2 pb-4">
@@ -358,13 +358,13 @@ function FindingCard({
           )}
 
           {full.evidence && (
-            <div>
-              <p className="label mb-2">observed</p>
+            <details>
+              <summary className="label mb-2 cursor-pointer">observed evidence</summary>
               <pre
                 className="font-mono text-xs p-3.5 overflow-x-auto whitespace-pre-wrap break-all"
                 style={{ background: 'var(--bg)', color: 'var(--muted)', borderRadius: 4 }}
               >{full.evidence}</pre>
-            </div>
+            </details>
           )}
 
           {full.remediation && (

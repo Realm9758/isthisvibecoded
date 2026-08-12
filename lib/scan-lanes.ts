@@ -20,10 +20,8 @@ export type ScanLane = 'surface' | 'deep';
 export const SURFACE_PHASE_IDS = [
   'vibe',       // reads the already-fetched page
   'files',      // GET of well-known static paths
-  'cors',       // GET carrying an Origin header
   'headers',    // reads the already-fetched response
   'cookies',    // reads the already-fetched response
-  'methods',    // one OPTIONS request
   'ssl',        // GET over HTTP and HTTPS
   'dirlist',    // GET of common asset directories
   'robots',     // GET of /robots.txt
@@ -31,14 +29,14 @@ export const SURFACE_PHASE_IDS = [
   'info',       // reads response headers, one GET of /server-status
   'components', // reads the already-fetched page
   'sourcemaps', // GET of referenced .js.map files
-  'graphql',    // POST of a read-only introspection query, mutates nothing
   'apidocs',    // GET of /swagger and /openapi.json
 ] as const satisfies readonly string[];
 
 /** Sends a payload, probes an application entry point, or repeats requests. */
 export const DEEP_ONLY_PHASE_IDS = [
   'xss', 'sqli', 'nosql', 'traversal', 'ssrf', 'crlf', 'hostheader',
-  'redirect', 'errors', 'admin', 'forced', 'idor', 'ratelimit',
+  'redirect', 'errors', 'admin', 'forced', 'idor', 'cors', 'graphql',
+  'supabase', 'firebase', 'storage', 'nextauth', 'serverstatus',
 ] as const satisfies readonly string[];
 
 /** Present in both lanes: they frame the run rather than probing anything. */

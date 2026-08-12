@@ -40,7 +40,13 @@ export function buildFixPrompt(tool: AiTool, result: DeepScanResult): string {
 
   const lines = actionable
     .slice(0, 12)
-    .map(f => `[${f.severity.toUpperCase()}] ${f.title}\n  Issue: ${f.description}\n  Fix: ${f.remediation}`)
+    .map(f => [
+      `[${f.severity.toUpperCase()}] ${f.title}`,
+      `  Issue: ${f.description}`,
+      f.url ? `  Affected URL: ${f.url}` : null,
+      f.evidence ? `  Observed evidence: ${f.evidence}` : null,
+      `  Fix: ${f.remediation}`,
+    ].filter(Boolean).join('\n'))
     .join('\n\n');
 
   const scoreBlurb = [

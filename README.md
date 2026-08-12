@@ -6,9 +6,9 @@
 
 Ironclad separates two questions the product used to conflate. **Permission decides which checks run. Payment decides how many scans you get.**
 
-**Surface lane, 15 checks, any URL, no account.** Every probe is a read-only request of the class a browser or a search crawler already makes: secrets in HTML, exposed `.env` and `.git`, security headers, cookie flags, TLS and HSTS, CORS, directory listing, `robots.txt`, subresource integrity, server version disclosure, vulnerable libraries, source maps, GraphQL introspection, public API schemas, and allowed HTTP methods.
+**Surface lane, 12 checks, any URL, no account.** Every probe is a read-only request of the class a browser or search crawler already makes: client bundles, exposed `.env` and `.git`, security headers, cookie flags, TLS, directory listing, `robots.txt`, subresource integrity, server version disclosure, vulnerable-library inventory, source maps, and public API schemas.
 
-**Deep lane, 13 more checks, verified domains only.** SQL injection, cross-site scripting, NoSQL injection, path traversal, SSRF, CRLF injection, host header injection, open redirect, error verbosity, admin panel discovery, forced browsing, IDOR, and authentication rate limiting. Each sends a real test payload or repeats requests against an endpoint, so each runs only against a domain whose control the requester has proved within the last 30 days.
+**Deep lane, 19 more checks, verified domains only.** SQL injection, reflection analysis, NoSQL injection, path traversal, SSRF, CRLF injection, host header injection, open redirect, error verbosity, admin and server-status discovery, forced browsing, IDOR, active CORS, GraphQL introspection, bounded Supabase, Firebase, and storage checks, plus Next.js middleware bypass validation. Each sends a test payload, probes an application entry point, or reads a discovered provider API, so each runs only after live domain control is revalidated.
 
 No plan moves a check between lanes. Sending an attack payload at a server you do not control is not something a subscription should be able to buy.
 
@@ -25,6 +25,8 @@ The rule that decides membership lives in [`lib/scan-lanes.ts`](lib/scan-lanes.t
 
 The three free scans deliberately include the deep lane. Nobody subscribes to a product they have not watched work.
 
+Deep verification can use a read-only Vercel or Netlify connection, DNS TXT, a real meta element in the server-rendered document head, or an exact plain-text file. Manual and provider proofs are checked again immediately before every active scan.
+
 An anonymous scan is stored privately with a one-time claim token, so creating an account unlocks that exact report without spending one of the three.
 
 ## Privacy and scanner boundaries
@@ -33,7 +35,7 @@ An anonymous scan is stored privately with a one-time claim token, so creating a
 - Every scan result is private to the account that ran it. There is no public feed, leaderboard, or shareable result page, because a scan can describe a site its requester does not own.
 - Unclaimed anonymous results are deleted after 7 days.
 - Each lane sends its own user agent naming what it is, with a URL a site owner can follow to identify and block it. See [`/scanner`](app/scanner/page.tsx).
-- Any single domain can be scanned at most 10 times per hour across all users combined. That cap applies to paying accounts exactly as it applies to anonymous ones, so Ironclad cannot be used to sustain traffic against a target.
+- Any single domain can be scanned at most 10 times per hour across all users combined. Surface scans may consume at most 6 of those slots, reserving capacity for a verified owner. Quotas are reserved atomically.
 - Outbound connections bind the validated public IP to the socket while preserving hostname and TLS verification, closing the application-level DNS-rebinding gap. This still does not replace an egress-restricted worker.
 - Anonymous rate-limit identifiers use a keyed HMAC rather than a stored IP address.
 
@@ -41,7 +43,7 @@ An anonymous scan is stored privately with a one-time claim token, so creating a
 
 A blocked probe marks its own check inconclusive with a stated reason. The report still renders, and the grade is withheld only when a check that carries deductions could not run. A scan fails outright in two cases: the main page is unreachable, or the scan budget expires.
 
-A clean surface scan is never presented as "secure". It reports that no issues were found in 15 surface checks and that 13 deeper checks require domain verification.
+A clean surface scan is never presented as "secure". It reports only what the bounded Surface checks observed and shows which additional checks require domain verification.
 
 Surface grades and deep grades are different measurements and are never compared, including in the rescan diff. Results from different model versions must not be compared either.
 
@@ -70,6 +72,12 @@ npm run dev
 | `JWT_SECRET` | Yes | Signs authentication cookies; use at least 32 random bytes |
 | `RATE_LIMIT_SECRET` | Recommended | HMAC key for anonymous rate-limit identifiers; keep distinct from the JWT key |
 | `TRUST_PROXY_HEADERS` | Self-hosted only | Set `true` only when a trusted proxy overwrites forwarding headers; Vercel is detected automatically |
+| `OAUTH_STATE_SECRET` | Hosting OAuth | Signs ten-minute provider verification state |
+| `OAUTH_TOKEN_ENCRYPTION_KEY` | Hosting OAuth | Encrypts provider access tokens before database storage |
+| `VERCEL_INTEGRATION_SLUG` | Vercel verification | Public integration slug used to begin installation |
+| `VERCEL_INTEGRATION_CLIENT_ID` | Vercel verification | Vercel OAuth client identifier |
+| `VERCEL_INTEGRATION_CLIENT_SECRET` | Vercel verification | Server-only Vercel OAuth secret |
+| `NETLIFY_OAUTH_CLIENT_ID` | Netlify verification | Netlify OAuth client identifier |
 | `STRIPE_SECRET_KEY` | For billing | Server-only Stripe API key |
 | `STRIPE_PRO_PRICE_ID` | For billing | Allowed Pro subscription price |
 | `STRIPE_WEBHOOK_SECRET` | For billing | Verifies Stripe webhook payloads |
@@ -77,6 +85,13 @@ npm run dev
 | `EMAIL_FROM` | Optional | Verified sender used for notification email |
 
 Generate secrets with `openssl rand -hex 32`. Do not commit `.env.local`.
+
+For hosting verification, configure these production callbacks in the provider consoles:
+
+- Vercel: `https://bhopstudio.com/ironclad/api/verify/oauth/vercel/callback`
+- Netlify: `https://bhopstudio.com/ironclad/verify/netlify/callback`
+
+Grant only the project and domain visibility required by verification. Ironclad encrypts the returned access token and rechecks the provider attachment before every active scan.
 
 ## Verification
 
