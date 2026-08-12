@@ -361,7 +361,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
           <span className="w-2 h-2 rounded-full animate-pulse-glow shrink-0" style={{ background: 'var(--accent)' }} />
           <span className="font-mono text-sm text-white truncate">{label}</span>
           <span className="ml-auto font-mono text-xs" style={{ color: 'var(--faint)' }}>
-            {resolvedChecks.length} of {checkPhases.length || '...'} checks reported · {elapsedSeconds}s wall time · {findingCount} finding{findingCount === 1 ? '' : 's'} so far
+            {resolvedChecks.length} of {checkPhases.length || '...'} modules reported · {elapsedSeconds}s wall time · {findingCount} finding{findingCount === 1 ? '' : 's'} so far
           </span>
         </div>
         <div>
@@ -388,7 +388,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
           )}
         </div>
         <p className="text-xs" style={{ color: 'var(--ghost)' }}>
-          Every change below comes from the scanner itself. Fast, skipped, blocked and inconclusive steps remain visible. Keep this tab open; active requests may appear in your logs or WAF.
+          Every change below comes from the scanner itself. Some modules analyse data already downloaded, while independent HTTP probes run concurrently. Fast, skipped, blocked and inconclusive steps remain visible.
         </p>
         {(incompleteCount > 0 || skippedCount > 0) && (
           <p className="font-mono text-[11px]" style={{ color: 'var(--faint)' }}>

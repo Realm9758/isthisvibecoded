@@ -2725,6 +2725,7 @@ export async function deepScanDomain(
       checkCoverage.push({
         phaseId,
         ...coverage,
+        durationMs: 0,
         applicable: false,
         complete: true,
         reason: outcome.reason,
@@ -2770,9 +2771,11 @@ export async function deepScanDomain(
       reason: requestContext.activePhase.reason,
     });
 
+    const durationMs = Date.now() - phaseStartedAt;
     checkCoverage.push({
       phaseId,
       ...coverage,
+      durationMs,
       applicable: true,
       complete: outcome.status === 'complete',
       reason: outcome.reason,
@@ -2788,7 +2791,7 @@ export async function deepScanDomain(
 
     emitPhase(phase, results, {
       ...outcome,
-      durationMs: Date.now() - phaseStartedAt,
+      durationMs,
     });
     requestContext.activePhase = undefined;
     allFindings.push(...results);

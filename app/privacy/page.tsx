@@ -123,7 +123,7 @@ export default function PrivacyPage() {
               a complete OWASP audit, a penetration test, or a guarantee that findings contain no false positives or negatives.
             </p>
             <p>
-              Some deep checks make bounded read or list requests to exact Supabase, Firebase, or S3 endpoints discovered in the site&apos;s own public configuration.
+              Some active modules make bounded read or list requests to exact Supabase, Firebase, or S3 endpoints discovered in the site&apos;s own public configuration.
               Provider credentials and raw returned records are not included in finding evidence. Deep scan results are stored privately in the requesting user&apos;s account.
             </p>
           </section>
@@ -325,7 +325,7 @@ export default function PrivacyPage() {
 
         <div className="mt-12 pt-8 border-t border-white/6 flex items-center justify-between gap-4 flex-wrap">
           <Link href="/" className="text-xs text-white/30 hover:text-white/60 transition-colors">← Back to home</Link>
-          <p className="text-xs text-white/20">Passive public analysis · active checks require verified domain control</p>
+          <p className="text-xs text-white/20">Passive public analysis · active modules require verified domain control</p>
         </div>
       </div>
     </main>

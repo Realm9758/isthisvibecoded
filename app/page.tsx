@@ -18,7 +18,7 @@ const STEPS = [
   {
     n: '01',
     title: 'Scan any URL, free',
-    body: `Type a domain. ${SURFACE} read-only checks run immediately, no account: leaked keys in your bundle, a public .env, an exposed source map, headers you never set.`,
+    body: `Type a domain. ${SURFACE} read-only assessment modules run immediately, no account: leaked keys in your bundle, a public .env, an exposed source map, headers you never set.`,
   },
   {
     n: '02',
@@ -48,12 +48,12 @@ const EXAMPLE_FINDINGS = [
 
 const FAQ = [
   {
-    q: `Why can I only run ${SURFACE} checks on someone else's site?`,
-    a: `Because the other ${DEEP_ONLY} send attack payloads. Firing those at a server you do not control is unauthorised access in a lot of places, and a checkbox saying you had permission is not a defence. The ${SURFACE} open checks are read-only requests of the kind any browser or search crawler already makes, so they are safe on any target.`,
+    q: `Why can I only run ${SURFACE} modules on someone else's site?`,
+    a: `Because the other ${DEEP_ONLY} may send attack payloads when a suitable input is discovered. Firing those at a server you do not control is unauthorised access in a lot of places, and a checkbox saying you had permission is not a defence. The ${SURFACE} open modules use read-only requests of the kind any browser or search crawler already makes, so they are safe on any target.`,
   },
   {
-    q: 'Does paying unlock more checks?',
-    a: `No. Permission decides which checks run; payment decides how many scans you get. Verifying a domain unlocks all ${TOTAL} on the free plan too.`,
+    q: 'Does paying unlock more modules?',
+    a: `No. Permission decides which modules run; payment decides how many scans you get. Verifying a domain unlocks all ${TOTAL} on the free plan too.`,
   },
   {
     q: 'What if my firewall blocks the scanner?',
@@ -61,7 +61,7 @@ const FAQ = [
   },
   {
     q: 'Is this a penetration test?',
-    a: 'No. Ironclad looks from the outside at one moment in time with bounded, automated probes. It cannot read your source, review your access control, or reason about your business logic. A clean result means these checks observed nothing, not that your site is secure.',
+    a: 'No. Ironclad looks from the outside at one moment in time with bounded, automated probes. It cannot read your source, review your access control, or reason about your business logic. A clean result means the applicable modules observed nothing, not that your site is secure.',
   },
 ];
 
@@ -145,9 +145,9 @@ export default function Home() {
             </h1>
 
             <p className="text-lg leading-relaxed mb-10 max-w-xl" style={{ color: 'var(--muted)' }}>
-              Ironclad runs live SQL injection, XSS, SSRF and {DEEP_ONLY - 3} other attack
-              checks against a domain you have verified, then hands you the exact request
-              that broke it.
+              Ironclad maps the public inputs on a domain you have verified, runs bounded SQL,
+              HTML-reflection, SSRF and other probes where a real target exists, then shows the
+              request evidence behind each confirmed issue.
             </p>
 
             {user?.plan === 'free' && user.scansRemaining !== null && (
@@ -185,7 +185,7 @@ export default function Home() {
                 className="px-7 py-3.5 text-sm font-semibold text-white shrink-0 transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ background: 'var(--accent)', borderRadius: 4 }}
               >
-                {status === 'scanning' ? 'Scanning…' : `Run ${SURFACE} safe checks`}
+                {status === 'scanning' ? 'Scanning…' : `Run ${SURFACE} safe modules`}
               </button>
             </div>
 
@@ -206,7 +206,7 @@ export default function Home() {
             )}
 
             <p id="scan-terms" className="mt-5 font-mono text-xs leading-relaxed" style={{ color: 'var(--ghost)' }}>
-              no account · usually under 45 seconds · active checks require current domain control
+              no account · usually under 45 seconds · active modules require current domain control
             </p>
           </div>
 
@@ -230,7 +230,7 @@ export default function Home() {
                 { k: 'critical', v: '2' },
                 { k: 'high',     v: '2' },
                 { k: 'medium',   v: '5' },
-                { k: 'checks',   v: String(TOTAL) },
+                { k: 'modules',  v: String(TOTAL) },
               ].map((cell, i) => (
                 <div
                   key={cell.k}
@@ -331,7 +331,7 @@ export default function Home() {
             <dl className="font-mono text-sm space-y-2.5">
               <div className="flex gap-3">
                 <dt style={{ color: 'var(--faint)' }}>{String(TOTAL).padStart(2, '0')}</dt>
-                <dd style={{ color: 'var(--muted)' }}>checks in total</dd>
+                <dd style={{ color: 'var(--muted)' }}>assessment modules</dd>
               </div>
               <div className="flex gap-3">
                 <dt style={{ color: 'var(--faint)' }}>{String(SURFACE).padStart(2, '0')}</dt>
@@ -446,8 +446,8 @@ Content-Type: text/plain
           <div className="grid md:grid-cols-3 grid-hairline">
             {[
               ['Not a penetration test', 'Automated, bounded probes from outside, at one moment in time. No source review, no business logic, no chained exploitation.'],
-              ['A clean result is not a clearance', `It means these ${TOTAL} checks observed nothing. It is evidence of absence only for what was actually tested.`],
-              ['Blocked is not passed', 'If your firewall stops a check, the report says so and withholds the grade rather than quietly scoring it as fine.'],
+              ['A clean result is not a clearance', `It means the applicable modules observed nothing. It is evidence of absence only for what was actually tested.`],
+              ['Blocked is not passed', 'If your firewall stops a module, the report says so rather than quietly scoring it as fine.'],
             ].map(([title, body]) => (
               <div key={title} className="p-7">
                 <h3 className="text-sm font-semibold text-white mb-2.5">{title}</h3>
@@ -476,9 +476,9 @@ Content-Type: text/plain
               <ul className="space-y-3 mb-9">
                 {[
                   `${FREE_LIFETIME_LIMIT} scans total`,
-                  `All ${TOTAL} checks on a domain you verify`,
+                  `All ${TOTAL} assessment modules on a domain you verify`,
                   'Full evidence on every finding',
-                  `${SURFACE} checks on any URL, no account`,
+                  `${SURFACE} surface modules on any URL, no account`,
                 ].map(item => (
                   <li key={item} className="text-sm flex gap-3" style={{ color: 'var(--muted)' }}>
                     <span style={{ color: 'var(--ghost)' }}>·</span>{item}
@@ -505,7 +505,7 @@ Content-Type: text/plain
               <ul className="space-y-3 mb-9">
                 {[
                   'Unlimited scans, fair-use burst limits',
-                  `All ${TOTAL} checks on every domain you verify`,
+                  `All ${TOTAL} assessment modules on every domain you verify`,
                   'Scan history with a fixed-since-last-time diff',
                   'Everything in Free',
                 ].map(item => (

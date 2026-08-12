@@ -162,7 +162,7 @@ export default function SignupPage() {
           <>
             {/* Free tier perks */}
             <div className="flex items-center justify-center gap-4 mb-6 flex-wrap">
-              {['3 full scans', `All ${LANE_CHECK_COUNTS.deep} checks`, 'Private by default'].map(perk => (
+              {['3 full scans', `All ${LANE_CHECK_COUNTS.deep} assessment modules`, 'Private by default'].map(perk => (
                 <span key={perk} className="flex items-center gap-1.5 text-xs text-white/40">
                   <span className="text-emerald-400 text-xs">✓</span>
                   {perk}

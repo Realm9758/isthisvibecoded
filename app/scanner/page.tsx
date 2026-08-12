@@ -57,7 +57,7 @@ Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
 
           <Block title="what the surface lane requests">
             <p>
-              {SURFACE_PHASE_IDS.length} checks, all read-only. It fetches your homepage, exact-origin script
+              {SURFACE_PHASE_IDS.length} assessment modules, all read-only. It fetches your submitted page, exact-origin script
               assets referenced by that page, and a fixed list of public file paths such as{' '}
               <span className="font-mono text-xs text-white/70">/.env</span>,{' '}
               <span className="font-mono text-xs text-white/70">/robots.txt</span>,{' '}
@@ -73,7 +73,7 @@ Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
 
           <Block title="what needs permission">
             <p>
-              The other {DEEP_ONLY_PHASE_IDS.length} checks send real test payloads: injection strings, path
+              The other {DEEP_ONLY_PHASE_IDS.length} modules send real test payloads when the scanner finds a suitable target: injection strings, path
               traversal, forged headers, GraphQL introspection, and bounded provider-rule reads. Those run
               only against a domain whose control the requester has proved, and no plan or payment changes
               that.

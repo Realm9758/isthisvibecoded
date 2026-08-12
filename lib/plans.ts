@@ -6,8 +6,8 @@ export const PLANS = {
     scansTotal: 3,
     features: [
       '3 full scans',
-      'All Surface checks on any URL',
-      'Every Deep check on a domain you verify',
+      'All Surface assessment modules on any URL',
+      'Every active module on a domain you verify',
       'Every finding with its evidence and how to fix it',
       'Roast Mode',
     ],
@@ -23,7 +23,7 @@ export const PLANS = {
     scansTotal: null,
     features: [
       'Unlimited scans, subject to fair-use burst limits',
-      'Every check on domains you verify',
+      'Every assessment module on domains you verify',
       'Scan history, with a diff of what you fixed since last time',
       'Everything in Free',
     ],

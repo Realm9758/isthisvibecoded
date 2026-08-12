@@ -41,6 +41,8 @@ export interface CheckCoverage {
   requestsCompleted: number;
   requestsFailed: number;
   requestsBlocked: number;
+  /** Server-measured wall time spent in this module. Missing on legacy scans. */
+  durationMs?: number;
   /** False when a provider or framework-specific check did not apply. */
   applicable?: boolean;
   /** False when a probe failed or was blocked, so this check is inconclusive. */

@@ -5,7 +5,7 @@ import { SCAN_PHASES } from '@/lib/scan-phases';
 
 export const metadata: Metadata = {
   title: 'Coverage | Ironclad',
-  description: `The ${LANE_CHECK_COUNTS.surface} checks that run on any site, and the ${DEEP_ONLY_PHASE_IDS.length} that need your permission.`,
+  description: `The ${LANE_CHECK_COUNTS.surface} assessment modules that run on any site, and the ${DEEP_ONLY_PHASE_IDS.length} active modules that need your permission.`,
 };
 
 const SURFACE_SET = new Set<string>(SURFACE_PHASE_IDS);
@@ -35,7 +35,7 @@ export default function WhatWeCheckPage() {
         <div className="max-w-4xl mx-auto">
           <p className="eyebrow mb-6">coverage</p>
           <h1 className="display text-white text-[clamp(2.25rem,5vw,3.5rem)] mb-7">
-            {LANE_CHECK_COUNTS.deep} checks, split by<br />permission not price.
+            {LANE_CHECK_COUNTS.deep} assessment modules,<br />split by permission not price.
           </h1>
           <p className="text-lg leading-relaxed max-w-2xl" style={{ color: 'var(--muted)' }}>
             The surface lane may request static artifacts that were published by accident: configuration
@@ -75,7 +75,7 @@ export default function WhatWeCheckPage() {
             </div>
           </div>
           <p className="text-sm leading-relaxed mt-5 max-w-3xl" style={{ color: 'var(--muted)' }}>
-            Login, upload, checkout, and other POST forms are identified but not automatically submitted. Guessing credentials can lock accounts, while submitting a real form can create data or trigger messages. The report calls out these flows and does not pretend its anonymous GET checks covered them.
+            Login, upload, checkout, and other POST forms are identified but not automatically submitted. Guessing credentials can lock accounts, while submitting a real form can create data or trigger messages. The report calls out these flows and does not pretend its anonymous GET probes covered them.
           </p>
         </div>
       </section>
@@ -83,7 +83,7 @@ export default function WhatWeCheckPage() {
       <section className="px-6 py-16 border-b" style={{ borderColor: 'var(--border)' }}>
         <div className="max-w-4xl mx-auto">
           <div className="flex flex-wrap items-baseline gap-4 mb-8">
-            <h2 className="display text-white text-2xl">{surface.length} surface checks</h2>
+            <h2 className="display text-white text-2xl">{surface.length} surface modules</h2>
             <span className="font-mono text-xs" style={{ color: 'var(--faint)' }}>any site · no account</span>
           </div>
           <div className="border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
@@ -97,7 +97,7 @@ export default function WhatWeCheckPage() {
       <section className="px-6 py-16 border-b" style={{ borderColor: 'var(--border)' }}>
         <div className="max-w-4xl mx-auto">
           <div className="flex flex-wrap items-baseline gap-4 mb-4">
-            <h2 className="display text-white text-2xl">{deep.length} deep checks</h2>
+            <h2 className="display text-white text-2xl">{deep.length} active modules</h2>
             <span className="font-mono text-xs" style={{ color: 'var(--accent)' }}>verified domains only</span>
           </div>
           <p className="text-sm leading-relaxed mb-8 max-w-2xl" style={{ color: 'var(--muted)' }}>

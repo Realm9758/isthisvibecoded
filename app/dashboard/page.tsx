@@ -62,8 +62,8 @@ function AuthGate({ returnTo }: { returnTo: string }) {
         <p className="eyebrow mb-6">dashboard</p>
         <h1 className="display text-white text-3xl mb-4">Sign in to run a deep scan</h1>
         <p className="text-sm leading-relaxed mb-8" style={{ color: 'var(--muted)' }}>
-          The {DEEP_ONLY_PHASE_IDS.length} payload-sending checks run only against a domain whose control you
-          have proved, so they need an account we can tie that proof to.
+          The {DEEP_ONLY_PHASE_IDS.length} active modules may send payloads when a suitable target is found.
+          They run only against a domain whose control you have proved, so they need an account tied to that proof.
         </p>
         <div className="flex gap-3 justify-center">
           <Link
@@ -222,7 +222,7 @@ function DeepScanPanel({
         <div>
           <h2 className="text-sm font-semibold text-white">Deep scan</h2>
           <p className="font-mono text-xs mt-1" style={{ color: 'var(--faint)' }}>
-            all {LANE_CHECK_COUNTS.deep} checks · verified domains only
+            {LANE_CHECK_COUNTS.deep} assessment modules · verified domains only
           </p>
         </div>
         <Link href="/what-we-check" className="font-mono text-xs hover:text-white transition-colors shrink-0" style={{ color: 'var(--faint)' }}>
@@ -234,8 +234,9 @@ function DeepScanPanel({
         {step === 'idle' && (
           <div>
             <p className="text-sm leading-relaxed mb-6 max-w-xl" style={{ color: 'var(--muted)' }}>
-              Injection, traversal, SSRF, access control and header-manipulation checks, sent as real test
-              payloads. Prove you control the domain and they run, on the free plan too.
+              Maps the submitted page and its public inputs, then runs bounded injection, traversal, SSRF,
+              access-control and header probes where a suitable target exists. Prove you control the domain
+              and they run, on the free plan too.
             </p>
             <button
               onClick={() => setStep('enter-url')}

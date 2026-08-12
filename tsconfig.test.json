@@ -26,6 +26,7 @@
     "lib/scan-phases.ts",
     "lib/scan-progress.ts",
     "lib/scan-progress-presentation.ts",
+    "lib/scan-receipt.ts",
     "lib/scan-http-outcome.ts",
     "lib/source-map-evidence.ts",
     "lib/subresource-integrity.ts",

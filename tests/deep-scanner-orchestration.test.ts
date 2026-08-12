@@ -13,9 +13,15 @@ test('a deep scan accounts for every advertised phase without silent skips', asy
   ]);
 
   const requested: string[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
   const transport = async (input: URL | string, init: PinnedFetchInit = {}): Promise<Response> => {
     const url = input instanceof URL ? new URL(input.href) : new URL(input);
     requested.push(`${init.method ?? 'GET'} ${url.href}`);
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 1));
+    inFlight -= 1;
 
     if (url.protocol === 'http:' && url.pathname === '/' && !url.search) {
       return new Response(null, {
@@ -73,7 +79,9 @@ test('a deep scan accounts for every advertised phase without silent skips', asy
   assert.equal(result.checked.length, 31);
   assert.equal(new Set(result.checked.map(item => item.id)).size, 31);
   assert.equal(result.coverage?.checks?.some(check => !check.complete), false);
+  assert.equal(result.coverage?.checks?.every(check => typeof check.durationMs === 'number' && check.durationMs >= 0), true);
   assert.ok((result.coverage?.requestsAttempted ?? 0) > 100);
+  assert.ok(maxInFlight > 1, 'independent probes should overlap instead of being serialized');
   assert.equal(requested[0], 'GET https://fixture.example/app');
   assert.equal(result.application?.pageUrl, 'https://fixture.example/app');
   assert.equal(result.application?.formsDiscovered, 2);

@@ -17,8 +17,8 @@ const TOTAL = LANE_CHECK_COUNTS.deep;
 /** Truthful comparison. Nothing here is a feature that does not exist yet. */
 const COMPARISON: Array<[string, string, string]> = [
   ['Scans',                              `${FREE_LIFETIME_LIMIT} total`,  'Unlimited'],
-  [`Surface checks on any URL`,          `${SURFACE}`,                    `${SURFACE}`],
-  ['All checks on a verified domain',    `${TOTAL}`,                      `${TOTAL}`],
+  [`Surface assessment modules`,         `${SURFACE}`,                    `${SURFACE}`],
+  ['Modules on a verified domain',       `${TOTAL}`,                      `${TOTAL}`],
   ['Evidence and remediation',           'Included',                      'Included'],
   ['Roast Mode',                         'Included',                      'Included'],
   ['Scan history',                       'Not included',                  'Included'],
@@ -95,7 +95,7 @@ export default function PricingPage() {
             Start free.<br />Keep going for £4.99.
           </h1>
           <p className="text-lg leading-relaxed max-w-2xl" style={{ color: 'var(--muted)' }}>
-            The {FREE_LIFETIME_LIMIT} free scans are the whole product, deep checks included. Nobody should
+            The {FREE_LIFETIME_LIMIT} free scans are the whole product, active modules included. Nobody should
             subscribe to something they have not watched work.
           </p>
         </div>
@@ -207,7 +207,7 @@ export default function PricingPage() {
           <div className="border p-7" style={{ borderColor: 'var(--border)', borderRadius: 6 }}>
             <h2 className="text-base font-semibold text-white mb-2.5">What money does not buy</h2>
             <p className="text-sm leading-relaxed mb-4" style={{ color: 'var(--muted)' }}>
-              Pro does not unlock more checks. The {DEEP_ONLY_PHASE_IDS.length} payload-sending checks are
+              Pro does not unlock more modules. The {DEEP_ONLY_PHASE_IDS.length} payload-capable modules are
               gated on proving you control the domain, not on paying, and they run on the free plan the
               moment you verify one.
             </p>

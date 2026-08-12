@@ -13,7 +13,7 @@ const CONSENT_KEY = 'ironclad-consent-v3';
 
 const TERMS = [
   {
-    title: `${SURFACE_PHASE_IDS.length} read-only checks run on any URL`,
+    title: `${SURFACE_PHASE_IDS.length} read-only assessment modules run on any URL`,
     body: 'They fetch the page, read its headers, and request a fixed list of well-known public paths. No login, no payloads, no brute force, nothing written.',
   },
   {

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { generateRoasts } from '@/lib/roast';
 import { LANE_CHECK_COUNTS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
 import type { ScanDiff } from '@/lib/scan-diff';
+import { moduleExecutionSummary, summarizeScanReceipt } from '@/lib/scan-receipt';
 import type { DeepScanResult, DeepFinding, DeepFindingSeverity } from '@/types/deep-scan';
 import type { PublicScanResult } from '@/lib/scan-redaction';
 
@@ -96,7 +97,7 @@ function coverageLimits(result: AnyScanResult): CoverageLimit[] {
     const definition: Omit<CoverageLimit, 'checks'> = key === 'rejected'
       ? {
           title: 'The site did not accept some automated requests',
-          explanation: 'Those checks received a denial, rate limit, or bot challenge. Nothing here says the site is vulnerable; it means Ironclad could not inspect that response reliably. If you control the firewall, allow the Ironclad-Deep/2.0 user agent for the verified host and rerun the scan.',
+          explanation: 'Those modules received a denial, rate limit, or bot challenge. Nothing here says the site is vulnerable; it means Ironclad could not inspect that response reliably. If you control the firewall, allow the Ironclad-Deep/2.0 user agent for the verified host and rerun the scan.',
         }
       : key === 'interactive'
         ? {
@@ -106,16 +107,16 @@ function coverageLimits(result: AnyScanResult): CoverageLimit[] {
       : key === 'comparison'
         ? {
             title: 'A safe before-and-after comparison was unavailable',
-            explanation: 'These checks only make a claim when a normal value works and a crafted value produces a meaningful difference. The normal comparison failed, so Ironclad correctly made no vulnerability claim.',
+            explanation: 'These modules only make a claim when a normal value works and a crafted value produces a meaningful difference. The normal comparison failed, so Ironclad correctly made no vulnerability claim.',
           }
         : key === 'response'
           ? {
               title: 'Some responses could not be read reliably',
-              explanation: 'A request timed out, exceeded a safety limit, or returned data that did not match the advertised format. The affected checks were left unanswered.',
+              explanation: 'A request timed out, exceeded a safety limit, or returned data that did not match the advertised format. The affected modules were left unanswered.',
             }
           : {
-              title: 'Some checks need more evidence',
-              explanation: 'The automated scan did not collect enough evidence to reach a reliable conclusion for these checks.',
+              title: 'Some modules need more evidence',
+              explanation: 'The automated scan did not collect enough evidence to reach a reliable conclusion for these modules.',
             };
     const group = grouped.get(key) ?? { ...definition, checks: [] };
     group.checks.push(item?.label ?? check.phaseId);
@@ -135,8 +136,11 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
     [roastMode, result],
   );
 
-  const blocked = (result.coverage?.checks ?? []).filter(check => !check.complete);
-  const notApplicableCount = (result.coverage?.checks ?? []).filter(check => check.applicable === false).length;
+  const coverageChecks = result.coverage?.checks ?? [];
+  const receipt = summarizeScanReceipt(coverageChecks);
+  const coverageByPhase = new Map(coverageChecks.map(check => [check.phaseId, check]));
+  const blocked = coverageChecks.filter(check => !check.complete);
+  const notApplicableCount = coverageChecks.filter(check => check.applicable === false).length;
   const limits = coverageLimits(result);
   const groups = SEVERITY_ORDER
     .map(severity => ({ severity, items: result.findings.filter(f => f.severity === severity) }))
@@ -153,8 +157,8 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
           <h2 className="display text-2xl" style={{ color: tone }}>{headline}</h2>
           <span className="font-mono text-sm text-white/60 truncate">{result.domain}</span>
           <span className="ml-auto font-mono text-xs" style={{ color: 'var(--ghost)' }}>
-            {lane === 'surface' ? `surface · ${LANE_CHECK_COUNTS.surface} checks` : `deep · ${LANE_CHECK_COUNTS.deep} checks`}
-            {' · '}{result.coverage?.requestsAttempted ?? 0} requests
+            {lane === 'surface' ? `surface · ${LANE_CHECK_COUNTS.surface} modules` : `deep · ${LANE_CHECK_COUNTS.deep} modules`}
+            {' · '}{result.coverage?.requestsAttempted ?? 0} HTTP attempts
             {' · '}{(result.duration / 1_000).toFixed(1)}s
             {' · '}{formatDate(result.scannedAt)}
           </span>
@@ -191,21 +195,50 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
 
         {result.summary.score === null && (
           <p className="px-6 py-4 text-sm leading-relaxed border-b" style={{ color: 'var(--muted)', borderColor: 'var(--border)' }}>
-            Ironclad kept the confirmed findings below, but {blocked.length} check{blocked.length === 1 ? '' : 's'} did not have enough evidence for a reliable answer.
+            Ironclad kept the confirmed findings below, but {blocked.length} module{blocked.length === 1 ? '' : 's'} did not have enough evidence for a reliable answer.
             No grade is shown because filling those gaps with assumed passes would be misleading.
           </p>
         )}
 
         {clean && result.summary.score !== null && lane === 'surface' && (
           <p className="px-6 py-4 text-sm leading-relaxed border-b" style={{ color: 'var(--muted)', borderColor: 'var(--border)' }}>
-            No issues found in {LANE_CHECK_COUNTS.surface} surface checks.{' '}
-            {DEEP_ONLY_PHASE_IDS.length} deeper checks require domain verification.
+            No issues found in {LANE_CHECK_COUNTS.surface} surface assessment modules.{' '}
+            {DEEP_ONLY_PHASE_IDS.length} active modules require domain verification.
           </p>
         )}
 
       </section>
 
       {afterSummary}
+
+      {coverageChecks.length > 0 && (
+        <section className="border p-5" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+          <h3 className="text-sm font-semibold text-white mb-2">Execution receipt</h3>
+          <p className="text-sm leading-relaxed max-w-3xl" style={{ color: 'var(--muted)' }}>
+            The {receipt.modules} modules are an accounting list, not {receipt.modules} separate penetration tests. Some inspect HTML, headers, cookies, or scripts already downloaded; independent URL probes can run concurrently. These numbers are recorded by the server, not animated by the progress bar.
+          </p>
+          <dl className="grid grid-cols-2 sm:grid-cols-3 gap-px mt-4 border" style={{ borderColor: 'var(--border)', background: 'var(--border)' }}>
+            {[
+              ['modules accounted for', receipt.modules],
+              ['modules that sent HTTP', receipt.networkModules],
+              ['local analysis modules', receipt.localModules],
+              ['modules not applicable', receipt.notApplicableModules],
+              ['total HTTP attempts', result.coverage?.requestsAttempted ?? 0],
+              ['wall time', `${(result.duration / 1_000).toFixed(1)} s`],
+            ].map(([label, value]) => (
+              <div key={label} className="p-3.5 flex flex-col" style={{ background: 'var(--surface)' }}>
+                <dt className="text-[11px] mt-1 order-2" style={{ color: 'var(--ghost)' }}>{label}</dt>
+                <dd className="font-mono text-base text-white/80 order-1">{value}</dd>
+              </div>
+            ))}
+          </dl>
+          {receipt.incompleteModules > 0 && (
+            <p className="text-xs leading-relaxed mt-3" style={{ color: 'var(--med)' }}>
+              {receipt.incompleteModules} module{receipt.incompleteModules === 1 ? '' : 's'} returned an inconclusive result. They remain visible below and are not counted as clean passes.
+            </p>
+          )}
+        </section>
+      )}
 
       {lane === 'deep' && result.application && (
         <section className="border p-5" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
@@ -216,11 +249,11 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
           </p>
           {result.application.testedParameterNames.length > 0 ? (
             <p className="text-xs leading-relaxed mt-3" style={{ color: 'var(--faint)' }}>
-              Active input checks used discovered parameter names: <span className="font-mono text-white/60">{result.application.testedParameterNames.join(', ')}</span>.
+              Active input probes used discovered parameter names: <span className="font-mono text-white/60">{result.application.testedParameterNames.join(', ')}</span>.
             </p>
           ) : (
             <p className="text-xs leading-relaxed mt-3" style={{ color: 'var(--faint)' }}>
-              No suitable public GET input was discovered, so input-specific checks were marked not tested instead of firing guessed payloads at the landing page.
+              No suitable public GET input was discovered, so input-specific modules were marked not tested instead of firing guessed payloads at the landing page.
             </p>
           )}
           {result.application.loginFormsDiscovered > 0 && (
@@ -247,10 +280,10 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
       {lane === 'surface' && (
         <section className="border p-7" style={{ borderColor: 'var(--accent-line)', borderRadius: 6 }}>
           <h3 className="text-base font-semibold text-white mb-2.5">
-            Verify {result.domain} for {DEEP_ONLY_PHASE_IDS.length} active checks
+            Verify {result.domain} for {DEEP_ONLY_PHASE_IDS.length} active modules
           </h3>
           <p className="text-sm leading-relaxed max-w-2xl mb-6" style={{ color: 'var(--muted)' }}>
-            Injection, access-control and provider-rule checks send bounded test inputs. They run only after a current domain-control proof and explicit authorisation.
+            Injection, access-control and provider-rule modules send bounded test inputs. They run only after a current domain-control proof and explicit authorisation.
           </p>
           <Link
             href={`/dashboard?domain=${encodeURIComponent(result.domain)}&intent=verify`}
@@ -277,7 +310,7 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
                 <p className="text-sm text-white/75">{limit.title} <span className="font-mono text-xs" style={{ color: 'var(--faint)' }}>({limit.checks.length})</span></p>
                 <p className="text-xs leading-relaxed mt-1" style={{ color: 'var(--faint)' }}>{limit.explanation}</p>
                 <details className="mt-1.5">
-                  <summary className="font-mono text-[11px] cursor-pointer" style={{ color: 'var(--ghost)' }}>show affected checks</summary>
+                  <summary className="font-mono text-[11px] cursor-pointer" style={{ color: 'var(--ghost)' }}>show affected modules</summary>
                   <p className="font-mono text-[11px] leading-relaxed mt-1" style={{ color: 'var(--ghost)' }}>{limit.checks.join(' · ')}</p>
                 </details>
               </div>
@@ -333,10 +366,12 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
       {/* Checked list */}
       <details className="border" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
         <summary className="label px-5 py-3.5 cursor-pointer" style={{ borderColor: 'var(--border)' }}>
-          {result.checked.length} checks and coverage details
+          {result.checked.length} assessment modules and execution details
         </summary>
         <ul>
-          {result.checked.map((item, i) => (
+          {result.checked.map((item, i) => {
+            const execution = coverageByPhase.get(item.id);
+            return (
             <li
               key={item.id}
               className="flex items-start gap-3.5 px-5 py-3"
@@ -358,12 +393,18 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
                 <p className="font-mono text-[13px]" style={{ color: item.status === 'skip' ? 'var(--ghost)' : 'var(--muted)' }}>
                   {item.label}
                 </p>
+                {execution && (
+                  <p className="font-mono text-[11px] mt-1" style={{ color: 'var(--faint)' }}>
+                    {moduleExecutionSummary(execution)}
+                  </p>
+                )}
                 {'detail' in item && item.detail && (
                   <p className="text-xs leading-relaxed mt-1" style={{ color: 'var(--ghost)' }}>{item.detail}</p>
                 )}
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       </details>
 
