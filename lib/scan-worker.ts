@@ -6,6 +6,7 @@ import {
   ACCESS_WAIT_MS,
   appendScanJobEvent,
   claimScanJob,
+  claimScanJobById,
   cleanupExpiredScanEvents,
   expireAccessWaitJobs,
   renewScanJobLease,
@@ -29,6 +30,14 @@ import type { DeepScanResult, ScanExecutionReceipt, ScanPhaseCheckpoint } from '
 import type { ScanAccessDiagnostic, ScanJobStatus, ScanProbeEvent } from '@/types/scan-job';
 
 const LEASE_RENEW_MS = 10_000;
+const SERVERLESS_FINALIZATION_RESERVE_MS = 15_000;
+
+export interface ScanJobExecutionOptions {
+  /** Temporary Vercel mode cannot promise a stable source address. */
+  allowDynamicEgress?: boolean;
+  /** Overall invocation budget, including perimeter checks and report storage. */
+  executionBudgetMs?: number;
+}
 
 async function setState(
   job: WorkerScanJob,
@@ -115,8 +124,9 @@ async function pauseForAccess(
   job: WorkerScanJob,
   workerId: string,
   diagnostic: ScanAccessDiagnostic,
+  stableEgressAvailable: boolean,
 ): Promise<void> {
-  const guide = accessGuide(diagnostic, job.domain);
+  const guide = accessGuide(diagnostic, job.domain, stableEgressAvailable);
   await updateScanJob(job.id, workerId, {
     status: 'waiting_for_access',
     currentPass: null,
@@ -134,12 +144,24 @@ async function pauseForAccess(
   });
 }
 
-export async function processScanJob(job: WorkerScanJob, workerId: string): Promise<void> {
-  if (process.env.NODE_ENV === 'production' && scannerEgressIps().length === 0) {
+export async function processScanJob(
+  job: WorkerScanJob,
+  workerId: string,
+  options: ScanJobExecutionOptions = {},
+): Promise<void> {
+  if (process.env.NODE_ENV === 'production' && !options.allowDynamicEgress && scannerEgressIps().length === 0) {
     throw new Error('IRONCLAD_SCANNER_EGRESS_IPS must publish the dedicated worker identity in production.');
   }
 
+  const processStartedAt = Date.now();
   const abortController = new AbortController();
+  let executionTimedOut = false;
+  const executionTimer = options.executionBudgetMs === undefined
+    ? null
+    : setTimeout(() => {
+        executionTimedOut = true;
+        abortController.abort(new Error('The temporary scanner reached its safe serverless execution limit.'));
+      }, Math.max(1, options.executionBudgetMs));
   const renew = setInterval(() => {
     void renewScanJobLease(job.id, workerId).then(active => {
       if (!active) abortController.abort(new Error('The worker lease ended.'));
@@ -167,7 +189,9 @@ export async function processScanJob(job: WorkerScanJob, workerId: string): Prom
   };
 
   try {
-    await setState(job, workerId, 'perimeter_running', 'Checking whether the public firewall lets Ironclad reach four safe paths.', {
+    await setState(job, workerId, 'perimeter_running', options.allowDynamicEgress
+      ? 'Temporary scanner active. Checking four safe paths before starting the selected modules.'
+      : 'Checking whether the public firewall lets Ironclad reach four safe paths.', {
       currentPass: 'perimeter', currentPhaseId: 'access',
     });
     const perimeter = await runPerimeterPreflight(
@@ -184,8 +208,15 @@ export async function processScanJob(job: WorkerScanJob, workerId: string): Prom
       ?? perimeter.diagnostics[0]
     );
     if (blocked) {
-      await pauseForAccess(currentJob, workerId, blocked);
+      await pauseForAccess(currentJob, workerId, blocked, !options.allowDynamicEgress);
       return;
+    }
+
+    const remainingExecutionMs = options.executionBudgetMs === undefined
+      ? undefined
+      : options.executionBudgetMs - (Date.now() - processStartedAt) - SERVERLESS_FINALIZATION_RESERVE_MS;
+    if (remainingExecutionMs !== undefined && remainingExecutionMs <= 0) {
+      throw new Error('The temporary scanner used its safe execution window during the firewall check. No scan credit was used.');
     }
 
     currentJob = await reserveApplicationQuota(currentJob, workerId);
@@ -256,6 +287,7 @@ export async function processScanJob(job: WorkerScanJob, workerId: string): Prom
         signal: abortController.signal,
         rateLimitPath: job.rateLimitPath,
         resumePhases: [...checkpointRecords.values()],
+        executionBudgetMs: remainingExecutionMs,
         onProbe: event => {
           if (event.stage === 'requesting') {
             transportAttempts += 1;
@@ -338,11 +370,13 @@ export async function processScanJob(job: WorkerScanJob, workerId: string): Prom
       .eq('id', job.id)
       .maybeSingle();
     if (refreshed.data?.status === 'cancelled' || refreshed.data?.cancel_requested === true) return;
-    if (lastAccessDiagnostic) {
-      await pauseForAccess(currentJob, workerId, lastAccessDiagnostic);
+    if (!executionTimedOut && lastAccessDiagnostic) {
+      await pauseForAccess(currentJob, workerId, lastAccessDiagnostic, !options.allowDynamicEgress);
       return;
     }
-    const message = error instanceof Error ? error.message : 'The dedicated scanner stopped unexpectedly.';
+    const message = executionTimedOut
+      ? 'The temporary scan reached its four-minute safety limit. Completed module steps remain in the receipt, and any reserved free scan was restored.'
+      : error instanceof Error ? error.message : 'The scanner stopped unexpectedly.';
     if (currentJob.quotaState === 'committed' && currentJob.quotaKey) {
       const { error: refundError } = await supabase.rpc('refund_usage', { usage_key: currentJob.quotaKey });
       if (!refundError) {
@@ -359,6 +393,7 @@ export async function processScanJob(job: WorkerScanJob, workerId: string): Prom
     });
   } finally {
     clearInterval(renew);
+    if (executionTimer) clearTimeout(executionTimer);
   }
 }
 
@@ -368,6 +403,35 @@ export async function runWorkerOnce(workerId: string): Promise<boolean> {
   if (!job) return false;
   await processScanJob(job, workerId);
   return true;
+}
+
+/** Runs one explicitly-created job inside Vercel's bounded `after()` window. */
+export async function runServerlessScanJob(jobId: string): Promise<boolean> {
+  const workerId = `vercel-temporary-${jobId}`;
+  try {
+    const job = await claimScanJobById(jobId, workerId);
+    if (!job) return false;
+    await processScanJob(job, workerId, {
+      allowDynamicEgress: true,
+      // The linked Hobby project allows five minutes. Keep a full minute for
+      // platform shutdown variance in addition to the internal report reserve.
+      executionBudgetMs: 4 * 60_000,
+    });
+    return true;
+  } catch (error) {
+    const message = error instanceof Error
+      ? error.message
+      : 'The temporary scanner could not start.';
+    await updateScanJob(jobId, null, {
+      status: 'failed', currentPass: null, currentPhaseId: null,
+      error: message, clearLease: true,
+    }).catch(() => undefined);
+    await appendScanJobEvent(jobId, 'error', {
+      error: message,
+      message: 'The temporary scanner stopped before it could create a report. No new target requests will be sent.',
+    }).catch(() => undefined);
+    return false;
+  }
 }
 
 export async function maintainScanWorker(): Promise<void> {

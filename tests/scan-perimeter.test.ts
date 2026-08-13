@@ -90,3 +90,22 @@ test('a denied submitted page requires an access exception even when denial is o
   assert.equal(result.accessReady, false);
   assert.equal(result.diagnostics[0].classification, 'protected_denial');
 });
+
+test('temporary serverless mode never tells an owner to allowlist an unstable address', async () => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://abcdefghijklmnopqrst.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= `test-service-role-${'x'.repeat(32)}`;
+  const { accessGuide } = await import('../lib/scan-perimeter');
+  const guide = accessGuide({
+    classification: 'bot_challenge',
+    provider: 'cloudflare',
+    method: 'GET',
+    path: '/app',
+    status: 403,
+    retryAfterMs: null,
+    durationMs: 40,
+    message: 'Cloudflare returned a browser challenge',
+  }, 'fixture.example', false);
+  assert.match(guide.title, /temporary scanner/i);
+  assert.ok(guide.steps.some(step => /cannot be safely allowlisted/i.test(step)));
+  assert.equal(guide.steps.some(step => /create a cloudflare waf skip rule/i.test(step)), false);
+});

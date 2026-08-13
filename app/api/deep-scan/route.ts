@@ -1,4 +1,5 @@
 import { cookies } from 'next/headers';
+import { after } from 'next/server';
 import { verifyToken, AUTH_COOKIE } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
 import { assertPublicTarget, normalizePublicUrl } from '@/lib/url-safety';
@@ -18,17 +19,16 @@ import { normalizeOwnerRateLimitPath } from '@/lib/rate-limit-evidence';
 import { durableDeepScanEnabled } from '@/lib/scan-identity';
 
 export const runtime = 'nodejs';
+// The temporary executor uses four minutes and reserves the final minute for
+// Vercel shutdown variance. The dedicated worker does not use this route time.
+export const maxDuration = 300;
 
 /**
  * Creates a durable scan job. No active payload is sent from this request;
  * the fixed-egress worker owns perimeter access checks and application probes.
  */
 export async function POST(request: Request) {
-  if (!durableDeepScanEnabled()) {
-    return Response.json({
-      error: 'Deep scanning is temporarily unavailable while the dedicated scanner is being prepared.',
-    }, { status: 503 });
-  }
+  const dedicatedWorkerAvailable = durableDeepScanEnabled();
   const requestError = mutationRequestError(request);
   if (requestError) return Response.json({ error: requestError }, { status: 403 });
 
@@ -178,16 +178,27 @@ export async function POST(request: Request) {
     await appendScanJobEvent(job.id, 'manifest', {
       phases: phasesForDeepScanScope(selectedPhaseIds),
       moduleCount: selectedPhaseIds.length,
-      explanation: 'Ironclad first checks the public firewall, then runs one selected module and one target request at a time.',
+      explanation: dedicatedWorkerAvailable
+        ? 'Ironclad first checks the public firewall, then runs one selected module and one target request at a time.'
+        : 'Temporary Vercel mode is active. Ironclad still runs one selected module and one request at a time, but cannot offer a fixed-IP firewall exception yet.',
     });
     await appendScanJobEvent(job.id, 'job_state', {
       state: 'queued',
-      message: 'Your scan is queued for the dedicated scanner. No scan credit has been used yet.',
+      message: dedicatedWorkerAvailable
+        ? 'Your scan is queued for the dedicated scanner. No scan credit has been used yet.'
+        : 'Your scan is queued in temporary Vercel mode. No scan credit has been used yet.',
     });
+    if (!dedicatedWorkerAvailable) {
+      after(async () => {
+        const { runServerlessScanJob } = await import('@/lib/scan-worker');
+        await runServerlessScanJob(job.id);
+      });
+    }
     return Response.json({
       jobId: job.id,
       state: job.status,
       eventsUrl: job.eventsUrl,
+      executionMode: dedicatedWorkerAvailable ? 'dedicated' : 'temporary_serverless',
     }, { status: 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The scan job could not be created.';

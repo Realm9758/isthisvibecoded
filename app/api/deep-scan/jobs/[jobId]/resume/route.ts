@@ -1,6 +1,10 @@
+import { after } from 'next/server';
 import { currentScanJobUserId } from '@/lib/scan-job-auth';
 import { appendScanJobEvent, getOwnedScanJob, updateScanJob } from '@/lib/scan-job-store';
 import { mutationRequestError } from '@/lib/request-security';
+import { durableDeepScanEnabled } from '@/lib/scan-identity';
+
+export const maxDuration = 300;
 
 export async function POST(request: Request, context: { params: Promise<{ jobId: string }> }) {
   const requestError = mutationRequestError(request);
@@ -24,5 +28,11 @@ export async function POST(request: Request, context: { params: Promise<{ jobId:
     state: 'queued',
     message: 'Access recheck queued. Ironclad will repeat the four safe firewall checks before resuming.',
   });
+  if (!durableDeepScanEnabled()) {
+    after(async () => {
+      const { runServerlessScanJob } = await import('@/lib/scan-worker');
+      await runServerlessScanJob(jobId);
+    });
+  }
   return Response.json({ state: 'queued' }, { status: 202 });
 }

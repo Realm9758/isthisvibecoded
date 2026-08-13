@@ -84,24 +84,32 @@ Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
             </p>
           </Block>
 
-          <Block title="letting an authorised deep scan through your firewall">
+          <Block title={egressIps.length > 0 ? 'letting an authorised deep scan through your firewall' : 'temporary scanner identity'}>
             <p>
               If you started a verified-domain scan, Ironclad first makes four safe access checks. A bot challenge or temporary rate limit pauses the job before the application modules start and before a scan credit is used.
             </p>
-            <p>Use both the fixed source address and exact verified hostname for a temporary WAF exception:</p>
+            <p>{egressIps.length > 0
+              ? 'Use both the fixed source address and exact verified hostname for a temporary WAF exception:'
+              : 'The temporary Vercel scanner has no stable source address. Most sites need no setup, but an owner cannot safely allowlist this temporary mode through a browser challenge.'}</p>
             <pre className="font-mono text-xs p-4 overflow-x-auto" style={{ background: 'var(--bg)', color: 'var(--accent)', borderRadius: 4 }}>{`Fixed scanner IP${egressIps.length === 1 ? '' : 's'}: ${egressIps.length > 0 ? egressIps.join(', ') : 'not published in this environment'}
 User-Agent: ${DEEP_SCANNER_USER_AGENT}
 ${DEEP_SCANNER_ID_HEADER}: ${DEEP_SCANNER_ID_VALUE}`}</pre>
-            <p>
-              The header is an extra identity signal, not a secret. Do not allow it on its own because another client could copy it. Match the fixed IP and your exact hostname, recheck access from the saved scan, then remove the temporary rule when the application pass is complete.
-            </p>
-            <p>
-              Provider instructions:{' '}
-              <a className="underline underline-offset-2" style={{ color: 'var(--accent)' }} href="https://developers.cloudflare.com/waf/custom-rules/skip/" target="_blank" rel="noreferrer">Cloudflare Skip rules</a>
-              {' · '}
-              <a className="underline underline-offset-2" style={{ color: 'var(--accent)' }} href="https://vercel.com/docs/vercel-firewall/vercel-waf/system-bypass-rules" target="_blank" rel="noreferrer">Vercel bypass rules</a>
-              . Ironclad does not solve challenges, rotate proxies, or impersonate a browser.
-            </p>
+            {egressIps.length > 0 ? (<>
+              <p>
+                The header is an extra identity signal, not a secret. Do not allow it on its own because another client could copy it. Match the fixed IP and your exact hostname, recheck access from the saved scan, then remove the temporary rule when the application pass is complete.
+              </p>
+              <p>
+                Provider instructions:{' '}
+                <a className="underline underline-offset-2" style={{ color: 'var(--accent)' }} href="https://developers.cloudflare.com/waf/custom-rules/skip/" target="_blank" rel="noreferrer">Cloudflare Skip rules</a>
+                {' · '}
+                <a className="underline underline-offset-2" style={{ color: 'var(--accent)' }} href="https://vercel.com/docs/vercel-firewall/vercel-waf/system-bypass-rules" target="_blank" rel="noreferrer">Vercel bypass rules</a>.
+              </p>
+            </>) : (
+              <p>
+                If a real challenge appears, Ironclad stops immediately and offers a later recheck instead of spraying the remaining modules. It never suggests trusting the copyable header by itself.
+              </p>
+            )}
+            <p>Ironclad does not solve challenges, rotate proxies, or impersonate a browser.</p>
           </Block>
 
           <Block title="rate limits">

@@ -25,7 +25,18 @@ export interface ScannerAccessGuide {
 export function accessGuide(
   diagnostic: ScanAccessDiagnostic,
   hostname: string,
+  stableEgressAvailable = true,
 ): ScannerAccessGuide {
+  if (!stableEgressAvailable) {
+    return {
+      title: 'The temporary scanner met a browser challenge',
+      steps: [
+        `Ironclad stopped at ${hostname} instead of sending the remaining modules into the same challenge page.`,
+        'A changing Vercel address cannot be safely allowlisted. You can choose Recheck access later in case the challenge was temporary.',
+        'No insecure proxy rotation or automated challenge solving will be used. Reliable firewall bypass instructions will return with the fixed-IP scanner.',
+      ],
+    };
+  }
   const ips = scannerEgressIps();
   const identity = ips.length > 0 ? ips.join(', ') : 'the fixed scanner IPs shown in Ironclad';
   if (diagnostic.provider === 'cloudflare') {

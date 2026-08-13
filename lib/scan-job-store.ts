@@ -189,6 +189,30 @@ export async function claimScanJob(workerId: string): Promise<WorkerScanJob | nu
   return row ? rowToJob(row as JobRow) : null;
 }
 
+/**
+ * Claims one known job for the temporary serverless executor. PostgREST turns
+ * the filters and update into one statement, so two function invocations
+ * cannot both acquire the same unleased row.
+ */
+export async function claimScanJobById(jobId: string, workerId: string): Promise<WorkerScanJob | null> {
+  const now = Date.now();
+  const { data, error } = await supabase
+    .from('deep_scan_jobs')
+    .update({
+      lease_owner: workerId,
+      lease_expires_at: now + JOB_LEASE_MS,
+      updated_at: now,
+    })
+    .eq('id', jobId)
+    .eq('cancel_requested', false)
+    .in('status', ['queued', 'perimeter_running', 'application_running', 'retry_wait', 'finalizing'])
+    .or(`lease_expires_at.is.null,lease_expires_at.lt.${now}`)
+    .select('*')
+    .maybeSingle();
+  if (error) throw new Error(`Could not claim the temporary scan job: ${error.message}`);
+  return data ? rowToJob(data as JobRow) : null;
+}
+
 export async function renewScanJobLease(jobId: string, workerId: string): Promise<boolean> {
   const now = Date.now();
   const { data, error } = await supabase.rpc('renew_deep_scan_job_lease', {

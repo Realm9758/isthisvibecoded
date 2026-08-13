@@ -76,6 +76,10 @@ and `deep_scan_events` schema in `supabase/schema.sql` has been applied. The
 worker refuses to run a production scan when no fixed scanner IP is published.
 After the schema, worker, and public scanner-information page are live, set
 `IRONCLAD_DURABLE_SCANNER_ENABLED=true` in both the web and worker deployments.
+While that flag is false, a bounded four-minute Vercel `after()` task executes
+each newly created job. It retains sequential requests, durable events,
+checkpoints, retries, credit restoration, and honest coverage, but it has a
+changing source address and therefore cannot offer a safe WAF allowlist rule.
 
 ## Environment variables
 
@@ -87,7 +91,7 @@ After the schema, worker, and public scanner-information page are live, set
 | `JWT_SECRET` | Yes | Signs authentication cookies; use at least 32 random bytes |
 | `RATE_LIMIT_SECRET` | Recommended | HMAC key for anonymous rate-limit identifiers; keep distinct from the JWT key |
 | `TRUST_PROXY_HEADERS` | Self-hosted only | Set `true` only when a trusted proxy overwrites forwarding headers; Vercel is detected automatically |
-| `IRONCLAD_DURABLE_SCANNER_ENABLED` | Yes for deep scans | Production release switch; leave false until the queue schema and fixed-egress worker are live |
+| `IRONCLAD_DURABLE_SCANNER_ENABLED` | Optional | `false` uses temporary bounded Vercel execution; `true` hands jobs to the fixed-egress worker |
 | `IRONCLAD_SCANNER_EGRESS_IPS` | Dedicated worker | Comma-separated fixed outbound IPs published to verified owners for narrow WAF exceptions |
 | `IRONCLAD_WORKER_ID` | Dedicated worker | Stable, non-secret worker name used for leases and operations logs |
 | `OAUTH_STATE_SECRET` | Hosting OAuth | Signs ten-minute provider verification state |
@@ -127,7 +131,7 @@ Unit coverage: lane membership, coverage attribution, redaction, quota keys, res
 
 A scan looks from the outside at one moment in time. It cannot read private source, fully review role/ownership rules, or reason about business logic. It is a bounded automated part of a penetration-testing workflow, not a substitute for an authenticated manual penetration test. A check that finds nothing means these named probes observed nothing, not that the condition is absent.
 
-Deep scans run as durable, leased jobs on the dedicated fixed-egress worker. Target requests are globally serialised, normal request starts are paced by 750 ms, retries are bounded, confirmed challenges pause the job, and saved module checkpoints are reused after a worker lease expires. The interrupted module restarts from its beginning because detector conclusions depend on complete control/candidate pairs. See [the vector review](docs/DEEP_SCAN_VECTOR_REVIEW.md) for the evidence and remaining limitation of every module.
+Deep scans run as durable, leased jobs. Target requests are globally serialised, normal request starts are paced by 750 ms, retries are bounded, confirmed challenges pause the job, and saved module checkpoints are reused after an executor lease expires. The temporary Vercel executor has a four-minute safety window and dynamic egress; the dedicated worker raises the active budget to ten minutes and adds a safely allowlistable identity. The interrupted module restarts from its beginning because detector conclusions depend on complete control/candidate pairs. See [the vector review](docs/DEEP_SCAN_VECTOR_REVIEW.md) for the evidence and remaining limitation of every module.
 
 ## Not yet built
 

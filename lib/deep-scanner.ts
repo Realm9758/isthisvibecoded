@@ -123,6 +123,8 @@ export interface DeepScanOptions {
   rateLimitPath?: string | null;
   /** Completed module records restored after a worker lease expires. */
   resumePhases?: readonly ScanPhaseCheckpoint[];
+  /** Deployment-specific wall-clock ceiling; the dedicated worker defaults to ten minutes. */
+  executionBudgetMs?: number;
 }
 
 type RequestCoverage = {
@@ -386,7 +388,7 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
       if (context && Date.now() >= context.deadlineAt) {
         context.deadlineExceeded = true;
         incrementCoverage(context, 'requestsFailed');
-        await finishProbe('The scan reached its ten-minute execution safety limit', {
+        await finishProbe('The scan reached its execution safety limit', {
           classification: 'transport_error',
         });
         return null;
@@ -3398,7 +3400,13 @@ export async function deepScanDomain(
     authorizedHostnames: new Set([domain.toLowerCase()]),
     lane,
     coverage: requestCoverage,
-    deadlineAt: Date.now() + (lane === 'deep' ? DEEP_SCAN_BUDGET_MS : SURFACE_SCAN_BUDGET_MS),
+    deadlineAt: Date.now() + Math.max(
+      1,
+      Math.min(
+        lane === 'deep' ? DEEP_SCAN_BUDGET_MS : SURFACE_SCAN_BUDGET_MS,
+        options.executionBudgetMs ?? Number.POSITIVE_INFINITY,
+      ),
+    ),
     deadlineExceeded: false,
     providerQuotaTargets: new Set<string>(),
     transport: options.transport ?? pinnedFetch,
