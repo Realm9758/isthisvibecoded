@@ -27,6 +27,7 @@
     "lib/scan-progress.ts",
     "lib/scan-progress-presentation.ts",
     "lib/scan-receipt.ts",
+    "lib/scan-checkpoint.ts",
     "lib/deep-scan-scope.ts",
     "lib/rate-limit-evidence.ts",
     "lib/scan-http-outcome.ts",

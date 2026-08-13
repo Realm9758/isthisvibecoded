@@ -6,6 +6,7 @@ import type { ScanPhase } from '@/lib/scan-phases';
 import { explainPhaseReason, formatFindingCount, formatTerminalPhaseLog } from '@/lib/scan-progress-presentation';
 import { apiPath } from '@/lib/site';
 import { MUTATION_GUARD_HEADER, MUTATION_GUARD_VALUE } from '@/lib/request-security-constants';
+import { DurableDeepScanRunner } from '@/components/DurableDeepScanRunner';
 
 /**
  * Consumes a scan's SSE stream and renders live progress.
@@ -40,6 +41,8 @@ interface Props {
   label: string;
   onResult: (result: CompletedScan) => void;
   onError: (message: string, meta: ScanErrorMeta) => void;
+  /** Reconnect to an existing durable deep job instead of creating another. */
+  existingJobId?: string | null;
 }
 
 type PhaseState = {
@@ -106,7 +109,14 @@ function phaseOutcomeLabel(status: PhaseState['status']): string {
   return 'Waiting';
 }
 
-export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) {
+export function ScanRunner(props: Props) {
+  if (props.endpoint === '/api/deep-scan') {
+    return <DurableDeepScanRunner body={props.body} label={props.label} existingJobId={props.existingJobId} onResult={props.onResult} onError={props.onError} />;
+  }
+  return <StreamingScanRunner {...props} />;
+}
+
+function StreamingScanRunner({ endpoint, body, label, onResult, onError }: Props) {
   const [phases, setPhases] = useState<PhaseState[]>([]);
   const [currentPhaseId, setCurrentPhaseId] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -388,7 +398,7 @@ export function ScanRunner({ endpoint, body, label, onResult, onError }: Props) 
           )}
         </div>
         <p className="text-xs" style={{ color: 'var(--ghost)' }}>
-          Every change below comes from the scanner itself. Some modules analyse data already downloaded, while independent HTTP probes run concurrently. Fast, skipped, blocked and inconclusive steps remain visible.
+          Every change below comes from the scanner itself. Some modules analyse data already downloaded, while target requests are sent one at a time. Fast, skipped, blocked and inconclusive steps remain visible.
         </p>
         {(incompleteCount > 0 || skippedCount > 0) && (
           <p className="font-mono text-[11px]" style={{ color: 'var(--faint)' }}>

@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assessRateLimitEvidence, describeRateLimitEvidence, selectRateLimitTarget } from '../lib/rate-limit-evidence';
+import { assessRateLimitEvidence, describeRateLimitEvidence, normalizeOwnerRateLimitPath, selectRateLimitTarget } from '../lib/rate-limit-evidence';
+
+test('owner-selected rate-limit paths are read-only and contain no durable query values', () => {
+  assert.equal(normalizeOwnerRateLimitPath('/api/search'), '/api/search');
+  assert.equal(normalizeOwnerRateLimitPath(''), null);
+  assert.throws(() => normalizeOwnerRateLimitPath('/api/search?q=private'), /Remove query values/);
+  assert.throws(() => normalizeOwnerRateLimitPath('/api/logout'), /read-only endpoint/);
+  assert.throws(() => normalizeOwnerRateLimitPath('//other.example/api/search'), /relative public path/);
+  assert.throws(() => normalizeOwnerRateLimitPath('/api/%6c%6f%67%6f%75%74'), /read-only endpoint/);
+});
 
 test('rate-limit target prefers a discovered GET query and refuses state-changing routes', () => {
   const selected = selectRateLimitTarget(

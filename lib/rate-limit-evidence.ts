@@ -11,6 +11,34 @@ const RATE_HEADER_NAMES = [
   'retry-after',
 ] as const;
 
+/**
+ * Validate an owner-selected GET path without retaining query values, tokens,
+ * credentials, or a state-changing route in the durable job record.
+ */
+export function normalizeOwnerRateLimitPath(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string') throw new Error('The rate-limit endpoint must be a relative public path.');
+  const source = value.trim();
+  if (!source || source.length > 300 || !source.startsWith('/') || source.startsWith('//')) {
+    throw new Error('Enter a relative public path such as /api/search.');
+  }
+  if (source.includes('?') || source.includes('#')) {
+    throw new Error('Remove query values and fragments from the rate-limit endpoint.');
+  }
+  let url: URL;
+  try {
+    url = new URL(source, 'https://ironclad.invalid');
+  } catch {
+    throw new Error('The rate-limit endpoint path is not valid.');
+  }
+  let decodedPath: string;
+  try { decodedPath = decodeURIComponent(url.pathname); } catch { throw new Error('The rate-limit endpoint path has invalid encoding.'); }
+  if (!url.pathname.startsWith('/') || MUTATING_PATH.test(decodedPath)) {
+    throw new Error('Choose a read-only endpoint. Logout, reset, upload, payment, and other changing actions are not allowed.');
+  }
+  return url.pathname;
+}
+
 /** Selects one same-origin, GET-like API target without inventing a login attempt. */
 export function selectRateLimitTarget(
   baseUrl: string,

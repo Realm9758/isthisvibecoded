@@ -174,6 +174,8 @@ function DeepScanPanel({
   const [result, setResult] = useState<CompletedScan | null>(null);
   const [authorised, setAuthorised] = useState(false);
   const [selectedPhaseIds, setSelectedPhaseIds] = useState<DeepScanModuleId[]>(() => [...DEEP_SCAN_PROFILES.full.phaseIds]);
+  const [rateLimitPath, setRateLimitPath] = useState('');
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!initialDomain) return;
@@ -185,6 +187,24 @@ function DeepScanPanel({
     }, 0);
     return () => window.clearTimeout(timer);
   }, [initialDomain, initialIntent]);
+
+  useEffect(() => {
+    if (initialDomain) return;
+    const controller = new AbortController();
+    void fetch(apiPath('/api/deep-scan/jobs/active'), { signal: controller.signal, cache: 'no-store' })
+      .then(response => response.ok ? response.json() : null)
+      .then(payload => {
+        const job = payload?.job;
+        if (!job || typeof job.id !== 'string' || typeof job.startUrl !== 'string') return;
+        setActiveJobId(job.id);
+        setScanDomain(job.domain);
+        setScanTarget(job.startUrl);
+        if (Array.isArray(job.selectedPhaseIds)) setSelectedPhaseIds(job.selectedPhaseIds);
+        setStep('scanning');
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [initialDomain]);
 
   function submitUrl(event: React.FormEvent) {
     event.preventDefault();
@@ -206,6 +226,7 @@ function DeepScanPanel({
     setScanTarget(target);
     setAuthorised(false);
     setSelectedPhaseIds([...DEEP_SCAN_PROFILES.full.phaseIds]);
+    setRateLimitPath('');
     setStep('verify');
   }
 
@@ -218,6 +239,8 @@ function DeepScanPanel({
     setErrorMeta({});
     setResult(null);
     setAuthorised(false);
+    setRateLimitPath('');
+    setActiveJobId(null);
   }
 
   return (
@@ -333,6 +356,45 @@ function DeepScanPanel({
 
             <DeepScanScopeSelector selected={selectedPhaseIds} onChange={setSelectedPhaseIds} />
 
+            {selectedPhaseIds.includes('ratelimit') && (
+              <section className="border p-4" style={{ borderColor: 'var(--border-2)', borderRadius: 4 }}>
+                <label htmlFor="rate-limit-path" className="text-sm font-semibold text-white">Optional: choose a safe rate-limit endpoint</label>
+                <p className="text-[11px] leading-relaxed mt-1" style={{ color: 'var(--faint)' }}>
+                  Use a public, read-only GET path such as <span className="font-mono text-white/70">/api/search</span> or <span className="font-mono text-white/70">/api/health</span>. Ironclad sends six quick requests here as the final module. Leave it blank to use a safely discovered API route.
+                </p>
+                <input
+                  id="rate-limit-path"
+                  value={rateLimitPath}
+                  onChange={event => setRateLimitPath(event.target.value)}
+                  placeholder="/api/search"
+                  className="w-full mt-3 px-3 py-2.5 font-mono text-sm text-white outline-none"
+                  style={{ background: 'var(--bg)', border: '1px solid var(--border-2)', borderRadius: 4 }}
+                />
+                <p className="text-[10px] leading-relaxed mt-2" style={{ color: 'var(--ghost)' }}>
+                  Do not enter login, logout, reset, payment, upload, email, or other state-changing routes. Query strings and credentials are not accepted.
+                </p>
+              </section>
+            )}
+
+            <section className="border p-4" style={{ borderColor: 'var(--border-2)', borderRadius: 4 }}>
+              <h3 className="text-sm font-semibold text-white">What happens after you start</h3>
+              <div className="grid sm:grid-cols-3 gap-4 mt-3">
+                {[
+                  ['1', 'Check scanner access', 'Four safe requests identify a firewall or bot challenge before a scan credit is used.'],
+                  ['2', 'Run one at a time', 'Each selected module completes before the next begins. Every target request appears in the live activity view.'],
+                  ['3', 'Explain the result', 'The report says what was tested, what happened, what it means, and what to do next. Technical evidence is expandable.'],
+                ].map(([number, title, explanation]) => (
+                  <div key={number} className="flex gap-3">
+                    <span className="font-mono text-xs" style={{ color: 'var(--accent)' }}>{number}</span>
+                    <div><p className="text-xs font-semibold text-white/80">{title}</p><p className="text-[11px] leading-relaxed mt-1" style={{ color: 'var(--faint)' }}>{explanation}</p></div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] leading-relaxed mt-4 border-t pt-3" style={{ color: 'var(--ghost)', borderColor: 'var(--border)' }}>
+                This release tests the public, signed-out application. Ironclad identifies login forms but does not enter passwords, create failed logins, or submit state-changing forms. SQL and NoSQL modules test suitable public inputs discovered on the site; they do not claim to test a login form when none was safely submitted.
+              </p>
+            </section>
+
             <label
               className="flex items-start gap-3 border p-4 cursor-pointer"
               style={{ borderColor: 'var(--border-2)', borderRadius: 4 }}
@@ -359,12 +421,12 @@ function DeepScanPanel({
 
             <div className="flex gap-3">
               <button
-                onClick={() => { setScanError(''); setStep('scanning'); }}
+                onClick={() => { setScanError(''); setActiveJobId(null); setStep('scanning'); }}
                 disabled={!authorised || selectedPhaseIds.length === 0}
                 className="px-6 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-35 disabled:cursor-not-allowed"
                 style={{ background: 'var(--accent)', borderRadius: 4 }}
               >
-                Start {selectedPhaseIds.length}-module scan
+                Check access &amp; queue {selectedPhaseIds.length} modules
               </button>
               <button
                 onClick={reset}
@@ -386,9 +448,12 @@ function DeepScanPanel({
               authorizationAccepted: authorised,
               termsVersion: DEEP_SCAN_TERMS_VERSION,
               selectedPhaseIds,
+              rateLimitPath: rateLimitPath.trim() || null,
             }}
-            onResult={completed => { setResult(completed); setStep('results'); onComplete(); }}
+            existingJobId={activeJobId}
+            onResult={completed => { setActiveJobId(null); setResult(completed); setStep('results'); onComplete(); }}
             onError={(message, meta) => {
+              setActiveJobId(null);
               setAuthorised(false);
               setScanError(message);
               setErrorMeta(meta);

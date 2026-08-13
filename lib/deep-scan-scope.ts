@@ -10,6 +10,9 @@ export interface DeepScanModuleDefinition {
   benefit: string;
   limitation: string;
   intensity: RequestIntensity;
+  /** Plain planning estimate; actual probes depend on discovered routes and inputs. */
+  requestRange?: readonly [number, number];
+  prerequisite?: string;
 }
 
 /**
@@ -17,28 +20,27 @@ export interface DeepScanModuleDefinition {
  * module is useful and what conclusion it cannot support.
  */
 export const DEEP_SCAN_MODULES = [
-  { id: 'vibe', group: 'browser', intensity: 'moderate', benefit: 'Reads the submitted page and selected same-origin scripts for material browser-exposed credentials and provider configuration.', limitation: 'Only browser-delivered files are visible; server environment variables and unreferenced chunks are outside scope.' },
+  { id: 'vibe', group: 'browser', intensity: 'moderate', requestRange: [1, 13], prerequisite: 'No extra setup', benefit: 'Reads the submitted page, script preloads, and bounded same-origin chunk references for material browser-exposed credentials and provider configuration.', limitation: 'Only browser-delivered files are visible; server environment variables and unreferenced chunks remain outside scope.' },
   { id: 'components', group: 'browser', intensity: 'local', benefit: 'Finds reviewable version strings for a small set of legacy browser libraries.', limitation: 'A version string does not prove the vulnerable code path is loaded; the catalogue is intentionally narrow.' },
   { id: 'sourcemaps', group: 'browser', intensity: 'light', benefit: 'Checks declared and conventional same-origin source-map locations for embedded source or mapping metadata.', limitation: 'Only selected referenced scripts are inspected; missing maps do not prove source is private.' },
 
-  { id: 'headers', group: 'transport', intensity: 'local', benefit: 'Evaluates effective CSP, HSTS, framing, MIME, referrer, and browser-permission policies on the submitted page.', limitation: 'One response cannot establish that every route uses the same headers.' },
+  { id: 'headers', group: 'transport', intensity: 'light', requestRange: [0, 3], benefit: 'Evaluates effective CSP, HSTS, framing, MIME, referrer, and browser-permission policies, then samples discovered routes for drift.', limitation: 'A bounded route sample cannot establish that every response uses the same policy.' },
   { id: 'cookies', group: 'transport', intensity: 'local', benefit: 'Reviews observed cookies for Secure, HttpOnly, SameSite, and prefix-contract mistakes.', limitation: 'Cookies set only after login or on another route are not observed.' },
   { id: 'ssl', group: 'transport', intensity: 'light', benefit: 'Checks whether plain HTTP is forced to the verified HTTPS host.', limitation: 'This is not a certificate-chain, protocol-version, cipher-suite, or expiry audit.' },
   { id: 'info', group: 'transport', intensity: 'local', benefit: 'Finds detailed server and framework versions disclosed in response headers.', limitation: 'Product names without versions are usually context, not a vulnerability.' },
   { id: 'sri', group: 'transport', intensity: 'local', benefit: 'Validates integrity and crossorigin attributes on immutable third-party page resources.', limitation: 'Same-origin and intentionally moving third-party assets are not meaningfully covered by SRI.' },
-  { id: 'cors', group: 'transport', intensity: 'moderate', benefit: 'Tests the page and selected API routes with hostile Origin values for dangerous credentialed reflection.', limitation: 'Unauthenticated responses cannot prove what a signed-in browser could read.' },
+  { id: 'cors', group: 'transport', intensity: 'moderate', benefit: 'Tests the page and selected API routes with hostile origins plus browser preflights, and checks credentialed reflection and cache variation.', limitation: 'Unauthenticated responses cannot prove what a signed-in browser could read.' },
   { id: 'hostheader', group: 'transport', intensity: 'light', benefit: 'Checks whether a forged Host controls an external redirect or is reflected in a successful response.', limitation: 'It does not submit password-reset flows or prove cache poisoning.' },
   { id: 'crlf', group: 'transport', intensity: 'moderate', benefit: 'Tests discovered response-shaping GET inputs for creation of an unintended response header.', limitation: 'No conclusion is made when no suitable public input is discovered.' },
-  { id: 'ratelimit', group: 'transport', intensity: 'moderate', benefit: 'Records whether one discovered public API route exposes rate-limit headers or throttles a six-request burst.', limitation: 'Six safe requests cannot prove protection against brute force, distributed abuse, login attempts, or higher production thresholds.' },
 
   { id: 'files', group: 'exposure', intensity: 'heavy', benefit: 'Checks a bounded inventory of high-risk configuration, repository, backup, and diagnostic files with content validation.', limitation: 'It cannot enumerate arbitrary filenames or reconstruct a repository from one Git marker.' },
-  { id: 'admin', group: 'exposure', intensity: 'heavy', benefit: 'Looks for actual unauthenticated privileged-interface content at common management paths.', limitation: 'A login page is not reported; custom or unlinked management paths are not discoverable.' },
+  { id: 'admin', group: 'exposure', intensity: 'heavy', benefit: 'Prioritises discovered management routes, then looks for actual unauthenticated privileged-interface content at bounded common paths.', limitation: 'A login page is not reported; custom and unlinked management routes can still be missed.' },
   { id: 'errors', group: 'exposure', intensity: 'light', benefit: 'Looks for stack traces and framework internals in a small set of safe error responses.', limitation: 'It does not exercise every controller, parser, or application exception.' },
-  { id: 'dirlist', group: 'exposure', intensity: 'moderate', benefit: 'Checks selected common asset and backup directories for real index listings.', limitation: 'Custom directories and authenticated listings remain outside scope.' },
+  { id: 'dirlist', group: 'exposure', intensity: 'moderate', benefit: 'Checks directories learned from public routes plus selected common asset and backup paths for real index listings.', limitation: 'Unlinked directories and authenticated listings remain outside scope.' },
   { id: 'robots', group: 'exposure', intensity: 'light', benefit: 'Reviews robots.txt for disclosed admin, backup, and configuration paths.', limitation: 'A Disallow entry is disclosure context, not proof that the path is reachable.' },
-  { id: 'serverstatus', group: 'exposure', intensity: 'light', benefit: 'Requires real Apache mod_status content before reporting public server-status exposure.', limitation: 'Other vendor-specific diagnostic consoles are not covered.' },
-  { id: 'apidocs', group: 'exposure', intensity: 'moderate', benefit: 'Finds structured OpenAPI, Swagger, and ReDoc content at selected conventional paths.', limitation: 'Public documentation may be intentional; custom documentation routes can be missed.' },
-  { id: 'graphql', group: 'exposure', intensity: 'moderate', benefit: 'Sends a bounded schema query to selected conventional GraphQL endpoints.', limitation: 'Public introspection is often intentional and does not establish data exposure.' },
+  { id: 'serverstatus', group: 'exposure', intensity: 'moderate', requestRange: [7, 7], benefit: 'Requires product-specific content before reporting Apache, nginx, PHP-FPM, or Spring operational endpoints.', limitation: 'Custom health and observability consoles can still be missed.' },
+  { id: 'apidocs', group: 'exposure', intensity: 'moderate', benefit: 'Prioritises discovered documentation routes and confirms structured OpenAPI, Swagger, or ReDoc content.', limitation: 'Public documentation may be intentional; custom unlinked documentation can be missed.' },
+  { id: 'graphql', group: 'exposure', intensity: 'moderate', benefit: 'Prioritises discovered GraphQL routes and sends a bounded schema query to selected endpoints.', limitation: 'Public introspection is often intentional and does not establish data exposure.' },
 
   { id: 'xss', group: 'inputs', intensity: 'moderate', benefit: 'Uses a unique marker on discovered public GET inputs to detect differential unencoded HTML reflection.', limitation: 'This does not execute JavaScript in a browser or cover DOM, stored, POST, or authenticated XSS.' },
   { id: 'sqli', group: 'inputs', intensity: 'heavy', benefit: 'Compares benign and SQL-shaped values on discovered public GET inputs for database-specific error disclosure.', limitation: 'It does not prove SQL execution, extract data, or submit login/password forms.' },
@@ -54,6 +56,7 @@ export const DEEP_SCAN_MODULES = [
   { id: 'supabase', group: 'cloud', intensity: 'moderate', benefit: 'Uses discovered public project configuration and table names for a few bounded anonymous reads.', limitation: 'Dynamic or server-only table names are missed, and anonymous access can be intentional under RLS.' },
   { id: 'firebase', group: 'cloud', intensity: 'moderate', benefit: 'Makes shallow or one-item reads against exact Firebase database and storage endpoints published to the browser.', limitation: 'Only the discovered project and a bounded first level are sampled.' },
   { id: 'storage', group: 'cloud', intensity: 'moderate', benefit: 'Tests discovered Supabase Storage and S3 endpoints for anonymous listing permission.', limitation: 'Private buckets, unreferenced buckets, object reads, writes, and signed URLs are not tested.' },
+  { id: 'ratelimit', group: 'transport', intensity: 'moderate', benefit: 'Records whether one discovered public API route exposes rate-limit headers or throttles six response-serialised requests.', limitation: 'Six safe requests cannot prove protection against brute force, distributed abuse, login attempts, or higher production thresholds. It runs last so it cannot interfere with later modules.' },
 ] as const satisfies readonly DeepScanModuleDefinition[];
 
 export type DeepScanModuleId = typeof DEEP_SCAN_MODULES[number]['id'];
@@ -69,26 +72,71 @@ export const DEEP_SCAN_GROUP_LABELS: Record<DeepScanModuleGroup, string> = {
 
 export const DEEP_SCAN_PROFILES = {
   full: {
-    label: 'Full external review',
-    description: 'All bounded modules. Recommended when you own the target and want the broadest evidence.',
+    label: 'Full review',
+    description: 'Checks every public area Ironclad can assess safely. Choose this if you are not sure.',
+    bestFor: 'Most site owners and first scans',
+    answer: 'The broadest picture of public exposure, input handling, access controls, cloud data, and security configuration.',
+    duration: 'Usually 2–10 minutes',
+    recommended: true,
     phaseIds: DEEP_SCAN_MODULES.map(module => module.id),
   },
   application: {
     label: 'Web application',
-    description: 'Public inputs, API access, sessions, CORS, error behaviour, and abuse signals.',
+    description: 'Focuses on forms, public inputs, APIs, access controls, CORS, errors, and abuse signals.',
+    bestFor: 'Interactive apps, dashboards, and API-backed products',
+    answer: 'How discovered public inputs and unauthenticated application routes respond to safe crafted values.',
+    duration: 'Usually 1–6 minutes',
+    recommended: false,
     phaseIds: ['vibe', 'headers', 'cookies', 'cors', 'errors', 'xss', 'sqli', 'nosql', 'redirect', 'ssrf', 'traversal', 'forced', 'ratelimit', 'idor', 'nextauth', 'graphql', 'hostheader', 'crlf'],
   },
   exposure: {
     label: 'Exposure & configuration',
-    description: 'Published secrets, files, browser assets, diagnostics, headers, and documentation.',
+    description: 'Looks for published secrets, files, source maps, diagnostics, weak browser policies, and public documentation.',
+    bestFor: 'Marketing sites, new deployments, and configuration reviews',
+    answer: 'Whether selected files, browser assets, diagnostics, and page-level security settings are publicly exposed.',
+    duration: 'Usually 1–5 minutes',
+    recommended: false,
     phaseIds: ['vibe', 'files', 'headers', 'cookies', 'ssl', 'admin', 'errors', 'dirlist', 'robots', 'sri', 'info', 'serverstatus', 'components', 'sourcemaps', 'apidocs'],
   },
   data: {
     label: 'APIs & cloud data',
-    description: 'Unauthenticated APIs, public objects, GraphQL, provider rules, storage, CORS, and throttling signals.',
+    description: 'Focuses on public APIs, GraphQL, Supabase, Firebase, storage access, CORS, and throttling signals.',
+    bestFor: 'Apps using APIs or browser-configured cloud services',
+    answer: 'Whether discovered data endpoints expose listings, records, schemas, or risky cross-origin access without authentication.',
+    duration: 'Usually 1–4 minutes',
+    recommended: false,
     phaseIds: ['vibe', 'cors', 'forced', 'ratelimit', 'idor', 'supabase', 'firebase', 'storage', 'graphql', 'apidocs'],
   },
-} as const satisfies Record<string, { label: string; description: string; phaseIds: readonly DeepScanModuleId[] }>;
+} as const satisfies Record<string, {
+  label: string;
+  description: string;
+  bestFor: string;
+  answer: string;
+  duration: string;
+  recommended: boolean;
+  phaseIds: readonly DeepScanModuleId[];
+}>;
+
+const DEFAULT_REQUEST_RANGES: Record<RequestIntensity, readonly [number, number]> = {
+  local: [0, 0],
+  light: [1, 4],
+  moderate: [2, 10],
+  heavy: [6, 22],
+};
+
+export function moduleRequestRange(module: DeepScanModuleDefinition): readonly [number, number] {
+  return module.requestRange ?? DEFAULT_REQUEST_RANGES[module.intensity];
+}
+
+export function estimateScopeRequests(ids: readonly DeepScanModuleId[]): readonly [number, number] {
+  return DEEP_SCAN_MODULES.filter(module => ids.includes(module.id)).reduce<readonly [number, number]>(
+    ([minimum, maximum], module) => {
+      const range = moduleRequestRange(module);
+      return [minimum + range[0], maximum + range[1]];
+    },
+    [1, 1],
+  );
+}
 
 const KNOWN_IDS = new Set<string>(DEEP_SCAN_MODULES.map(module => module.id));
 const ORDER = new Map(DEEP_SCAN_MODULES.map((module, index) => [module.id, index]));

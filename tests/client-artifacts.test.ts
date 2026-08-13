@@ -5,6 +5,7 @@ import {
   extractClientArtifactsFromSources,
   extractNextBuildId,
   extractNextManifestRoutes,
+  extractSameOriginJavaScriptLiterals,
   extractSameOriginScriptUrls,
 } from '../lib/client-artifacts';
 
@@ -17,6 +18,25 @@ test('script discovery resolves and deduplicates exact-origin assets', () => {
   assert.deepEqual(extractSameOriginScriptUrls(html, 'https://example.com/page'), [
     'https://example.com/_next/static/a.js?v=1',
     'https://example.com/app.js',
+  ]);
+});
+
+test('browser discovery follows script preloads and concrete same-origin chunks', () => {
+  const html = `
+    <link rel="modulepreload" href="/_next/static/preloaded.js">
+    <link rel="preload" as="script" href="/boot.mjs">
+    <link rel="preload" as="style" href="/ignore.css">
+    <script src="/app.js"></script>`;
+  assert.deepEqual(extractSameOriginScriptUrls(html, 'https://example.com/page'), [
+    'https://example.com/app.js',
+    'https://example.com/_next/static/preloaded.js',
+    'https://example.com/boot.mjs',
+  ]);
+  assert.deepEqual(extractSameOriginJavaScriptLiterals([
+    `load('/_next/static/chunks/account.js'); import("./lazy.mjs"); import("https://other.example/x.js")`,
+  ], 'https://example.com/_next/static/app.js'), [
+    'https://example.com/_next/static/chunks/account.js',
+    'https://example.com/_next/static/lazy.mjs',
   ]);
 });
 

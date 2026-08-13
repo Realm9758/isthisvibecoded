@@ -1,4 +1,5 @@
 import type { ScanLane } from '@/lib/scan-lanes';
+import type { ScanAccessDiagnostic, ScanPass } from '@/types/scan-job';
 
 export type DeepFindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
@@ -31,6 +32,12 @@ export interface CheckedItem {
   description: string;
   status: 'pass' | 'warn' | 'fail' | 'skip' | 'observe';
   detail: string;
+  /** Plain-language report structure. Optional for legacy stored scans. */
+  whatTested?: string;
+  observation?: string;
+  meaning?: string;
+  notTested?: string;
+  nextAction?: string;
 }
 
 /** What one check managed to observe, and why it fell short if it did. */
@@ -62,6 +69,48 @@ export interface ScanPhaseProgress {
   durationMs?: number;
   /** Explains an incomplete or non-applicable phase. */
   reason?: string | null;
+  /** Real request work discovered for this module. Null while discovery is still open-ended. */
+  plannedProbes?: number | null;
+  /** Logical probes that reached a terminal response/evaluation state. */
+  completedProbes?: number;
+}
+
+export interface ScanExecutionModuleReceipt {
+  phaseId: string;
+  status: 'complete' | 'incomplete' | 'not_applicable';
+  findingCount: number;
+  requestsAttempted: number;
+  requestsCompleted: number;
+  requestsFailed: number;
+  requestsBlocked: number;
+  durationMs: number;
+  reason: string | null;
+}
+
+/** Private worker checkpoint for a terminal module; never streamed verbatim. */
+export interface ScanPhaseCheckpoint {
+  phaseId: string;
+  findings: DeepFinding[];
+  coverage: CheckCoverage;
+  transportAttempts: number;
+  retries: number;
+}
+
+export interface ScanExecutionReceipt {
+  pass: ScanPass;
+  scannerUserAgent: string;
+  scannerEgressIps: string[];
+  selectedPhaseIds: string[];
+  /** Logical module probes. Retries do not increase this number. */
+  requestsAttempted: number;
+  /** Actual outbound request starts, including retries and redirect hops. */
+  transportAttempts?: number;
+  requestsCompleted: number;
+  requestsFailed: number;
+  requestsBlocked: number;
+  retries: number;
+  durationMs: number;
+  modules: ScanExecutionModuleReceipt[];
 }
 
 /** Public builder provenance. Context for the report, never a finding. */
@@ -117,6 +166,14 @@ export interface DeepScanResult {
     applicationRoutesDiscovered: number;
     testedParameterNames: string[];
   };
+  /** Public-edge behaviour measured before an owner-controlled WAF exception. */
+  perimeter?: {
+    completedAt: string;
+    diagnostics: ScanAccessDiagnostic[];
+    accessReady: boolean;
+  };
+  /** Bounded, redacted execution evidence. Missing on legacy scans. */
+  execution?: ScanExecutionReceipt;
   findings: DeepFinding[];
   checked: CheckedItem[];
 }

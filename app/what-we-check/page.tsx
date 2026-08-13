@@ -150,9 +150,9 @@ export default function WhatWeCheckPage() {
             <h2 className="text-base font-semibold text-white mb-2.5">What a clean result means</h2>
             <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
               A scan that finds nothing means these bounded probes observed nothing, not that the site is
-              secure. Ironclad looks from the outside at one moment in time. It cannot read your source,
-              review your access control, or reason about your business logic, and it is not a penetration
-              test.
+              secure. Ironclad looks from the outside at one moment in time. It cannot read private source,
+              fully review role and ownership rules, or reason about business logic. Treat it as a bounded
+              automated part of a penetration-testing workflow, not a replacement for authenticated manual testing.
             </p>
           </div>
 

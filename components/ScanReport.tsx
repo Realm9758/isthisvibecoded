@@ -102,7 +102,7 @@ function coverageLimits(result: AnyScanResult): CoverageLimit[] {
     const definition: Omit<CoverageLimit, 'checks'> = key === 'rejected'
       ? {
           title: 'The site did not accept some automated requests',
-          explanation: 'Those modules received a denial, rate limit, or bot challenge. Nothing here says the site is vulnerable; it means Ironclad could not inspect that response reliably. If you control the firewall, allow the Ironclad-Deep/2.0 user agent for the verified host and rerun the scan.',
+          explanation: 'Those modules reached a temporary rate limit or a confirmed bot challenge, so Ironclad did not call them clean. Current durable scans stop at the first such response and offer a guided access recheck; this completed report may be from an older scanner version or a separately limited provider endpoint.',
         }
       : key === 'interactive'
         ? {
@@ -164,7 +164,7 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
           <span className="font-mono text-sm text-white/60 truncate">{result.domain}</span>
           <span className="ml-auto font-mono text-xs" style={{ color: 'var(--ghost)' }}>
             {lane} · {result.checked.length} module{result.checked.length === 1 ? '' : 's'}
-            {' · '}{result.coverage?.requestsAttempted ?? 0} HTTP attempts
+            {' · '}{result.execution?.transportAttempts ?? result.coverage?.requestsAttempted ?? 0} HTTP attempts
             {' · '}{(result.duration / 1_000).toFixed(1)}s
             {' · '}{formatDate(result.scannedAt)}
           </span>
@@ -227,7 +227,7 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
         <section className="border p-5" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
           <h3 className="text-sm font-semibold text-white mb-2">Execution receipt</h3>
           <p className="text-sm leading-relaxed max-w-3xl" style={{ color: 'var(--muted)' }}>
-            The {receipt.modules} modules are an accounting list, not {receipt.modules} separate penetration tests. Some inspect HTML, headers, cookies, or scripts already downloaded; independent URL probes can run concurrently. These numbers are recorded by the server, not animated by the progress bar.
+            The {receipt.modules} modules are an accounting list, not {receipt.modules} separate penetration tests. Some inspect HTML, headers, cookies, or scripts already downloaded. Target requests were sent one at a time, and these numbers were recorded by the server rather than animated by the progress bar.
           </p>
           <dl className="grid grid-cols-2 sm:grid-cols-3 gap-px mt-4 border" style={{ borderColor: 'var(--border)', background: 'var(--border)' }}>
             {[
@@ -235,7 +235,7 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
               ['modules that sent HTTP', receipt.networkModules],
               ['local analysis modules', receipt.localModules],
               ['modules not applicable', receipt.notApplicableModules],
-              ['total HTTP attempts', result.coverage?.requestsAttempted ?? 0],
+              ['logical HTTP probes', result.coverage?.requestsAttempted ?? 0],
               ['wall time', `${(result.duration / 1_000).toFixed(1)} s`],
             ].map(([label, value]) => (
               <div key={label} className="p-3.5 flex flex-col" style={{ background: 'var(--surface)' }}>
@@ -249,6 +249,43 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
               {receipt.incompleteModules} module{receipt.incompleteModules === 1 ? '' : 's'} returned an inconclusive result. They remain visible below and are not counted as clean passes.
             </p>
           )}
+        </section>
+      )}
+
+      {lane === 'deep' && result.perimeter && (
+        <section className="border p-5" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+          <h3 className="text-sm font-semibold text-white mb-2">Public firewall check</h3>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
+            Before testing the application, Ironclad requested four harmless paths through the public edge. This records what an ordinary scanner can reach; a temporary owner-approved exception may then let the application review run behind that protection.
+          </p>
+          <ul className="mt-4 space-y-2">
+            {result.perimeter.diagnostics.map((diagnostic, index) => (
+              <li key={`${diagnostic.method}:${diagnostic.path}:${index}`} className="flex flex-wrap gap-x-3 gap-y-1 text-xs border-l-2 pl-3" style={{ borderColor: diagnostic.classification === 'usable' || diagnostic.classification === 'protected_denial' ? 'var(--ok)' : 'var(--med)' }}>
+                <span className="font-mono text-white/70">{diagnostic.method} {diagnostic.path}</span>
+                <span style={{ color: 'var(--faint)' }}>{diagnostic.status ? `HTTP ${diagnostic.status} · ` : ''}{diagnostic.durationMs} ms</span>
+                <span className="w-full" style={{ color: 'var(--muted)' }}>{diagnostic.message}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs mt-3" style={{ color: result.perimeter.accessReady ? 'var(--ok)' : 'var(--med)' }}>
+            {result.perimeter.accessReady
+              ? 'The edge returned usable evidence, so the separate application pass was allowed to begin.'
+              : 'The edge stopped the application pass. This is a coverage limit, not a clean result.'}
+          </p>
+        </section>
+      )}
+
+      {lane === 'deep' && result.execution && (
+        <section className="border p-5" style={{ borderColor: 'var(--border)', background: 'var(--surface)', borderRadius: 6 }}>
+          <h3 className="text-sm font-semibold text-white mb-2">How the application pass ran</h3>
+          <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>
+            Ironclad completed {result.execution.modules.length} selected module outcomes with one target request in flight at a time. It started {result.execution.transportAttempts ?? result.execution.requestsAttempted} HTTP request{(result.execution.transportAttempts ?? result.execution.requestsAttempted) === 1 ? '' : 's'}, including {result.execution.retries} controlled retr{result.execution.retries === 1 ? 'y' : 'ies'}.
+          </p>
+          <details className="mt-3">
+            <summary className="font-mono text-[11px] cursor-pointer" style={{ color: 'var(--faint)' }}>scanner identity used for this run</summary>
+            <p className="font-mono text-[11px] mt-2 break-all" style={{ color: 'var(--ghost)' }}>{result.execution.scannerUserAgent}</p>
+            <p className="font-mono text-[11px] mt-1" style={{ color: 'var(--ghost)' }}>{result.execution.scannerEgressIps.length > 0 ? result.execution.scannerEgressIps.join(', ') : 'Egress address was not published in this environment.'}</p>
+          </details>
         </section>
       )}
 
@@ -412,7 +449,18 @@ export function ScanReport({ result, diff, onReset, afterSummary }: Props) {
                   </p>
                 )}
                 {'detail' in item && item.detail && (
-                  <p className="text-xs leading-relaxed mt-1" style={{ color: 'var(--ghost)' }}>{item.detail}</p>
+                  <p className="text-xs leading-relaxed mt-1" style={{ color: 'var(--ghost)' }}>{item.observation ?? item.detail}</p>
+                )}
+                {'whatTested' in item && item.whatTested && (
+                  <details className="mt-2">
+                    <summary className="font-mono text-[10px] cursor-pointer" style={{ color: 'var(--faint)' }}>what this result means</summary>
+                    <dl className="grid gap-2 mt-2 text-[11px] leading-relaxed">
+                      <div><dt className="text-white/60 font-semibold">What Ironclad tested</dt><dd style={{ color: 'var(--faint)' }}>{item.whatTested}</dd></div>
+                      <div><dt className="text-white/60 font-semibold">What it means</dt><dd style={{ color: 'var(--faint)' }}>{item.meaning}</dd></div>
+                      <div><dt className="text-white/60 font-semibold">What was not tested</dt><dd style={{ color: 'var(--faint)' }}>{item.notTested}</dd></div>
+                      <div><dt className="text-white/60 font-semibold">What to do next</dt><dd style={{ color: 'var(--faint)' }}>{item.nextAction}</dd></div>
+                    </dl>
+                  </details>
                 )}
               </div>
             </li>
@@ -489,7 +537,10 @@ function FindingCard({
         </div>
       ) : (
         <div className="px-5 py-4 space-y-3.5">
-          <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>{full.description}</p>
+          <div>
+            <p className="label mb-2">what this means</p>
+            <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>{full.description}</p>
+          </div>
 
           {full.url && (
             <p className="font-mono text-xs break-all" style={{ color: 'var(--faint)' }}>{full.url}</p>
@@ -497,7 +548,7 @@ function FindingCard({
 
           {full.evidence && (
             <details>
-              <summary className="label mb-2 cursor-pointer">observed evidence</summary>
+              <summary className="label mb-2 cursor-pointer">technical evidence</summary>
               <pre
                 className="font-mono text-xs p-3.5 overflow-x-auto whitespace-pre-wrap break-all"
                 style={{ background: 'var(--bg)', color: 'var(--muted)', borderRadius: 4 }}
@@ -507,7 +558,7 @@ function FindingCard({
 
           {full.remediation && (
             <div>
-              <p className="label mb-2">fix</p>
+              <p className="label mb-2">what to do next</p>
               <p className="text-sm leading-relaxed" style={{ color: 'var(--muted)' }}>{full.remediation}</p>
             </div>
           )}

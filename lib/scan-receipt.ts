@@ -37,6 +37,6 @@ export function moduleExecutionSummary(check: CheckCoverage): string {
   }
   const activity = check.requestsAttempted === 0
     ? 'analysed downloaded page data'
-    : `${check.requestsAttempted} HTTP attempt${check.requestsAttempted === 1 ? '' : 's'}`;
+    : `${check.requestsAttempted} HTTP probe${check.requestsAttempted === 1 ? '' : 's'}`;
   return [activity, duration].filter(Boolean).join(' · ');
 }

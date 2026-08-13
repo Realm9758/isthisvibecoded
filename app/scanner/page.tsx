@@ -3,6 +3,9 @@ import type { Metadata } from 'next';
 import { SURFACE_PHASE_IDS, DEEP_ONLY_PHASE_IDS } from '@/lib/scan-lanes';
 import { TARGET_HOURLY_LIMIT } from '@/lib/scan-quota';
 import { SCANNER_INFO_URL } from '@/lib/site';
+import { DEEP_SCANNER_ID_HEADER, DEEP_SCANNER_ID_VALUE, DEEP_SCANNER_USER_AGENT, scannerEgressIps } from '@/lib/scan-identity';
+
+export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
   title: 'The scanner | Ironclad',
@@ -23,6 +26,7 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
  * find it in their logs and want to know who is knocking.
  */
 export default function ScannerPage() {
+  const egressIps = scannerEgressIps();
   return (
     <main style={{ background: 'var(--bg)' }}>
       <section className="px-6 py-20 border-b" style={{ borderColor: 'var(--border)' }}>
@@ -80,6 +84,26 @@ Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
             </p>
           </Block>
 
+          <Block title="letting an authorised deep scan through your firewall">
+            <p>
+              If you started a verified-domain scan, Ironclad first makes four safe access checks. A bot challenge or temporary rate limit pauses the job before the application modules start and before a scan credit is used.
+            </p>
+            <p>Use both the fixed source address and exact verified hostname for a temporary WAF exception:</p>
+            <pre className="font-mono text-xs p-4 overflow-x-auto" style={{ background: 'var(--bg)', color: 'var(--accent)', borderRadius: 4 }}>{`Fixed scanner IP${egressIps.length === 1 ? '' : 's'}: ${egressIps.length > 0 ? egressIps.join(', ') : 'not published in this environment'}
+User-Agent: ${DEEP_SCANNER_USER_AGENT}
+${DEEP_SCANNER_ID_HEADER}: ${DEEP_SCANNER_ID_VALUE}`}</pre>
+            <p>
+              The header is an extra identity signal, not a secret. Do not allow it on its own because another client could copy it. Match the fixed IP and your exact hostname, recheck access from the saved scan, then remove the temporary rule when the application pass is complete.
+            </p>
+            <p>
+              Provider instructions:{' '}
+              <a className="underline underline-offset-2" style={{ color: 'var(--accent)' }} href="https://developers.cloudflare.com/waf/custom-rules/skip/" target="_blank" rel="noreferrer">Cloudflare Skip rules</a>
+              {' · '}
+              <a className="underline underline-offset-2" style={{ color: 'var(--accent)' }} href="https://vercel.com/docs/vercel-firewall/vercel-waf/system-bypass-rules" target="_blank" rel="noreferrer">Vercel bypass rules</a>
+              . Ironclad does not solve challenges, rotate proxies, or impersonate a browser.
+            </p>
+          </Block>
+
           <Block title="rate limits">
             <p>
               Any single domain can be scanned at most {TARGET_HOURLY_LIMIT} times per hour across all of our
@@ -95,8 +119,8 @@ Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`}</pre>
               style={{ background: 'var(--bg)', color: 'var(--muted)', borderRadius: 4 }}
             >{`if ($http_user_agent ~* "Ironclad-") { return 403; }`}</pre>
             <p>
-              A blocked check is reported to the requester as inconclusive with the reason stated. It never
-              becomes a passing result, so blocking us costs you nothing but the report.
+              A confirmed challenge pauses a durable deep scan immediately, so later modules are not sprayed
+              with requests or shown as clean. The requester sees the provider/status when available and can cancel the job.
             </p>
           </Block>
 

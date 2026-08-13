@@ -34,9 +34,9 @@ test('scan receipt separates network, local, inconclusive and not-applicable mod
 });
 
 test('module execution summary exposes actual activity without inventing legacy timing', () => {
-  assert.equal(moduleExecutionSummary(coverage({ requestsAttempted: 1, durationMs: 143 })), '1 HTTP attempt · 143 ms');
+  assert.equal(moduleExecutionSummary(coverage({ requestsAttempted: 1, durationMs: 143 })), '1 HTTP probe · 143 ms');
   assert.equal(moduleExecutionSummary(coverage({ durationMs: 0 })), 'analysed downloaded page data · <1 ms');
   assert.equal(moduleExecutionSummary(coverage({ applicable: false, durationMs: 0 })), 'not applicable · <1 ms');
-  assert.equal(moduleExecutionSummary(coverage({ requestsAttempted: 4 })), '4 HTTP attempts');
+  assert.equal(moduleExecutionSummary(coverage({ requestsAttempted: 4 })), '4 HTTP probes');
   assert.equal(formatModuleDuration(1_240), '1.2 s');
 });

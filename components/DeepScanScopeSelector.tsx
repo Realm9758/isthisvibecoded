@@ -4,6 +4,8 @@ import {
   DEEP_SCAN_GROUP_LABELS,
   DEEP_SCAN_MODULES,
   DEEP_SCAN_PROFILES,
+  estimateScopeRequests,
+  moduleRequestRange,
   requiresClientDiscovery,
   resolveDeepScanScope,
   type DeepScanModuleGroup,
@@ -32,6 +34,7 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
   const heavy = DEEP_SCAN_MODULES.filter(module => selectedSet.has(module.id) && module.intensity === 'heavy').length;
   const network = DEEP_SCAN_MODULES.filter(module => selectedSet.has(module.id) && module.intensity !== 'local').length;
   const discoveryDependents = selected.filter(id => requiresClientDiscovery(id)).length;
+  const requestEstimate = estimateScopeRequests(selected);
 
   function ordered(ids: Set<string>): DeepScanModuleId[] {
     return DEEP_SCAN_MODULES.filter(module => ids.has(module.id)).map(module => module.id);
@@ -59,13 +62,13 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
     <section className="border" style={{ borderColor: 'var(--border-2)', borderRadius: 4 }}>
       <div className="px-4 py-3.5 border-b" style={{ borderColor: 'var(--border)' }}>
         <div className="flex flex-wrap items-baseline gap-3">
-          <h3 className="text-sm font-semibold text-white">Choose the scan scope</h3>
+          <h3 className="text-sm font-semibold text-white">What do you want Ironclad to check?</h3>
           <span className="ml-auto font-mono text-[11px]" style={{ color: selected.length > 0 ? 'var(--accent)' : 'var(--crit)' }}>
             {selected.length} of {DEEP_SCAN_MODULES.length} modules selected
           </span>
         </div>
         <p className="text-xs leading-relaxed mt-2" style={{ color: 'var(--faint)' }}>
-          This selection is sent to and enforced by the scanner. Unselected modules are not requested, scored, or saved as if they ran. A custom scope receives findings and coverage, but no overall grade.
+          If you are unsure, choose <span className="text-white/80">Full review</span>. Ironclad will first check whether your firewall allows the scanner, then run the selected modules and target requests one at a time.
         </p>
       </div>
 
@@ -85,21 +88,36 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
               }}
             >
               <span className="block text-xs font-semibold" style={{ color: activeProfile === id ? 'var(--accent)' : 'white' }}>
-                {profile.label} · {profile.phaseIds.length}
+                {profile.label}{profile.recommended ? ' · Recommended' : ''}
               </span>
               <span className="block text-[11px] leading-relaxed mt-1" style={{ color: 'var(--faint)' }}>{profile.description}</span>
+              <span className="block text-[10px] leading-relaxed mt-2" style={{ color: 'var(--ghost)' }}>
+                Best for: {profile.bestFor}<br />{profile.duration} · {profile.phaseIds.length} modules
+              </span>
             </button>
           ))}
         </div>
         <p className="font-mono text-[11px] mt-3" style={{ color: 'var(--ghost)' }}>
           {activeProfile === 'custom' ? 'custom scope' : DEEP_SCAN_PROFILES[activeProfile as keyof typeof DEEP_SCAN_PROFILES].label.toLowerCase()}
-          {' · '}{network} network-capable module{network === 1 ? '' : 's'}
-          {' · '}{heavy > 0 ? `${heavy} higher-request inventor${heavy === 1 ? 'y' : 'ies'}` : 'lower request load'}
-          {' · '}actual HTTP attempts depend on discovered inputs
+          {' · '}about {requestEstimate[0]}–{requestEstimate[1]} target requests
+          {' · '}{network} network module{network === 1 ? '' : 's'}
+          {' · '}{heavy > 0 ? `${heavy} broader inventor${heavy === 1 ? 'y' : 'ies'}` : 'lower request load'}
         </p>
+        {activeProfile !== 'custom' && (
+          <div className="mt-3 border-l-2 pl-3" style={{ borderColor: 'var(--accent-line)' }}>
+            <p className="text-[11px] leading-relaxed" style={{ color: 'var(--muted)' }}>
+              <span className="text-white/80">What this answers:</span>{' '}
+              {DEEP_SCAN_PROFILES[activeProfile as keyof typeof DEEP_SCAN_PROFILES].answer}
+            </p>
+          </div>
+        )}
       </div>
 
-      <div>
+      <details>
+        <summary className="px-4 py-3 cursor-pointer text-xs font-semibold text-white/75">
+          Customize individual modules <span className="font-normal" style={{ color: 'var(--ghost)' }}>(advanced)</span>
+        </summary>
+      <div className="border-t" style={{ borderColor: 'var(--border)' }}>
         {groups.map((group, groupIndex) => {
           const modules = DEEP_SCAN_MODULES.filter(module => module.group === group);
           const selectedInGroup = modules.filter(module => selectedSet.has(module.id)).length;
@@ -123,6 +141,7 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
                   const phase = phaseById.get(module.id);
                   const checked = selectedSet.has(module.id);
                   const requiredDiscovery = module.id === 'vibe' && discoveryDependents > 0;
+                  const range = moduleRequestRange(module);
                   return (
                     <label
                       key={module.id}
@@ -140,7 +159,9 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
                       <span className="min-w-0">
                         <span className="flex flex-wrap items-baseline gap-2">
                           <span className="text-xs font-semibold text-white/85">{phase?.label ?? module.id}</span>
-                          <span className="font-mono text-[9px] uppercase" style={{ color: 'var(--ghost)' }}>{module.intensity}</span>
+                          <span className="font-mono text-[9px] uppercase" style={{ color: 'var(--ghost)' }}>
+                            {range[1] === 0 ? 'uses downloaded data' : `about ${range[0]}–${range[1]} requests`}
+                          </span>
                         </span>
                         <span className="block text-[11px] leading-relaxed mt-1" style={{ color: 'var(--muted)' }}>{module.benefit}</span>
                         {requiredDiscovery && (
@@ -158,6 +179,7 @@ export function DeepScanScopeSelector({ selected, onChange }: Props) {
           );
         })}
       </div>
+      </details>
     </section>
   );
 }

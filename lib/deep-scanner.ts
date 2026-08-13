@@ -1,9 +1,9 @@
-import type { CheckCoverage, DeepFinding, DeepScanResult, ScanPhaseProgress } from '@/types/deep-scan';
+import type { CheckCoverage, DeepFinding, DeepScanResult, ScanPhaseCheckpoint, ScanPhaseProgress } from '@/types/deep-scan';
 import { SCAN_PHASES, type ScanPhase } from '@/lib/scan-phases';
 import { phaseRunsInLane, phasesForLane, SURFACE_PHASE_IDS, type ScanLane } from '@/lib/scan-lanes';
 import { scoreIsWithheld } from '@/lib/scan-coverage';
 import { resolveScanPhaseOutcome, type ScanPhaseRequestCoverage } from '@/lib/scan-progress';
-import { classifyProbeResponse } from '@/lib/scan-http-outcome';
+import { assessProbeResponse, classifyProbeResponse } from '@/lib/scan-http-outcome';
 import { detectVibe } from '@/lib/vibe-detector';
 import { scanForPublicKeys } from '@/lib/key-scanner';
 import type { ScanProvenance } from '@/types/deep-scan';
@@ -16,13 +16,13 @@ import {
 } from '@/lib/deep-evidence';
 import { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION, DEEP_SCORING_VERSION } from '@/lib/deep-versions';
 import { pinnedFetch } from '@/lib/pinned-fetch';
-import { SCANNER_INFO_URL } from '@/lib/site';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { supabase } from '@/lib/supabase';
 import { providerTargetHourlyKey } from '@/lib/scan-quota';
 import {
   extractNextBuildId,
   extractNextManifestRoutes,
+  extractSameOriginJavaScriptLiterals,
   extractSameOriginScriptUrls,
   extractClientArtifactsFromSources,
   type ClientArtifacts,
@@ -63,14 +63,24 @@ import {
 } from '@/lib/rate-limit-evidence';
 import {
   fullDeepScanScope,
+  DEEP_SCAN_MODULES,
   isFullDeepScanScope,
   parseRequestedDeepScanScope,
   resolveDeepScanScope,
   type DeepScanModuleId,
 } from '@/lib/deep-scan-scope';
+import { ScanRequestScheduler, waitForRetry } from '@/lib/scan-request-scheduler';
+import type { ScanPass, ScanProbeEvent } from '@/types/scan-job';
+import {
+  DEEP_SCANNER_ID_HEADER,
+  DEEP_SCANNER_ID_VALUE,
+  LANE_USER_AGENTS,
+} from '@/lib/scan-identity';
 
 const TIMEOUT = 8000;
-const SCAN_BUDGET_MS = 42_000;
+const SURFACE_SCAN_BUDGET_MS = 42_000;
+const DEEP_SCAN_BUDGET_MS = 10 * 60_000;
+export const DEEP_REQUEST_INTERVAL_MS = 750;
 const MAX_REDIRECTS = 5;
 const MAX_PROBE_BODY_BYTES = 512_000;
 const DEFAULT_TRANSPORT_BODY_BYTES = 512_000;
@@ -83,10 +93,7 @@ const DIFFERENTIAL_BODY_BYTES = 128_000;
  * domain-control scan, which would have been a false statement on any
  * unverified target.
  */
-const LANE_USER_AGENTS: Record<ScanLane, string> = {
-  surface: `Ironclad-Surface/2.0 (+${SCANNER_INFO_URL})`,
-  deep: `Ironclad-Deep/2.0 (authorized domain-control scan; +${SCANNER_INFO_URL})`,
-};
+export { DEEP_SCANNER_USER_AGENT } from '@/lib/scan-identity';
 export { DEEP_COVERAGE_VERSION, DEEP_SCANNER_VERSION } from '@/lib/deep-versions';
 
 export interface DeepScanTarget {
@@ -102,6 +109,20 @@ export interface DeepScanOptions {
   deferDoneCompletion?: boolean;
   /** Backend-validated module scope. Omission retains the full lane for fixtures and surface scans. */
   selectedPhaseIds?: readonly string[];
+  /** Durable workers receive every redacted request lifecycle event here. */
+  onProbe?: (event: ScanProbeEvent) => void | Promise<void>;
+  /** Defaults to the application pass; fixtures may select perimeter explicitly. */
+  pass?: ScanPass;
+  /** Production deep scans use 750 ms. Injectable transports default to zero for deterministic fixtures. */
+  requestIntervalMs?: number;
+  /** Opaque job id used for support correlation; never grants access by itself. */
+  jobId?: string;
+  /** Worker lease/cancellation signal. */
+  signal?: AbortSignal;
+  /** Owner-selected read-only path for the final six-request sample. */
+  rateLimitPath?: string | null;
+  /** Completed module records restored after a worker lease expires. */
+  resumePhases?: readonly ScanPhaseCheckpoint[];
 }
 
 type RequestCoverage = {
@@ -116,6 +137,11 @@ type ActivePhase = {
   startedAt: number;
   baseline: RequestCoverage;
   reason: string | null;
+  moduleIndex: number;
+  moduleCount: number;
+  probesStarted: number;
+  probesCompleted: number;
+  plannedProbes: number | null;
   emit: (progress: ScanPhaseProgress) => void;
 };
 
@@ -127,6 +153,14 @@ type ScanRequestContext = {
   deadlineExceeded: boolean;
   providerQuotaTargets: Set<string>;
   transport: typeof pinnedFetch;
+  scheduler: ScanRequestScheduler;
+  pass: ScanPass;
+  retries: number;
+  pauseRequested: boolean;
+  pauseReason: string | null;
+  onProbe?: DeepScanOptions['onProbe'];
+  jobId?: string;
+  signal?: AbortSignal;
   activePhase?: ActivePhase;
 };
 
@@ -141,9 +175,39 @@ type SafeFetchOptions = RequestInit & {
   forbiddenIsBlocked?: boolean;
   /** A 429 is the expected positive observation only inside the rate-limit module. */
   rateLimitIsEvidence?: boolean;
+  /** Only the explicit, final rate-limit module may bypass normal request pacing. */
+  rapidSeries?: boolean;
+  /** Plain metadata for the live receipt; raw values and bodies are never emitted. */
+  probeParameter?: string;
+  probePayloadClass?: string;
 };
 
 const finalResponseUrls = new WeakMap<Response, string>();
+
+/**
+ * A module can prepare several probes before the first response arrives. Keep
+ * challenge classification inside the scheduler's one-request critical
+ * section so queued probes see the pause flag before they are allowed to send.
+ */
+async function latchBotChallengeBeforeQueueRelease(
+  context: ScanRequestContext | undefined,
+  response: Response,
+  options: { forbiddenIsBlocked?: boolean; rateLimitIsEvidence?: boolean } = {},
+): Promise<void> {
+  if (!context || context.pauseRequested || options.rateLimitIsEvidence) return;
+  const bodySample = response.status === 403
+    ? (await response.clone().text().catch(() => '')).slice(0, 4_096)
+    : '';
+  const assessment = assessProbeResponse(response.status, response.headers, {
+    forbiddenIsBlocked: options.forbiddenIsBlocked,
+    rateLimitIsEvidence: options.rateLimitIsEvidence,
+    bodySample,
+  });
+  if (assessment.classification !== 'bot_challenge') return;
+  context.pauseRequested = true;
+  context.pauseReason = assessment.message;
+  markCurrentPhaseIncomplete(assessment.message);
+}
 
 function snapshotCoverage(coverage: RequestCoverage): RequestCoverage {
   return { ...coverage };
@@ -169,7 +233,38 @@ function notifyActivePhase(context: ScanRequestContext | undefined): void {
     coverage: coverageSince(context.coverage, active.baseline),
     durationMs: Date.now() - active.startedAt,
     reason: active.reason,
+    plannedProbes: active.plannedProbes,
+    completedProbes: active.probesCompleted,
   });
+}
+
+function sanitizedProbePath(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    const names = [...new Set(url.searchParams.keys())].slice(0, 12);
+    return `${url.pathname || '/'}${names.length > 0 ? `?${names.map(name => `${encodeURIComponent(name)}=[redacted]`).join('&')}` : ''}`;
+  } catch {
+    return '/';
+  }
+}
+
+async function emitProbe(
+  context: ScanRequestContext | undefined,
+  event: Omit<ScanProbeEvent, 'pass' | 'phaseId' | 'moduleIndex' | 'moduleCount'>,
+): Promise<void> {
+  const active = context?.activePhase;
+  if (!context || !active || !context.onProbe) return;
+  try {
+    await context.onProbe({
+      pass: context.pass,
+      phaseId: active.phase.id,
+      moduleIndex: active.moduleIndex,
+      moduleCount: active.moduleCount,
+      ...event,
+    });
+  } catch {
+    // A failed progress write must not change the security observation.
+  }
 }
 
 function incrementCoverage(
@@ -186,6 +281,14 @@ function markCurrentPhaseIncomplete(reason: string): void {
   const active = context?.activePhase;
   if (!context || !active) return;
   active.reason ??= reason;
+  notifyActivePhase(context);
+}
+
+function planCurrentPhase(probes: number): void {
+  const context = scanRequestContext.getStore();
+  const active = context?.activePhase;
+  if (!active || !Number.isSafeInteger(probes) || probes < 0) return;
+  active.plannedProbes = probes;
   notifyActivePhase(context);
 }
 
@@ -211,12 +314,18 @@ function parseScanUrl(rawUrl: string): URL {
 
 async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Response | null> {
   const context = scanRequestContext.getStore();
+  const active = context?.activePhase;
+  let probeFinished = false;
+  let probeIndex = 1;
   try {
     const {
       maxResponseBytes = DEFAULT_TRANSPORT_BODY_BYTES,
       allowCanonicalRedirect = false,
       forbiddenIsBlocked = false,
       rateLimitIsEvidence = false,
+      rapidSeries = false,
+      probeParameter,
+      probePayloadClass,
       ...requestOptions
     } = options ?? {};
     const requestedRedirectMode = requestOptions.redirect ?? 'follow';
@@ -227,8 +336,17 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
       incrementCoverage(context, 'requestsBlocked');
       return null;
     }
+    if (active) {
+      active.probesStarted += 1;
+      active.plannedProbes ??= active.probesStarted;
+      active.plannedProbes = Math.max(active.plannedProbes, active.probesStarted);
+      probeIndex = active.probesStarted;
+      notifyActivePhase(context);
+    }
     let method = requestOptions.method?.toUpperCase() ?? 'GET';
     let body = requestOptions.body;
+    let lastAttempt = 1;
+    const maxAttemptsForProbe = rateLimitIsEvidence ? 1 : 2;
 
     const headers = new Headers(requestOptions.headers);
     // Defaulting to the surface string when there is no scan context is
@@ -236,52 +354,253 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
     if (!headers.has('user-agent')) {
       headers.set('user-agent', LANE_USER_AGENTS[context?.lane ?? 'surface']);
     }
+    if (context?.lane === 'deep') {
+      headers.set(DEEP_SCANNER_ID_HEADER, DEEP_SCANNER_ID_VALUE);
+      if (context.jobId) headers.set('x-ironclad-job', context.jobId);
+    }
+
+    const finishProbe = async (
+      message: string,
+      details: Partial<Pick<ScanProbeEvent, 'durationMs' | 'status' | 'classification' | 'provider' | 'retryAfterMs'>> = {},
+    ) => {
+      if (probeFinished) return;
+      probeFinished = true;
+      if (active) active.probesCompleted += 1;
+      notifyActivePhase(context);
+      await emitProbe(context, {
+        probeIndex,
+        plannedProbes: active?.plannedProbes ?? null,
+        stage: 'complete',
+        method,
+        path: sanitizedProbePath(url),
+        parameter: probeParameter,
+        payloadClass: probePayloadClass,
+        attempt: lastAttempt,
+        maxAttempts: maxAttemptsForProbe,
+        message,
+        ...details,
+      });
+    };
 
     for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount++) {
       if (context && Date.now() >= context.deadlineAt) {
         context.deadlineExceeded = true;
         incrementCoverage(context, 'requestsFailed');
+        await finishProbe('The scan reached its ten-minute execution safety limit', {
+          classification: 'transport_error',
+        });
         return null;
       }
-      // Resolve, validate, and pin every socket immediately before the request,
-      // including redirects, so DNS rebinding cannot swap in a private address.
-      incrementCoverage(context, 'requestsAttempted');
+      if (context?.signal?.aborted) {
+        context.pauseRequested = true;
+        context.pauseReason = 'The scan was cancelled or its worker lease ended';
+        await finishProbe(context.pauseReason, { classification: 'transport_error' });
+        return null;
+      }
+      if (context?.pauseRequested) {
+        await finishProbe(context.pauseReason ?? 'The scan paused before this request was sent', {
+          classification: 'bot_challenge',
+        });
+        return null;
+      }
 
-      const remainingBudget = context ? Math.max(1, context.deadlineAt - Date.now()) : TIMEOUT;
-      const res = await (context?.transport ?? pinnedFetch)(currentUrl, {
-        ...requestOptions,
-        method,
-        body,
-        headers,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(Math.min(TIMEOUT, remainingBudget)),
-        maxResponseBytes,
-      });
+      let res: Response | null = null;
+      let assessment: ReturnType<typeof assessProbeResponse> | null = null;
+      const maximumAttempts = maxAttemptsForProbe;
+      incrementCoverage(context, 'requestsAttempted');
+      for (let attempt = 1; attempt <= maximumAttempts; attempt++) {
+        lastAttempt = attempt;
+        let startedAt = Date.now();
+
+        try {
+          res = await (context?.scheduler ?? new ScanRequestScheduler({ intervalMs: 0 })).run(async () => {
+            if (context?.pauseRequested) return null;
+            startedAt = Date.now();
+            await emitProbe(context, {
+              probeIndex,
+              plannedProbes: active?.plannedProbes ?? null,
+              stage: 'requesting',
+              method,
+              path: sanitizedProbePath(currentUrl.href),
+              parameter: probeParameter,
+              payloadClass: probePayloadClass,
+              attempt,
+              maxAttempts: maximumAttempts,
+              message: probePayloadClass
+                ? `Testing ${probeParameter ? `the “${probeParameter}” input` : 'a discovered input'} with ${probePayloadClass}`
+                : `Requesting ${sanitizedProbePath(currentUrl.href)}`,
+            });
+            const remainingBudget = context ? Math.max(1, context.deadlineAt - Date.now()) : TIMEOUT;
+            // Resolve, validate, and pin every socket immediately before the
+            // request so DNS rebinding cannot swap in a private address.
+            const timeoutSignal = AbortSignal.timeout(Math.min(TIMEOUT, remainingBudget));
+            const signal = context?.signal
+              ? AbortSignal.any([timeoutSignal, context.signal])
+              : timeoutSignal;
+            const response = await (context?.transport ?? pinnedFetch)(currentUrl, {
+              ...requestOptions,
+              method,
+              body,
+              headers,
+              redirect: 'manual',
+              signal,
+              maxResponseBytes,
+            });
+            await latchBotChallengeBeforeQueueRelease(context, response, {
+              forbiddenIsBlocked,
+              rateLimitIsEvidence,
+            });
+            return response;
+          }, { rapidSeries });
+          if (res === null) {
+            await finishProbe(context?.pauseReason ?? 'The scan paused before this request was sent', {
+              classification: 'bot_challenge',
+            });
+            return null;
+          }
+        } catch {
+          const durationMs = Date.now() - startedAt;
+          if (attempt < maximumAttempts && !(context && Date.now() >= context.deadlineAt)) {
+            if (context) context.retries += 1;
+            await emitProbe(context, {
+              probeIndex,
+              plannedProbes: active?.plannedProbes ?? null,
+              stage: 'retry_wait',
+              method,
+              path: sanitizedProbePath(currentUrl.href),
+              parameter: probeParameter,
+              payloadClass: probePayloadClass,
+              attempt,
+              maxAttempts: maximumAttempts,
+              durationMs,
+              classification: 'transport_error',
+              retryAfterMs: 500,
+              message: 'The connection failed; Ironclad will retry once after a short pause',
+            });
+            await waitForRetry(500);
+            continue;
+          }
+          if (context && Date.now() >= context.deadlineAt) context.deadlineExceeded = true;
+          incrementCoverage(context, 'requestsFailed');
+          await finishProbe('The request still failed after one safe retry', {
+            durationMs,
+            classification: 'transport_error',
+          });
+          return null;
+        }
+
+        const bodySample = res.status === 403
+          ? (await res.clone().text().catch(() => '')).slice(0, 4_096)
+          : '';
+        assessment = assessProbeResponse(res.status, res.headers, {
+          forbiddenIsBlocked,
+          rateLimitIsEvidence,
+          bodySample,
+        });
+        const durationMs = Date.now() - startedAt;
+        await emitProbe(context, {
+          probeIndex,
+          plannedProbes: active?.plannedProbes ?? null,
+          stage: 'response',
+          method,
+          path: sanitizedProbePath(currentUrl.href),
+          parameter: probeParameter,
+          payloadClass: probePayloadClass,
+          attempt,
+          maxAttempts: maximumAttempts,
+          durationMs,
+          status: res.status,
+          classification: assessment.classification,
+          provider: assessment.provider,
+          retryAfterMs: assessment.retryAfterMs,
+          message: assessment.message,
+        });
+
+        const retryable = assessment.classification === 'rate_limited'
+          || assessment.classification === 'upstream_error';
+        if (retryable && attempt < maximumAttempts) {
+          if (context) context.retries += 1;
+          const retryAfterMs = assessment.retryAfterMs ?? 750;
+          await emitProbe(context, {
+            probeIndex,
+            plannedProbes: active?.plannedProbes ?? null,
+            stage: 'retry_wait',
+            method,
+            path: sanitizedProbePath(currentUrl.href),
+            parameter: probeParameter,
+            payloadClass: probePayloadClass,
+            attempt,
+            maxAttempts: maximumAttempts,
+            durationMs,
+            status: res.status,
+            classification: assessment.classification,
+            provider: assessment.provider,
+            retryAfterMs,
+            message: `${assessment.message}; Ironclad will retry this probe once`,
+          });
+          await res.body?.cancel().catch(() => undefined);
+          await waitForRetry(retryAfterMs);
+          continue;
+        }
+        break;
+      }
+
+      if (!res || !assessment) {
+        incrementCoverage(context, 'requestsFailed');
+        await finishProbe('The request did not produce evaluable evidence', {
+          classification: 'transport_error',
+        });
+        return null;
+      }
       finalResponseUrls.set(res, currentUrl.href);
-      // Completed transport and usable security evidence are different. A
-      // rate-limit, explicit bot challenge or server failure must remain a
-      // visible coverage gap instead of becoming a clean check.
       incrementCoverage(context, 'requestsCompleted');
-      const responseOutcome = classifyProbeResponse(res.status, res.headers, {
-        forbiddenIsBlocked,
-        rateLimitIsEvidence,
-      });
-      if (responseOutcome === 'blocked') incrementCoverage(context, 'requestsBlocked');
-      if (responseOutcome === 'failed') incrementCoverage(context, 'requestsFailed');
+      if (assessment.outcome === 'blocked') incrementCoverage(context, 'requestsBlocked');
+      if (assessment.outcome === 'failed') incrementCoverage(context, 'requestsFailed');
 
       const isRedirect = res.status >= 300 && res.status < 400;
       const location = res.headers.get('location');
-      if (responseOutcome === 'blocked') {
+      if (assessment.outcome === 'blocked') {
+        if (
+          context
+          && !rateLimitIsEvidence
+          && (assessment.classification === 'bot_challenge' || assessment.classification === 'rate_limited')
+        ) {
+          context.pauseRequested = true;
+          context.pauseReason = assessment.message;
+          markCurrentPhaseIncomplete(assessment.message);
+        }
         await res.body?.cancel().catch(() => undefined);
+        await finishProbe(assessment.message, {
+          status: res.status,
+          classification: assessment.classification,
+          provider: assessment.provider,
+          retryAfterMs: assessment.retryAfterMs,
+        });
         return null;
       }
-      if (!isRedirect || !location || requestedRedirectMode === 'manual') return res;
+      if (!isRedirect || !location || requestedRedirectMode === 'manual') {
+        await finishProbe(assessment.message, {
+          status: res.status,
+          classification: assessment.classification,
+          provider: assessment.provider,
+          retryAfterMs: assessment.retryAfterMs,
+        });
+        return res;
+      }
       if (requestedRedirectMode === 'error') {
         incrementCoverage(context, 'requestsFailed');
+        await finishProbe('The endpoint redirected when this check required a direct response', {
+          status: res.status,
+          classification: 'transport_error',
+        });
         return null;
       }
       if (redirectCount === MAX_REDIRECTS) {
         incrementCoverage(context, 'requestsFailed');
+        await finishProbe('The endpoint exceeded the five-redirect safety limit', {
+          status: res.status,
+          classification: 'transport_error',
+        });
         return null;
       }
 
@@ -291,6 +610,10 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
       // redirects there.
       if (currentUrl.protocol === 'https:' && redirectUrl.protocol !== 'https:') {
         incrementCoverage(context, 'requestsBlocked');
+        await finishProbe('A secure request tried to redirect to unencrypted HTTP', {
+          status: res.status,
+          classification: 'protected_denial',
+        });
         return null;
       }
       const redirectHostname = redirectUrl.hostname.toLowerCase();
@@ -304,6 +627,10 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
           // stop at the verified-host boundary without sending anything to
           // the other host; treating that safe stop as a blocked request made
           // ordinary login/CDN redirects poison otherwise useful phases.
+          await finishProbe('The redirect left the verified host, so Ironclad stopped safely', {
+            status: res.status,
+            classification: 'usable',
+          });
           return res;
         }
         authorizedHostnames.add(redirectHostname);
@@ -322,11 +649,16 @@ async function safeFetch(url: string, options?: SafeFetchOptions): Promise<Respo
       }
     }
 
+    await finishProbe('The request ended without a final response', { classification: 'transport_error' });
     return null;
   } catch {
     if (context) {
       if (Date.now() >= context.deadlineAt) context.deadlineExceeded = true;
       incrementCoverage(context, 'requestsFailed');
+    }
+    if (!probeFinished) {
+      if (active) active.probesCompleted += 1;
+      notifyActivePhase(context);
     }
     return null;
   }
@@ -579,6 +911,7 @@ async function readBoundedBody(response: Response): Promise<string | null> {
 }
 
 async function checkSensitiveFiles(baseUrl: string): Promise<DeepFinding[]> {
+  planCurrentPhase(SENSITIVE_FILES.length);
   const results = await mapWithConcurrency(
     SENSITIVE_FILES,
     4,
@@ -651,6 +984,7 @@ async function checkCORS(baseUrl: string, discoveredRoutes: readonly string[] = 
     }
   });
   const apiPaths = [...new Set([...discoveredApiPaths, '/api', '/api/me'])].slice(0, 7);
+  planCurrentPhase(1 + (apiPaths.length * 2) + 1);
   for (const path of apiPaths) {
     const apiRes = await safeFetch(`${baseUrl}${path}`, {
       headers: { Origin: 'https://evil-attacker.com' },
@@ -658,6 +992,7 @@ async function checkCORS(baseUrl: string, discoveredRoutes: readonly string[] = 
     if (!apiRes) continue;
     const acao = apiRes.headers.get('access-control-allow-origin');
     const acac = apiRes.headers.get('access-control-allow-credentials');
+    const vary = apiRes.headers.get('vary') ?? '';
 
     if (acao === '*' && acac === 'true') {
       findings.push({
@@ -670,7 +1005,6 @@ async function checkCORS(baseUrl: string, discoveredRoutes: readonly string[] = 
         remediation: 'Remove Allow-Credentials if the resource is intentionally public, or replace * with a strict allowlist when credentialed cross-origin access is required.',
         url: `${baseUrl}${path}`,
       });
-      break;
     }
 
     if (apiRes.ok && acao === 'https://evil-attacker.com' && acac === 'true') {
@@ -692,7 +1026,50 @@ async function checkCORS(baseUrl: string, discoveredRoutes: readonly string[] = 
         remediation: 'Use a strict origin allowlist. Never combine Allow-Credentials: true with dynamic origin reflection.',
         url: `${baseUrl}${path}`,
       });
-      break;
+      if (!/(?:^|,)\s*origin\s*(?:,|$)/i.test(vary)) {
+        findings.push({
+          id: 'cors-reflection-cache-key',
+          category: 'cors',
+          severity: 'info',
+          title: 'Reflected CORS Origin Is Not Marked as a Cache Variant',
+          description: `${path} reflected the request Origin but did not advertise “Vary: Origin”. A shared cache could reuse one origin-specific response for another visitor, depending on the CDN cache key.`,
+          evidence: `GET ${baseUrl}${path}\nOrigin was reflected; Vary did not include Origin`,
+          remediation: 'Add Vary: Origin whenever Access-Control-Allow-Origin changes by request, and confirm the CDN cache key includes Origin.',
+          url: `${baseUrl}${path}`,
+        });
+      }
+    }
+
+    const preflight = await safeFetch(`${baseUrl}${path}`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'https://evil-attacker.com',
+        'Access-Control-Request-Method': 'GET',
+        'Access-Control-Request-Headers': 'x-ironclad-cors-check',
+      },
+      probePayloadClass: 'a browser CORS preflight',
+    });
+    if (!preflight) continue;
+    const preflightOrigin = preflight.headers.get('access-control-allow-origin');
+    const preflightCredentials = preflight.headers.get('access-control-allow-credentials');
+    const preflightMethods = preflight.headers.get('access-control-allow-methods') ?? '';
+    const preflightHeaders = preflight.headers.get('access-control-allow-headers') ?? '';
+    if (
+      preflightOrigin === 'https://evil-attacker.com'
+      && preflightCredentials === 'true'
+      && /(?:^|,)\s*GET\s*(?:,|$)/i.test(preflightMethods)
+      && /(?:^|,)\s*(?:x-ironclad-cors-check|\*)\s*(?:,|$)/i.test(preflightHeaders)
+    ) {
+      findings.push({
+        id: 'cors-preflight-reflect-credentials',
+        category: 'cors',
+        severity: 'info',
+        title: 'Credentialed CORS Preflight Accepted an Untrusted Origin',
+        description: `${path} approved a credentialed browser preflight from an unrelated origin. This confirms a permissive preflight policy, but authenticated response data was not available in this signed-out scan.`,
+        evidence: `OPTIONS ${baseUrl}${path}\nThe untrusted Origin, GET method, and test header were allowed with credentials`,
+        remediation: 'Use an exact origin allowlist and allow only the methods and headers required by each trusted client.',
+        url: `${baseUrl}${path}`,
+      });
     }
   }
 
@@ -701,7 +1078,11 @@ async function checkCORS(baseUrl: string, discoveredRoutes: readonly string[] = 
 
 // ── Security headers ──────────────────────────────────────────────────────
 
-async function checkSecurityHeaders(res: Response | null, pageUrl: string): Promise<DeepFinding[]> {
+async function checkSecurityHeaders(
+  res: Response | null,
+  pageUrl: string,
+  discoveredRoutes: readonly string[] = [],
+): Promise<DeepFinding[]> {
   if (!res) return [];
 
   const responseHeaders: Record<string, string> = {};
@@ -719,7 +1100,7 @@ async function checkSecurityHeaders(res: Response | null, pageUrl: string): Prom
     return 'info';
   }
 
-  return assessment.headers
+  const findings: DeepFinding[] = assessment.headers
     .filter(header => (header.penaltyApplied ?? 0) > 0)
     .map(header => ({
       id: `header-${header.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
@@ -730,6 +1111,49 @@ async function checkSecurityHeaders(res: Response | null, pageUrl: string): Prom
       evidence: header.value ? `${header.name}: ${header.value.slice(0, 240)}` : undefined,
       remediation: header.recommendation,
     }));
+
+  const origin = new URL(pageUrl).origin;
+  const routeUrls = [...new Set(discoveredRoutes.flatMap(route => {
+    try {
+      const url = new URL(route, origin);
+      if (url.origin !== origin || url.href === pageUrl) return [];
+      if (/\/(?:logout|signout|delete|remove|checkout|purchase|reset|upload|webhook)(?:\/|$)/i.test(url.pathname)) return [];
+      url.search = '';
+      url.hash = '';
+      return [url.href];
+    } catch {
+      return [];
+    }
+  }))].slice(0, 3);
+  planCurrentPhase(routeUrls.length);
+  const baselineValid = new Set(assessment.headers.filter(header => header.valid).map(header => header.name));
+  const drift = new Map<string, string[]>();
+  for (const routeUrl of routeUrls) {
+    const routeResponse = await safeFetch(routeUrl);
+    if (!routeResponse?.ok) continue;
+    const routeHeaders: Record<string, string> = {};
+    routeResponse.headers.forEach((value, name) => { routeHeaders[name.toLowerCase()] = value; });
+    const routeAssessment = analyzeSecurityHeaders(routeHeaders, true);
+    for (const header of routeAssessment.headers) {
+      if (!baselineValid.has(header.name) || header.valid) continue;
+      const paths = drift.get(header.name) ?? [];
+      paths.push(new URL(routeUrl).pathname);
+      drift.set(header.name, paths);
+    }
+  }
+  if (drift.size > 0) {
+    const details = [...drift].map(([name, paths]) => `${name} weakened on ${paths.join(', ')}`);
+    findings.push({
+      id: 'header-policy-drift',
+      category: 'headers',
+      severity: [...drift.keys()].some(name => name === 'Content-Security-Policy') ? 'medium' : 'low',
+      title: 'Browser Security Headers Differ Across Public Routes',
+      description: 'A policy that was valid on the submitted page was missing or ineffective on another discovered page. Security headers need to be applied consistently at the edge or shared application layer.',
+      evidence: details.join('\n'),
+      remediation: 'Apply the security-header policy in a shared server, framework, or CDN rule, then test page, authentication, error, and API routes for the same effective values.',
+    });
+  }
+  return findings;
 }
 
 // ── Cookie security ───────────────────────────────────────────────────────
@@ -979,22 +1403,37 @@ async function checkCrossdomain(baseUrl: string): Promise<DeepFinding[]> {
 // Apache server-status: content-aware check
 
 async function checkServerStatus(baseUrl: string): Promise<DeepFinding[]> {
-  const res = await safeFetch(`${baseUrl}/server-status`);
-  if (!res || res.status !== 200) return [];
-  const text = await readProbeText(res);
-  // Confirm this is actual Apache mod_status output, not just a 200 page
-  const isRealStatus = /Apache\s+Server\s+Status|Current\s+Time.*Server\s+uptime|requests\s+currently\s+being\s+processed/i.test(text);
-  if (!isRealStatus) return [];
-  return [{
-    id: 'server-status-exposed',
-    category: 'info-disclosure',
-    severity: 'high',
-    title: 'Apache Server Status Page Exposed',
-    description: 'Apache mod_status is publicly accessible, exposing real-time server info: active connections, request URIs, worker states, and client IPs, all useful for targeted attacks.',
-    evidence: `GET ${baseUrl}/server-status → 200 (Apache mod_status content confirmed)`,
-    remediation: 'Restrict /server-status to localhost or trusted IPs: `Require ip 127.0.0.1`',
-    url: `${baseUrl}/server-status`,
-  }];
+  const candidates = [
+    { path: '/server-status', kind: 'Apache mod_status', pattern: /Apache\s+Server\s+Status|Current\s+Time[\s\S]{0,1000}Server\s+uptime|requests\s+currently\s+being\s+processed/i },
+    { path: '/nginx_status', kind: 'nginx stub status', pattern: /Active connections:\s*\d+[\s\S]{0,300}server accepts handled requests/i },
+    { path: '/php-fpm-status', kind: 'PHP-FPM status', pattern: /pool:\s*\S+[\s\S]{0,500}(?:process manager:|accepted conn:)/i },
+    { path: '/fpm-status', kind: 'PHP-FPM status', pattern: /pool:\s*\S+[\s\S]{0,500}(?:process manager:|accepted conn:)/i },
+    { path: '/actuator', kind: 'Spring Actuator index', pattern: /"_links"\s*:\s*\{[\s\S]{0,4000}"(?:health|env|beans|mappings)"\s*:/i },
+    { path: '/actuator/env', kind: 'Spring Actuator environment', pattern: /"(?:propertySources|activeProfiles|defaultProfiles)"\s*:/i },
+    { path: '/actuator/health', kind: 'detailed Spring health', pattern: /"components"\s*:\s*\{[\s\S]{0,4000}"(?:db|diskSpace|redis|mail)"\s*:/i },
+  ];
+  planCurrentPhase(candidates.length);
+  const findings: DeepFinding[] = [];
+  for (const candidate of candidates) {
+    const res = await safeFetch(`${baseUrl}${candidate.path}`);
+    if (!res?.ok) continue;
+    const text = await readBoundedProbeText(res, 128_000);
+    if (text === null || !candidate.pattern.test(text)) continue;
+    const actuatorIndex = candidate.path === '/actuator';
+    findings.push({
+      id: `diagnostic-${candidate.path.replace(/[^a-z0-9]+/gi, '-')}`,
+      category: 'info-disclosure',
+      severity: actuatorIndex ? 'info' : 'high',
+      title: `${candidate.kind} Is Publicly Reachable`,
+      description: actuatorIndex
+        ? 'A structured Spring Actuator index is public. This can be intentional, but it advertises operational endpoints that should be reviewed individually.'
+        : `Content signatures confirm that ${candidate.kind} is public. The response can reveal live infrastructure, configuration, dependency, or service-health details.`,
+      evidence: `GET ${baseUrl}${candidate.path} → HTTP ${res.status}; ${candidate.kind} content signature confirmed`,
+      remediation: 'Restrict operational and diagnostic endpoints to an internal network or authenticated observability role, and expose only a minimal health signal publicly when required.',
+      url: `${baseUrl}${candidate.path}`,
+    });
+  }
+  return findings;
 }
 
 // ── Admin path discovery ──────────────────────────────────────────────────
@@ -1035,9 +1474,18 @@ const LOGIN_GATE_PATTERNS = [
   /<form\b[^>]*(?:action=["'][^"']*(?:login|signin)|id=["'](?:login|signin))/i,
 ];
 
-async function checkAdminPaths(baseUrl: string): Promise<DeepFinding[]> {
+async function checkAdminPaths(baseUrl: string, discoveredRoutes: readonly string[] = []): Promise<DeepFinding[]> {
+  const discovered = discoveredRoutes.flatMap(route => {
+    try {
+      const path = new URL(route, baseUrl).pathname;
+      return /\/(?:admin|administrator|manage|management|superadmin|controlpanel|phpmyadmin|wp-admin)(?:\/|$)/i.test(path)
+        ? [path] : [];
+    } catch { return []; }
+  });
+  const paths = [...new Set([...discovered, ...ADMIN_PATHS])].slice(0, 25);
+  planCurrentPhase(paths.length);
   const results = await Promise.allSettled(
-    ADMIN_PATHS.map(async (path) => {
+    paths.map(async (path) => {
       const res = await safeFetch(`${baseUrl}${path}`, { redirect: 'follow' });
       if (!res || res.status !== 200) return { path, exposed: false };
 
@@ -1087,11 +1535,14 @@ function inputUrl(input: ApplicationQueryInput, value: string, parameter = input
 }
 
 async function checkSQLInjection(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
+  planCurrentPhase(inputs.length * (1 + SQL_PAYLOADS.length));
   for (const input of inputs) {
     const controlUrl = inputUrl(input, 'ironclad-control-value');
     const controlRes = await safeFetch(controlUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
+      probeParameter: input.parameter,
+      probePayloadClass: 'a normal comparison value',
     });
     const controlText = await readDifferentialControl(controlRes, 'SQL injection');
     if (controlText === null) continue;
@@ -1100,6 +1551,8 @@ async function checkSQLInjection(inputs: readonly ApplicationQueryInput[]): Prom
       const res = await safeFetch(url, {
         maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
         forbiddenIsBlocked: true,
+        probeParameter: input.parameter,
+        probePayloadClass: 'a SQL-shaped value',
       });
       if (!res) continue;
       const text = await readBoundedProbeText(res, DIFFERENTIAL_BODY_BYTES);
@@ -1129,6 +1582,7 @@ async function checkErrorVerbosity(baseUrl: string): Promise<DeepFinding[]> {
     `${baseUrl}/api/nonexistent`,
     `${baseUrl}/?debug=true`,
   ];
+  planCurrentPhase(testUrls.length);
 
   const STACK_PATTERNS = [
     /at \w+\.?\w* \(.+:\d+:\d+\)/,        // JS stack trace
@@ -1166,10 +1620,15 @@ async function checkErrorVerbosity(baseUrl: string): Promise<DeepFinding[]> {
 
 async function checkOpenRedirect(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
   const TARGET = 'https://evil-attacker-test.com';
+  planCurrentPhase(inputs.length);
 
   for (const input of inputs) {
     const url = inputUrl(input, TARGET);
-    const res = await safeFetch(url, { redirect: 'manual' });
+    const res = await safeFetch(url, {
+      redirect: 'manual',
+      probeParameter: input.parameter,
+      probePayloadClass: 'an external redirect destination',
+    });
     if (!res) continue;
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location') ?? '';
@@ -1198,8 +1657,17 @@ async function checkOpenRedirect(inputs: readonly ApplicationQueryInput[]): Prom
 
 // ── Directory listing ─────────────────────────────────────────────────────
 
-async function checkDirectoryListing(baseUrl: string): Promise<DeepFinding[]> {
-  const paths = ['/uploads/', '/static/', '/assets/', '/files/', '/images/', '/media/', '/backup/', '/logs/'];
+async function checkDirectoryListing(baseUrl: string, discoveredRoutes: readonly string[] = []): Promise<DeepFinding[]> {
+  const discoveredDirectories = discoveredRoutes.flatMap(route => {
+    try {
+      const pathname = new URL(route, baseUrl).pathname;
+      const slash = pathname.lastIndexOf('/');
+      const directory = slash >= 0 ? pathname.slice(0, slash + 1) : '/';
+      return directory !== '/' && /^\/[A-Za-z0-9_./-]{1,140}\/$/.test(directory) ? [directory] : [];
+    } catch { return []; }
+  });
+  const paths = [...new Set([...discoveredDirectories, '/uploads/', '/static/', '/assets/', '/files/', '/images/', '/media/', '/backup/', '/logs/'])].slice(0, 12);
+  planCurrentPhase(paths.length);
   const DIR_PATTERNS = [/Index of\s+\//i, /\[To Parent Directory\]/i, /Parent Directory<\/a>/i, /<title>Index of/i];
 
   for (const path of paths) {
@@ -1353,6 +1821,7 @@ async function checkVibeCodePatterns(baseUrl: string, html: string): Promise<Dee
 // ── HTML reflection review ────────────────────────────────────────────────
 
 async function checkXSS(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
+  planCurrentPhase(inputs.length * 2);
   for (const input of inputs) {
     const marker = `ironclad-${crypto.randomUUID()}`;
     const markup = `<ironclad-probe data-id="${marker}"></ironclad-probe>`;
@@ -1360,6 +1829,8 @@ async function checkXSS(inputs: readonly ApplicationQueryInput[]): Promise<DeepF
     const controlRes = await safeFetch(controlUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
+      probeParameter: input.parameter,
+      probePayloadClass: 'a normal comparison value',
     });
     const controlText = await readDifferentialControl(controlRes, 'HTML reflection');
     if (controlText === null) continue;
@@ -1368,6 +1839,8 @@ async function checkXSS(inputs: readonly ApplicationQueryInput[]): Promise<DeepF
     const res = await safeFetch(url, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
+      probeParameter: input.parameter,
+      probePayloadClass: 'an inert HTML-shaped value',
     });
     if (!res) continue;
     const contentType = res.headers.get('content-type')?.toLowerCase() ?? '';
@@ -1441,6 +1914,7 @@ async function checkForcedBrowsing(baseUrl: string, discoveredRoutes: string[] =
     .filter(path => /^\/api\/[A-Za-z0-9_./-]{1,120}$/.test(path) && !path.includes('..'))
     .slice(0, 5);
   const protectedPaths = [...new Set([...defaultPaths, ...discoveredPaths])];
+  planCurrentPhase(protectedPaths.length);
 
   const results = await Promise.allSettled(
     protectedPaths.map(async (path) => {
@@ -1477,17 +1951,21 @@ async function checkForcedBrowsing(baseUrl: string, discoveredRoutes: string[] =
 const RATE_LIMIT_PROBE_COUNT = 6;
 
 async function inspectRateLimitSignals(targetUrl: string): Promise<string> {
-  const responses = await Promise.all(
-    Array.from({ length: RATE_LIMIT_PROBE_COUNT }, () => safeFetch(targetUrl, {
+  planCurrentPhase(RATE_LIMIT_PROBE_COUNT);
+  const responses: Response[] = [];
+  for (let index = 0; index < RATE_LIMIT_PROBE_COUNT; index++) {
+    const response = await safeFetch(targetUrl, {
       redirect: 'manual',
       headers: { Accept: 'application/json, text/plain;q=0.8, */*;q=0.1' },
       maxResponseBytes: 16_000,
       rateLimitIsEvidence: true,
-    })),
-  );
-  const usable = responses.filter((response): response is Response => response !== null);
-  for (const response of usable) await response.body?.cancel().catch(() => undefined);
-  return describeRateLimitEvidence(assessRateLimitEvidence(usable), RATE_LIMIT_PROBE_COUNT);
+      rapidSeries: true,
+      probePayloadClass: 'a safe rapid-series request',
+    });
+    if (response) responses.push(response);
+  }
+  for (const response of responses) await response.body?.cancel().catch(() => undefined);
+  return describeRateLimitEvidence(assessRateLimitEvidence(responses), RATE_LIMIT_PROBE_COUNT);
 }
 
 // IDOR: insecure direct object reference (A01)
@@ -1521,6 +1999,7 @@ async function checkIDOR(baseUrl: string, discoveredRoutes: readonly string[]): 
   };
 
   for (const path of candidates) {
+    planCurrentPhase(candidates.size * 3);
     const [res1, res2, absentRes] = await Promise.all([
       safeFetch(`${baseUrl}${path}1`, { headers: { Accept: 'application/json' } }),
       safeFetch(`${baseUrl}${path}2`, { headers: { Accept: 'application/json' } }),
@@ -1557,6 +2036,7 @@ async function checkIDOR(baseUrl: string, discoveredRoutes: readonly string[]): 
 async function checkSSRF(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
   const METADATA_TARGET = 'http://169.254.169.254/latest/meta-data/';
   const METADATA_SIGNATURES = [/ami-id|instance-id|security-credentials|iam\//i];
+  planCurrentPhase(inputs.length * 2);
 
   for (const input of inputs) {
     // Cloud metadata probe
@@ -1564,6 +2044,8 @@ async function checkSSRF(inputs: readonly ApplicationQueryInput[]): Promise<Deep
     const metaRes = await safeFetch(metaUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
+      probeParameter: input.parameter,
+      probePayloadClass: 'a cloud-metadata URL',
     });
     if (metaRes?.status === 200) {
       const text = await readBoundedProbeText(metaRes, DIFFERENTIAL_BODY_BYTES);
@@ -1572,6 +2054,8 @@ async function checkSSRF(inputs: readonly ApplicationQueryInput[]): Promise<Deep
         const controlRes = await safeFetch(controlUrl, {
           maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
           forbiddenIsBlocked: true,
+          probeParameter: input.parameter,
+          probePayloadClass: 'a normal comparison value',
         });
         const controlText = await readDifferentialControl(controlRes, 'SSRF');
         if (controlText === null) continue;
@@ -1602,12 +2086,15 @@ async function checkSSRF(inputs: readonly ApplicationQueryInput[]): Promise<Deep
 
 async function checkPathTraversal(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
   const PAYLOADS = ['../../../etc/passwd', '..%2F..%2F..%2Fetc%2Fpasswd', '....//....//....//etc/passwd'];
+  planCurrentPhase(inputs.length * (1 + PAYLOADS.length));
 
   for (const input of inputs) {
     const controlUrl = inputUrl(input, 'ironclad-control-file');
     const controlRes = await safeFetch(controlUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
+      probeParameter: input.parameter,
+      probePayloadClass: 'a normal file name',
     });
     const controlText = await readDifferentialControl(controlRes, 'Path traversal');
     if (controlText === null) continue;
@@ -1616,6 +2103,8 @@ async function checkPathTraversal(inputs: readonly ApplicationQueryInput[]): Pro
       const res = await safeFetch(url, {
         maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
         forbiddenIsBlocked: true,
+        probeParameter: input.parameter,
+        probePayloadClass: 'a path-traversal-shaped value',
       });
       if (!res || res.status !== 200) continue;
       const text = await readBoundedProbeText(res, DIFFERENTIAL_BODY_BYTES);
@@ -1741,6 +2230,10 @@ async function checkSourceMaps(
   if (!bundles.length) return [];
 
   const allowedOrigin = new URL(baseUrl).origin;
+  planCurrentPhase(bundles.slice(0, 8).reduce(
+    (count, bundle) => count + sourceMapUrlCandidates(bundle.url, bundle.source, allowedOrigin).length,
+    0,
+  ));
 
   const results = await mapWithConcurrency(
     bundles.slice(0, 8),
@@ -1862,14 +2355,17 @@ async function providerFetch(
   allowedMethods: readonly string[] = ['GET'],
   maxResponseBytes = PROVIDER_MAX_RESPONSE_BYTES,
 ): Promise<Response | null> {
+  const context = scanRequestContext.getStore();
+  const active = context?.activePhase;
+  let probeIndex = 1;
   try {
     const url = parseScanUrl(rawUrl);
     if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== allowedHostname.toLowerCase()) return null;
     if (!allowedPath.test(url.pathname)) return null;
     const method = options.method?.toUpperCase() ?? 'GET';
     if (!allowedMethods.includes(method)) return null;
-    const context = scanRequestContext.getStore();
     if (context?.lane !== 'deep') return null;
+    if (context.pauseRequested || context.signal?.aborted) return null;
     if (context && Date.now() >= context.deadlineAt) {
       context.deadlineExceeded = true;
       incrementCoverage(context, 'requestsFailed');
@@ -1902,32 +2398,135 @@ async function providerFetch(
       incrementCoverage(context, 'requestsFailed');
       return null;
     }
-    incrementCoverage(context, 'requestsAttempted');
-    const remainingBudget = context ? Math.max(1, context.deadlineAt - Date.now()) : TIMEOUT;
-    const response = await (context?.transport ?? pinnedFetch)(url, {
-      ...options,
-      method,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(Math.min(TIMEOUT, remainingBudget)),
-      maxResponseBytes,
-      headers: {
-        'User-Agent': LANE_USER_AGENTS.deep,
-        ...Object.fromEntries(new Headers(options.headers).entries()),
-      },
-    });
-    incrementCoverage(context, 'requestsCompleted');
-    const responseOutcome = classifyProbeResponse(response.status, response.headers);
-    if (responseOutcome === 'blocked') incrementCoverage(context, 'requestsBlocked');
-    if (responseOutcome === 'failed') incrementCoverage(context, 'requestsFailed');
-    if (responseOutcome === 'blocked') {
-      await response.body?.cancel().catch(() => undefined);
-      return null;
+    if (active) {
+      active.probesStarted += 1;
+      active.plannedProbes ??= active.probesStarted;
+      active.plannedProbes = Math.max(active.plannedProbes, active.probesStarted);
+      probeIndex = active.probesStarted;
+      notifyActivePhase(context);
     }
-    return response;
+    incrementCoverage(context, 'requestsAttempted');
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      let startedAt = Date.now();
+      let response: Response;
+      try {
+        response = await (context?.scheduler ?? new ScanRequestScheduler({ intervalMs: 0 })).run(async () => {
+          if (context.pauseRequested || context.signal?.aborted) {
+            throw context.signal?.reason ?? new Error(context.pauseReason ?? 'The scan paused before this provider request was sent');
+          }
+          startedAt = Date.now();
+          await emitProbe(context, {
+            probeIndex, plannedProbes: active?.plannedProbes ?? null, stage: 'requesting',
+            method, path: sanitizedProbePath(url.href), attempt, maxAttempts: 2,
+            message: `Requesting the discovered ${quotaIdentity.split(':')[0]} project endpoint`,
+          });
+          const remainingBudget = context ? Math.max(1, context.deadlineAt - Date.now()) : TIMEOUT;
+          const timeoutSignal = AbortSignal.timeout(Math.min(TIMEOUT, remainingBudget));
+          const signal = context?.signal ? AbortSignal.any([timeoutSignal, context.signal]) : timeoutSignal;
+          const response = await (context?.transport ?? pinnedFetch)(url, {
+            ...options,
+            method,
+            redirect: 'manual',
+            signal,
+            maxResponseBytes,
+            headers: {
+              'User-Agent': LANE_USER_AGENTS.deep,
+              [DEEP_SCANNER_ID_HEADER]: DEEP_SCANNER_ID_VALUE,
+              ...(context?.jobId ? { 'x-ironclad-job': context.jobId } : {}),
+              ...Object.fromEntries(new Headers(options.headers).entries()),
+            },
+          });
+          await latchBotChallengeBeforeQueueRelease(context, response);
+          return response;
+        });
+      } catch {
+        if (context.pauseRequested || context.signal?.aborted) {
+          if (active) active.probesCompleted += 1;
+          notifyActivePhase(context);
+          await emitProbe(context, {
+            probeIndex, plannedProbes: active?.plannedProbes ?? null, stage: 'complete', method,
+            path: sanitizedProbePath(url.href), attempt, maxAttempts: 2,
+            durationMs: Date.now() - startedAt, classification: 'bot_challenge',
+            message: context.pauseReason ?? 'The scan paused before this provider request was sent',
+          });
+          return null;
+        }
+        if (attempt === 1 && !(context && Date.now() >= context.deadlineAt)) {
+          context.retries += 1;
+          await emitProbe(context, {
+            probeIndex, plannedProbes: active?.plannedProbes ?? null, stage: 'retry_wait', method,
+            path: sanitizedProbePath(url.href), attempt, maxAttempts: 2,
+            durationMs: Date.now() - startedAt, classification: 'transport_error', retryAfterMs: 500,
+            message: 'The provider connection failed; Ironclad will retry once after a short pause',
+          });
+          await waitForRetry(500);
+          continue;
+        }
+        incrementCoverage(context, 'requestsFailed');
+        if (active) active.probesCompleted += 1;
+        await emitProbe(context, {
+          probeIndex, plannedProbes: active?.plannedProbes ?? null, stage: 'complete', method,
+          path: sanitizedProbePath(url.href), attempt, maxAttempts: 2,
+          durationMs: Date.now() - startedAt, classification: 'transport_error',
+          message: 'The provider request still failed after one safe retry',
+        });
+        return null;
+      }
+      const bodySample = response.status === 403
+        ? (await response.clone().text().catch(() => '')).slice(0, 4_096)
+        : '';
+      const assessment = assessProbeResponse(response.status, response.headers, { bodySample });
+      await emitProbe(context, {
+        probeIndex, plannedProbes: active?.plannedProbes ?? null, stage: 'response', method,
+        path: sanitizedProbePath(url.href), attempt, maxAttempts: 2,
+        durationMs: Date.now() - startedAt, status: response.status,
+        classification: assessment.classification, provider: assessment.provider,
+        retryAfterMs: assessment.retryAfterMs, message: assessment.message,
+      });
+      if (
+        attempt === 1
+        && (assessment.classification === 'rate_limited' || assessment.classification === 'upstream_error')
+      ) {
+        context.retries += 1;
+        const retryAfterMs = assessment.retryAfterMs ?? 750;
+        await emitProbe(context, {
+          probeIndex, plannedProbes: active?.plannedProbes ?? null, stage: 'retry_wait', method,
+          path: sanitizedProbePath(url.href), attempt, maxAttempts: 2,
+          durationMs: Date.now() - startedAt, status: response.status,
+          classification: assessment.classification, provider: assessment.provider,
+          retryAfterMs, message: `${assessment.message}; Ironclad will retry this provider probe once`,
+        });
+        await response.body?.cancel().catch(() => undefined);
+        await waitForRetry(retryAfterMs);
+        continue;
+      }
+      incrementCoverage(context, 'requestsCompleted');
+      if (assessment.outcome === 'blocked') incrementCoverage(context, 'requestsBlocked');
+      if (assessment.outcome === 'failed') incrementCoverage(context, 'requestsFailed');
+      if (active) active.probesCompleted += 1;
+      notifyActivePhase(context);
+      await emitProbe(context, {
+        probeIndex, plannedProbes: active?.plannedProbes ?? null, stage: 'complete', method,
+        path: sanitizedProbePath(url.href), attempt, maxAttempts: 2,
+        durationMs: Date.now() - startedAt, status: response.status,
+        classification: assessment.classification, provider: assessment.provider,
+        retryAfterMs: assessment.retryAfterMs, message: assessment.message,
+      });
+      if (assessment.outcome === 'blocked') {
+        context.pauseRequested = true;
+        context.pauseReason = assessment.message;
+        markCurrentPhaseIncomplete(assessment.message);
+        await response.body?.cancel().catch(() => undefined);
+        return null;
+      }
+      return response;
+    }
+    return null;
   } catch {
-    const context = scanRequestContext.getStore();
     if (context && Date.now() >= context.deadlineAt) context.deadlineExceeded = true;
     incrementCoverage(context, 'requestsFailed');
+    if (active) active.probesCompleted += 1;
+    notifyActivePhase(context);
     return null;
   }
 }
@@ -2324,8 +2923,15 @@ async function checkNextMiddlewareBypass(baseUrl: string, html: string): Promise
 
 // ── GraphQL introspection ─────────────────────────────────────────────────
 
-async function checkGraphQL(baseUrl: string): Promise<DeepFinding[]> {
-  const endpoints = ['/graphql', '/api/graphql', '/gql', '/query'];
+async function checkGraphQL(baseUrl: string, discoveredRoutes: readonly string[] = []): Promise<DeepFinding[]> {
+  const discovered = discoveredRoutes.flatMap(route => {
+    try {
+      const path = new URL(route, baseUrl).pathname;
+      return /\/(?:graphql|gql|query)(?:\/|$)/i.test(path) ? [path] : [];
+    } catch { return []; }
+  });
+  const endpoints = [...new Set([...discovered, '/graphql', '/api/graphql', '/gql', '/query'])].slice(0, 8);
+  planCurrentPhase(endpoints.length);
 
   for (const path of endpoints) {
     const res = await safeFetch(`${baseUrl}${path}`, {
@@ -2385,9 +2991,18 @@ function isApiDocumentationBody(body: string): boolean {
   }
 }
 
-async function checkAPIDocumentation(baseUrl: string): Promise<DeepFinding[]> {
+async function checkAPIDocumentation(baseUrl: string, discoveredRoutes: readonly string[] = []): Promise<DeepFinding[]> {
+  const discovered = discoveredRoutes.flatMap(route => {
+    try {
+      const path = new URL(route, baseUrl).pathname;
+      return /(?:swagger|openapi|api[-_/]?docs|redoc)/i.test(path)
+        ? [{ path, title: 'Discovered API documentation' }] : [];
+    } catch { return []; }
+  });
+  const candidates = [...new Map([...discovered, ...API_DOC_PATHS].map(item => [item.path, item])).values()].slice(0, 14);
+  planCurrentPhase(candidates.length);
   const results = await Promise.allSettled(
-    API_DOC_PATHS.map(async ({ path, title }) => {
+    candidates.map(async ({ path, title }) => {
       const res = await safeFetch(`${baseUrl}${path}`, { redirect: 'follow' });
       if (!res || res.status !== 200) return { path, title, exposed: false };
       const body = await readProbeText(res);
@@ -2430,11 +3045,14 @@ const NOSQL_ERROR_PATTERNS = [
 ];
 
 async function checkNoSQLInjection(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
+  planCurrentPhase(inputs.length * (1 + NOSQL_PAYLOADS.length));
   for (const input of inputs) {
     const controlUrl = inputUrl(input, 'ironclad-control-value');
     const controlRes = await safeFetch(controlUrl, {
       maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
       forbiddenIsBlocked: true,
+      probeParameter: input.parameter,
+      probePayloadClass: 'a normal comparison value',
     });
     const controlText = await readDifferentialControl(controlRes, 'NoSQL injection');
     if (controlText === null) continue;
@@ -2443,6 +3061,8 @@ async function checkNoSQLInjection(inputs: readonly ApplicationQueryInput[]): Pr
       const res = await safeFetch(url, {
         maxResponseBytes: DIFFERENTIAL_BODY_BYTES,
         forbiddenIsBlocked: true,
+        probeParameter: input.parameter,
+        probePayloadClass: 'a NoSQL-operator-shaped value',
       });
       if (!res) continue;
       const text = await readBoundedProbeText(res, DIFFERENTIAL_BODY_BYTES);
@@ -2510,10 +3130,16 @@ async function checkHostHeaderInjection(baseUrl: string): Promise<DeepFinding[]>
 
 async function checkCRLFInjection(inputs: readonly ApplicationQueryInput[]): Promise<DeepFinding[]> {
   const CRLF_PAYLOAD = 'test\r\nX-Injected: malicious';
+  planCurrentPhase(inputs.length);
 
   for (const input of inputs) {
     const url = inputUrl(input, CRLF_PAYLOAD);
-    const res = await safeFetch(url, { redirect: 'manual', forbiddenIsBlocked: true });
+    const res = await safeFetch(url, {
+      redirect: 'manual',
+      forbiddenIsBlocked: true,
+      probeParameter: input.parameter,
+      probePayloadClass: 'an encoded newline value',
+    });
     if (!res) continue;
 
     if (res.headers.get('x-injected')) {
@@ -2577,6 +3203,15 @@ function buildChecked(
     void passDetail;
 
     const override = detailOverrides.get(phaseId);
+    const limitation = DEEP_SCAN_MODULES.find(module => module.id === phaseId)?.limitation
+      ?? 'This bounded public scan does not cover every route, account, role, or server-side code path.';
+    const clarity = (observation: string, meaning: string, nextAction: string) => ({
+      whatTested: description,
+      observation,
+      meaning,
+      notTested: limitation,
+      nextAction,
+    });
 
     // A check the lane never ran is the upsell, so it is shown rather than
     // hidden: this is what verifying your domain would additionally buy.
@@ -2584,6 +3219,11 @@ function buildChecked(
       return {
         id, label, description, status: 'skip',
         detail: 'Not run. This check requires domain verification.',
+        ...clarity(
+          'This module was not sent to the target.',
+          'Ironclad cannot reach a conclusion from an unverified public scan.',
+          'Verify control of the domain, then run this module.',
+        ),
       };
     }
 
@@ -2595,7 +3235,15 @@ function buildChecked(
         return order.indexOf(a.severity) < order.indexOf(b.severity) ? a : b;
       });
       const status = worst.severity === 'low' || worst.severity === 'info' ? 'warn' : 'fail';
-      return { id, label, description, status, detail: relevant.map(f => f.title).join(' · ') };
+      const observation = relevant.map(f => f.title).join(' · ');
+      return {
+        id, label, description, status, detail: observation,
+        ...clarity(
+          observation,
+          `Ironclad confirmed ${relevant.length} piece${relevant.length === 1 ? '' : 's'} of evidence that need${relevant.length === 1 ? 's' : ''} review. The finding cards explain the impact without claiming more than the evidence proves.`,
+          worst.remediation,
+        ),
+      };
     }
 
     const cover = coverageByPhase.get(phaseId);
@@ -2603,17 +3251,34 @@ function buildChecked(
       return {
         id, label, description, status: 'skip',
         detail: `Not applicable. ${cover.reason ?? 'The check had no relevant target to inspect'}.`,
+        ...clarity(
+          cover.reason ?? 'No matching technology, route, cookie, or public input was discovered.',
+          'This module was not needed for the public application evidence Ironclad discovered. This is not a security pass or failure.',
+          'No action is needed unless you expected this feature or technology to be present.',
+        ),
       };
     }
     if (cover && !cover.complete) {
       return {
         id, label, description, status: 'skip',
         detail: `Inconclusive. ${cover.reason}.`,
+        ...clarity(
+          cover.reason ?? 'The required comparison or response was unavailable.',
+          'Ironclad does not have enough reliable evidence to call this clean or vulnerable.',
+          'Resolve the access or response problem described above, then rerun this module.',
+        ),
       };
     }
 
     if (override) {
-      return { id, label, description, status: override.status, detail: override.detail };
+      return {
+        id, label, description, status: override.status, detail: override.detail,
+        ...clarity(
+          override.detail,
+          'This is a limited observation from the selected public route, not proof of site-wide protection.',
+          'Compare the observed behaviour with the threshold and abuse controls you expect for this endpoint.',
+        ),
+      };
     }
 
     if (!relevant.length) {
@@ -2623,6 +3288,11 @@ function buildChecked(
         description,
         status: 'pass',
         detail: 'No matching evidence was observed in the selected probes. This does not prove the condition is absent.',
+        ...clarity(
+          passDetail,
+          'The selected probes completed without matching this module’s finding criteria. That is useful bounded evidence, not proof that every route is safe.',
+          'Retest after relevant deployment, firewall, authentication, or routing changes.',
+        ),
       };
     }
     throw new Error('unreachable checked-item state');
@@ -2642,11 +3312,10 @@ function buildChecked(
     item('redirect',   'Open Redirect',                '?redirect=, ?url=, ?next=, ?return=, ?goto= hijacking',                 findingsFor('open-redirect'), 'No open redirect vectors found; redirect params are absent or validated', 'redirect'),
     item('errors',     'Error Verbosity',              'Stack traces, file paths, framework versions in error pages',            findingsFor('error-'), 'Error responses use generic messages, disclosing no internals', 'errors'),
     item('info',       'Technology Disclosure',        'Server version, X-Powered-By, X-AspNet-Version in headers',             findingsFor('info-'), 'No detailed server/framework version info disclosed in response headers', 'info'),
-    item('serverstatus', 'Apache Server Status',        'Confirmed mod_status content at /server-status', findingsFor('server-status-'), 'No Apache mod_status response was observed', 'serverstatus'),
+    item('serverstatus', 'Diagnostic Consoles',         'Product-validated Apache, nginx, PHP-FPM, and Spring operational endpoints', findingsFor('diagnostic-'), 'No matching public diagnostic-console content was observed at the bounded paths', 'serverstatus'),
     item('sri',        'Subresource Integrity',        'Integrity hashes and crossorigin settings on immutable external scripts and stylesheets', findingsFor('sri-'), 'No missing or invalid integrity evidence was observed on selected immutable external resources', 'sri'),
     item('robots',      'robots.txt Path Disclosure',    'Sensitive admin/backup/config paths in Disallow entries',              findingsFor('robots-'),    'robots.txt does not reveal sensitive internal paths', 'robots'),
     item('forced',      'Unauthenticated API Access',     'Material account or secret data on passively discovered and selected API routes', findingsFor('auth-unprotected'), 'No unauthenticated data-exposure evidence was observed on selected routes', 'forced'),
-    item('ratelimit',   'Rate-Limit Signals',              'A six-request burst against one discovered public GET API route', findingsFor('rate-limit-'), 'Rate-limit behaviour was observed on one selected public route', 'ratelimit'),
     item('idor',        'Public Object Access',           'Reviewing selected public object responses for ownership-sensitive data', findingsFor('idor-'), 'No reviewable sequential public object responses were observed', 'idor'),
     item('ssrf',        'Server-Side URL Fetching',       'Discovered URL-like inputs probed with a cloud-metadata target and benign control', findingsFor('ssrf-'), 'No cloud-metadata SSRF indicators found in the bounded probes', 'ssrf'),
     // Described in prose rather than as a literal traversal sequence: this
@@ -2664,6 +3333,7 @@ function buildChecked(
     item('nosql',       'NoSQL Input Safety',             'MongoDB-shaped operator values on discovered public API inputs compared with benign controls', findingsFor('nosql-'), 'No differential MongoDB error signatures were observed', 'nosql'),
     item('hostheader',  'Host Header Handling',          'Forged Host value reflected in a successful body or external Location header', findingsFor('host-header-'), 'No forged Host reflection or external redirect was observed', 'hostheader'),
     item('crlf',        'Response Header Injection',      'Newline values in discovered response-shaping inputs creating unintended headers', findingsFor('crlf-'), 'No response-header injection evidence was observed', 'crlf'),
+    item('ratelimit',   'Rate-Limit Signals',              'Six response-serialised requests against one discovered public GET API route, intentionally run after every other module', findingsFor('rate-limit-'), 'Rate-limit behaviour was observed on one selected public route', 'ratelimit'),
   ].filter(item => selected.has(item.id));
 }
 
@@ -2714,6 +3384,7 @@ export async function deepScanDomain(
       : resolveDeepScanScope(parseRequestedDeepScanScope(options.selectedPhaseIds))
     : [...SURFACE_PHASE_IDS];
   const selectedPhaseSet = new Set<string>(selectedPhaseIds);
+  const moduleIndexById = new Map<string, number>(selectedPhaseIds.map((id, index) => [id, index + 1]));
   const fullInventory = lane === 'deep'
     ? isFullDeepScanScope(selectedPhaseIds)
     : selectedPhaseIds.length === SURFACE_PHASE_IDS.length;
@@ -2727,10 +3398,20 @@ export async function deepScanDomain(
     authorizedHostnames: new Set([domain.toLowerCase()]),
     lane,
     coverage: requestCoverage,
-    deadlineAt: Date.now() + SCAN_BUDGET_MS,
+    deadlineAt: Date.now() + (lane === 'deep' ? DEEP_SCAN_BUDGET_MS : SURFACE_SCAN_BUDGET_MS),
     deadlineExceeded: false,
     providerQuotaTargets: new Set<string>(),
     transport: options.transport ?? pinnedFetch,
+    scheduler: new ScanRequestScheduler({
+      intervalMs: options.requestIntervalMs ?? (options.transport ? 0 : lane === 'deep' ? DEEP_REQUEST_INTERVAL_MS : 0),
+    }),
+    pass: options.pass ?? 'application',
+    retries: 0,
+    pauseRequested: false,
+    pauseReason: null,
+    onProbe: options.onProbe,
+    jobId: options.jobId,
+    signal: options.signal,
   };
 
   return scanRequestContext.run(requestContext, async () => {
@@ -2741,6 +3422,7 @@ export async function deepScanDomain(
   const checkedDetailOverrides = new Map<string, { status: import('@/types/deep-scan').CheckedItem['status']; detail: string }>();
 
   const checkCoverage: CheckCoverage[] = [];
+  const resumedPhases = new Map((options.resumePhases ?? []).map(item => [item.phaseId, item]));
 
   function emitPhase(
     phase: ScanPhase,
@@ -2767,6 +3449,21 @@ export async function deepScanDomain(
     // deep-lane check even if the caller is paying.
     if (!phaseRunsInLane(phaseId, lane) || !selectedPhaseSet.has(phaseId)) return [] as unknown as T;
 
+    // Client-code discovery is deliberately repeated because downstream
+    // modules depend on its in-memory route and provider inventory. The final
+    // rapid rate-limit observation is also repeated so its plain-language
+    // summary is derived from the current response series.
+    const resumed = phaseId === 'vibe' || phaseId === 'ratelimit' ? undefined : resumedPhases.get(phaseId);
+    if (resumed?.coverage.complete) {
+      checkCoverage.push(resumed.coverage);
+      allFindings.push(...resumed.findings);
+      requestCoverage.requestsAttempted += resumed.coverage.requestsAttempted;
+      requestCoverage.requestsCompleted += resumed.coverage.requestsCompleted;
+      requestCoverage.requestsFailed += resumed.coverage.requestsFailed;
+      requestCoverage.requestsBlocked += resumed.coverage.requestsBlocked;
+      return resumed.findings as T;
+    }
+
     if (!applicable) {
       const coverage: ScanPhaseRequestCoverage = {
         requestsAttempted: 0,
@@ -2788,7 +3485,7 @@ export async function deepScanDomain(
         complete: true,
         reason: outcome.reason,
       });
-      emitPhase(phase, [], { ...outcome, durationMs: 0 });
+      emitPhase(phase, [], { ...outcome, durationMs: 0, plannedProbes: 0, completedProbes: 0 });
       return [] as unknown as T;
     }
 
@@ -2799,6 +3496,11 @@ export async function deepScanDomain(
       startedAt: phaseStartedAt,
       baseline,
       reason: initialIncompleteReason,
+      moduleIndex: moduleIndexById.get(phaseId) ?? 0,
+      moduleCount: selectedPhaseIds.length,
+      probesStarted: 0,
+      probesCompleted: 0,
+      plannedProbes: null,
       emit: progress => emitPhase(phase, [], progress),
     };
     emitPhase(phase, [], {
@@ -2806,6 +3508,8 @@ export async function deepScanDomain(
       coverage: coverageSince(requestCoverage, baseline),
       durationMs: 0,
       reason: initialIncompleteReason,
+      plannedProbes: 0,
+      completedProbes: 0,
     });
 
     let results: T;
@@ -2850,14 +3554,40 @@ export async function deepScanDomain(
     emitPhase(phase, results, {
       ...outcome,
       durationMs,
+      plannedProbes: requestContext.activePhase.plannedProbes,
+      completedProbes: requestContext.activePhase.probesCompleted,
     });
     requestContext.activePhase = undefined;
     allFindings.push(...results);
+    if (requestContext.pauseRequested) {
+      const error = new Error(requestContext.pauseReason ?? 'The site paused automated access');
+      error.name = 'ScanAccessPausedError';
+      throw error;
+    }
     return results;
   }
 
   const initStartedAt = Date.now();
-  emitPhase(SCAN_PHASES[0], [], { status: 'start', durationMs: 0, reason: null });
+  const initBaseline = snapshotCoverage(requestCoverage);
+  requestContext.activePhase = {
+    phase: SCAN_PHASES[0],
+    startedAt: initStartedAt,
+    baseline: initBaseline,
+    reason: null,
+    moduleIndex: 0,
+    moduleCount: selectedPhaseIds.length,
+    probesStarted: 0,
+    probesCompleted: 0,
+    plannedProbes: 1,
+    emit: progress => emitPhase(SCAN_PHASES[0], [], progress),
+  };
+  emitPhase(SCAN_PHASES[0], [], {
+    status: 'start',
+    durationMs: 0,
+    reason: null,
+    plannedProbes: 0,
+    completedProbes: 0,
+  });
   const mainRes = await safeFetch(pageUrl, {
     redirect: 'follow',
     allowCanonicalRedirect: true,
@@ -2883,7 +3613,10 @@ export async function deepScanDomain(
     },
     durationMs: Date.now() - initStartedAt,
     reason: null,
+    plannedProbes: requestContext.activePhase.plannedProbes,
+    completedProbes: requestContext.activePhase.probesCompleted,
   });
+  requestContext.activePhase = undefined;
   const finalMainUrl = finalResponseUrls.get(mainRes);
   if (finalMainUrl) {
     const finalPage = new URL(finalMainUrl);
@@ -2905,35 +3638,44 @@ export async function deepScanDomain(
 
 
   await run('vibe', async () => {
-    // Surface-legal discovery: read only exact-origin script assets already
-    // referenced by the page. Transport is capped at 8 x 512 KB; at most
-    // 2 MB is retained for evidence extraction and later local checks.
-    const scriptUrls = extractSameOriginScriptUrls(mainHtml, pageUrl, 8);
+    // Surface-legal discovery: follow exact-origin scripts and script
+    // preload/modulepreload links, then concrete chunk literals advertised by
+    // those files. The 2 MB cap is enforced while fetching, not after a
+    // larger fan-out has already consumed target bandwidth.
+    const scriptQueue = extractSameOriginScriptUrls(mainHtml, pageUrl, 8);
+    const queued = new Set(scriptQueue);
+    const fetched = new Set<string>();
+    planCurrentPhase(scriptQueue.length);
     let aggregateBundleBytes = 0;
     const bundleSources: ClientBundleSource[] = [];
-    const bundleResults = await mapWithConcurrency(scriptUrls, 3, async scriptUrl => {
+    while (scriptQueue.length > 0 && fetched.size < 12 && aggregateBundleBytes < 2_000_000) {
+      const scriptUrl = scriptQueue.shift()!;
+      if (fetched.has(scriptUrl)) continue;
+      fetched.add(scriptUrl);
+      const remainingBytes = Math.min(512_000, 2_000_000 - aggregateBundleBytes);
       const response = await safeFetch(scriptUrl, {
         redirect: 'follow',
-        maxResponseBytes: 512_000,
+        maxResponseBytes: remainingBytes,
         headers: { Accept: 'text/javascript, application/javascript, */*;q=0.1' },
       });
-      if (!response?.ok) return null;
+      if (!response?.ok) continue;
       const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
-      if (contentType && !/(?:javascript|ecmascript|text\/plain|application\/octet-stream)/.test(contentType)) return null;
-      const source = await readBoundedProbeText(response, 512_000);
-      if (source === null) return null;
-      return {
+      if (contentType && !/(?:javascript|ecmascript|text\/plain|application\/octet-stream)/.test(contentType)) continue;
+      const source = await readBoundedProbeText(response, remainingBytes);
+      if (source === null) continue;
+      const bytes = new TextEncoder().encode(source).byteLength;
+      aggregateBundleBytes += bytes;
+      bundleSources.push({
         url: finalResponseUrls.get(response) ?? scriptUrl,
         source,
-      } satisfies ClientBundleSource;
-    });
-    for (const result of bundleResults) {
-      if (aggregateBundleBytes >= 2_000_000) break;
-      if (result.status !== 'fulfilled' || result.value === null) continue;
-      const bytes = new TextEncoder().encode(result.value.source).byteLength;
-      if (aggregateBundleBytes + bytes > 2_000_000) break;
-      aggregateBundleBytes += bytes;
-      bundleSources.push(result.value);
+      });
+      const discoveredChunks = extractSameOriginJavaScriptLiterals([source], scriptUrl, 12);
+      for (const chunk of discoveredChunks) {
+        if (queued.has(chunk) || fetched.has(chunk) || queued.size >= 20) continue;
+        queued.add(chunk);
+        scriptQueue.push(chunk);
+      }
+      planCurrentPhase(Math.min(12, fetched.size + scriptQueue.length));
     }
     clientBundles = bundleSources;
     const bundleSourceTexts = bundleSources.map(bundle => bundle.source);
@@ -2967,12 +3709,14 @@ export async function deepScanDomain(
   const postActions = applicationSurface.forms
     .filter(form => form.method === 'POST')
     .map(form => form.action);
-  const rateLimitTarget = selectRateLimitTarget(
-    baseUrl,
-    applicationSurface.queryInputs,
-    discoveredApplicationRoutes,
-    postActions,
-  );
+  const rateLimitTarget = options.rateLimitPath
+    ? new URL(options.rateLimitPath, baseUrl).href
+    : selectRateLimitTarget(
+        baseUrl,
+        applicationSurface.queryInputs,
+        discoveredApplicationRoutes,
+        postActions,
+      );
   const hasObjectRoute = discoveredApplicationRoutes.some(route => {
     try {
       const pathname = new URL(route, baseUrl).pathname;
@@ -3007,7 +3751,7 @@ export async function deepScanDomain(
     ...await checkCORS(baseUrl, discoveredApplicationRoutes),
     ...await checkCrossdomain(baseUrl),
   ]);
-  await run('headers',  () => checkSecurityHeaders(mainRes, pageUrl));
+  await run('headers',  () => checkSecurityHeaders(mainRes, pageUrl, discoveredApplicationRoutes));
   await run(
     'cookies',
     () => checkCookies(mainRes),
@@ -3015,7 +3759,7 @@ export async function deepScanDomain(
     'No Set-Cookie header was observed on the scanned page',
   );
   await run('ssl',      () => checkSSL(domain));
-  await run('admin',    () => checkAdminPaths(baseUrl));
+  await run('admin',    () => checkAdminPaths(baseUrl, discoveredApplicationRoutes));
   await run('errors',   () => checkErrorVerbosity(baseUrl));
   await run(
     'redirect',
@@ -3026,22 +3770,12 @@ export async function deepScanDomain(
       ? 'A redirect-like POST field was discovered, but forms that may change state are not automatically submitted'
       : null,
   );
-  await run('dirlist',  () => checkDirectoryListing(baseUrl));
+  await run('dirlist',  () => checkDirectoryListing(baseUrl, discoveredApplicationRoutes));
   await run('robots',   () => checkRobotsTxt(baseUrl));
   await run('sri',          () => checkSRI(pageUrl, mainHtml));
   await run('info',         () => checkInfoDisclosure(mainRes));
   await run('serverstatus', () => checkServerStatus(baseUrl));
   await run('forced',     () => checkForcedBrowsing(baseUrl, discoveredApplicationRoutes));
-  await run(
-    'ratelimit',
-    async () => {
-      const detail = await inspectRateLimitSignals(rateLimitTarget!);
-      checkedDetailOverrides.set('ratelimit', { status: 'observe', detail });
-      return [];
-    },
-    rateLimitTarget !== null,
-    'No safe public GET API route was discovered for a bounded rate-limit review',
-  );
   await run(
     'idor',
     () => checkIDOR(baseUrl, discoveredApplicationRoutes),
@@ -3089,8 +3823,8 @@ export async function deepScanDomain(
     ...await checkS3Listings(clientArtifacts),
   ], !!clientArtifacts.supabase || clientArtifacts.s3Hosts.length > 0);
   await run('nextauth', () => checkNextMiddlewareBypass(baseUrl, mainHtml), !!extractNextBuildId(mainHtml));
-  await run('graphql',    () => checkGraphQL(baseUrl));
-  await run('apidocs',    () => checkAPIDocumentation(baseUrl));
+  await run('graphql',    () => checkGraphQL(baseUrl, discoveredApplicationRoutes));
+  await run('apidocs',    () => checkAPIDocumentation(baseUrl, discoveredApplicationRoutes));
   await run(
     'nosql',
     () => checkNoSQLInjection(noSqlInputs),
@@ -3111,6 +3845,18 @@ export async function deepScanDomain(
     crlfInputs.length === 0 && postCrlfCandidate
       ? 'A response-shaping POST field was discovered, but forms that may change state are not automatically submitted'
       : null,
+  );
+  // Deliberately last: this module briefly removes normal pacing to observe
+  // a low-volume throttle signal. It must never poison later checks.
+  await run(
+    'ratelimit',
+    async () => {
+      const detail = await inspectRateLimitSignals(rateLimitTarget!);
+      checkedDetailOverrides.set('ratelimit', { status: 'observe', detail });
+      return [];
+    },
+    rateLimitTarget !== null,
+    'No safe public GET API route was discovered for a bounded rate-limit review',
   );
 
   const expectedCoverageIds = phasesForLane(SCAN_PHASES, lane)

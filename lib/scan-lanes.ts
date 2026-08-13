@@ -26,7 +26,7 @@ export const SURFACE_PHASE_IDS = [
   'dirlist',    // GET of common asset directories
   'robots',     // GET of /robots.txt
   'sri',        // reads the already-fetched page
-  'info',       // reads response headers, one GET of /server-status
+  'info',       // reads response headers
   'components', // reads the already-fetched page
   'sourcemaps', // GET of referenced .js.map files
   'apidocs',    // GET of /swagger and /openapi.json

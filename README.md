@@ -8,7 +8,7 @@ Ironclad separates two questions the product used to conflate. **Permission deci
 
 **Surface lane, 12 checks, any URL, no account.** Every probe is a read-only request of the class a browser or search crawler already makes: client bundles, exposed `.env` and `.git`, security headers, cookie flags, TLS, directory listing, `robots.txt`, subresource integrity, server version disclosure, vulnerable-library inventory, source maps, and public API schemas.
 
-**Deep lane, 19 more checks, verified domains only.** SQL injection, reflection analysis, NoSQL injection, path traversal, SSRF, CRLF injection, host header injection, open redirect, error verbosity, admin and server-status discovery, forced browsing, IDOR, active CORS, GraphQL introspection, bounded Supabase, Firebase, and storage checks, plus Next.js middleware bypass validation. Each sends a test payload, probes an application entry point, or reads a discovered provider API, so each runs only after live domain control is revalidated.
+**Deep lane, 20 more checks (32 total), verified domains only.** SQL input differentials, reflection analysis, NoSQL input differentials, path traversal, SSRF, CRLF injection, host header handling, open redirect, error verbosity, admin and diagnostic-console discovery, unauthenticated API access, public object comparisons, active CORS, GraphQL introspection, bounded Supabase, Firebase, and storage checks, Next.js middleware bypass validation, and rate-limit signals. Each sends a test value, probes an application entry point, reads a discovered provider API, or intentionally repeats a safe request, so each runs only after live domain control is revalidated.
 
 No plan moves a check between lanes. Sending an attack payload at a server you do not control is not something a subscription should be able to buy.
 
@@ -62,6 +62,21 @@ Fill in the environment variables below, then run `supabase/schema.sql` in the S
 npm run dev
 ```
 
+Deep scans are durable jobs. The web app creates and displays them; a separate
+fixed-egress worker performs target requests:
+
+```bash
+npm run scan-worker
+```
+
+In production build `Dockerfile.worker`, attach fixed outbound IP addresses,
+set `IRONCLAD_SCANNER_EGRESS_IPS` to those exact addresses, and run at least one
+worker replica. Do not enable deep scans until the additive `deep_scan_jobs`
+and `deep_scan_events` schema in `supabase/schema.sql` has been applied. The
+worker refuses to run a production scan when no fixed scanner IP is published.
+After the schema, worker, and public scanner-information page are live, set
+`IRONCLAD_DURABLE_SCANNER_ENABLED=true` in both the web and worker deployments.
+
 ## Environment variables
 
 | Variable | Required | Purpose |
@@ -72,6 +87,9 @@ npm run dev
 | `JWT_SECRET` | Yes | Signs authentication cookies; use at least 32 random bytes |
 | `RATE_LIMIT_SECRET` | Recommended | HMAC key for anonymous rate-limit identifiers; keep distinct from the JWT key |
 | `TRUST_PROXY_HEADERS` | Self-hosted only | Set `true` only when a trusted proxy overwrites forwarding headers; Vercel is detected automatically |
+| `IRONCLAD_DURABLE_SCANNER_ENABLED` | Yes for deep scans | Production release switch; leave false until the queue schema and fixed-egress worker are live |
+| `IRONCLAD_SCANNER_EGRESS_IPS` | Dedicated worker | Comma-separated fixed outbound IPs published to verified owners for narrow WAF exceptions |
+| `IRONCLAD_WORKER_ID` | Dedicated worker | Stable, non-secret worker name used for leases and operations logs |
 | `OAUTH_STATE_SECRET` | Hosting OAuth | Signs ten-minute provider verification state |
 | `OAUTH_TOKEN_ENCRYPTION_KEY` | Hosting OAuth | Encrypts provider access tokens before database storage |
 | `VERCEL_INTEGRATION_SLUG` | Vercel verification | Public integration slug used to begin installation |
@@ -107,9 +125,9 @@ Unit coverage: lane membership, coverage attribution, redaction, quota keys, res
 
 ## Important limitations
 
-A scan looks from the outside at one moment in time. It cannot read your source, review your access control, or reason about your business logic, and it is not a penetration test. A check that finds nothing means these bounded probes observed nothing, not that the condition is absent.
+A scan looks from the outside at one moment in time. It cannot read private source, fully review role/ownership rules, or reason about business logic. It is a bounded automated part of a penetration-testing workflow, not a substitute for an authenticated manual penetration test. A check that finds nothing means these named probes observed nothing, not that the condition is absent.
 
-The deep scanner remains experimental. Sensitive-path handling needs a larger false-positive corpus, and the request-bound scan job should move to a durable, egress-restricted worker. See [the audit and reliability roadmap](docs/AUDIT_AND_ROADMAP.md).
+Deep scans run as durable, leased jobs on the dedicated fixed-egress worker. Target requests are globally serialised, normal request starts are paced by 750 ms, retries are bounded, confirmed challenges pause the job, and saved module checkpoints are reused after a worker lease expires. The interrupted module restarts from its beginning because detector conclusions depend on complete control/candidate pairs. See [the vector review](docs/DEEP_SCAN_VECTOR_REVIEW.md) for the evidence and remaining limitation of every module.
 
 ## Not yet built
 

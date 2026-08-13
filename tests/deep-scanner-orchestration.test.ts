@@ -81,7 +81,7 @@ test('a deep scan accounts for every advertised phase without silent skips', asy
   assert.equal(result.coverage?.checks?.some(check => !check.complete), false);
   assert.equal(result.coverage?.checks?.every(check => typeof check.durationMs === 'number' && check.durationMs >= 0), true);
   assert.ok((result.coverage?.requestsAttempted ?? 0) > 100);
-  assert.ok(maxInFlight > 1, 'independent probes should overlap instead of being serialized');
+  assert.equal(maxInFlight, 1, 'all target probes must be serialized even when modules create concurrent tasks');
   assert.equal(requested[0], 'GET https://fixture.example/app');
   assert.equal(result.application?.pageUrl, 'https://fixture.example/app');
   assert.equal(result.application?.formsDiscovered, 2);
@@ -91,6 +91,7 @@ test('a deep scan accounts for every advertised phase without silent skips', asy
   const requestProgress = events.filter(event => event.progress.status === 'progress');
   assert.ok(requestProgress.length > 0);
   assert.ok(requestProgress.some(event => (event.progress.coverage?.requestsAttempted ?? 0) > 0));
+  assert.ok(requestProgress.some(event => (event.progress.completedProbes ?? 0) > 0));
 
   const deferredDoneEvents: ScanPhaseProgress[] = [];
   await deepScanDomain(
@@ -138,6 +139,56 @@ test('a custom scope executes and persists only the backend-selected modules', a
   assert.deepEqual(result.coverage?.checks?.map(check => check.phaseId), ['headers', 'ssl']);
   assert.deepEqual(result.checked.map(item => item.id), ['ssl', 'headers']);
   assert.equal(result.summary.score, null);
+});
+
+test('a recovered worker reuses terminal module outcomes without sending those probes again', async () => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://abcdefghijklmnopqrst.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= `test-service-role-${'x'.repeat(32)}`;
+  const { deepScanDomain } = await import('../lib/deep-scanner');
+  let requests = 0;
+  const transport = async (input: URL | string): Promise<Response> => {
+    requests += 1;
+    const url = new URL(input.toString());
+    if (url.protocol === 'http:') {
+      return new Response(null, { status: 301, headers: { location: `https://${url.hostname}/` } });
+    }
+    return new Response('<!doctype html><html><body>recovery fixture</body></html>', {
+      status: 200,
+      headers: {
+        'content-type': 'text/html',
+        'content-security-policy': "default-src 'self'",
+        'strict-transport-security': 'max-age=31536000',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'strict-origin',
+        'permissions-policy': 'camera=()',
+      },
+    });
+  };
+  const first = await deepScanDomain(
+    { hostname: 'fixture.example', startUrl: 'https://fixture.example/app' },
+    'deep', undefined, { transport, selectedPhaseIds: ['headers', 'ssl'] },
+  );
+  const resumePhases = (first.coverage?.checks ?? []).map(coverage => ({
+    phaseId: coverage.phaseId,
+    findings: [],
+    coverage,
+    transportAttempts: coverage.requestsAttempted,
+    retries: 0,
+  }));
+  requests = 0;
+  const phaseEvents: string[] = [];
+  const recovered = await deepScanDomain(
+    { hostname: 'fixture.example', startUrl: 'https://fixture.example/app' },
+    'deep',
+    (phase, _findings, progress) => {
+      if (progress.status === 'start') phaseEvents.push(phase.id);
+    },
+    { transport, selectedPhaseIds: ['headers', 'ssl'], resumePhases },
+  );
+  assert.equal(requests, 1, 'only the submitted page is refreshed before recovered modules are reused');
+  assert.deepEqual(phaseEvents, ['init', 'done']);
+  assert.deepEqual(recovered.coverage?.checks?.map(item => item.phaseId), ['headers', 'ssl']);
+  assert.equal(recovered.checked.length, 2);
 });
 
 test('rate-limit scope uses a discovered safe GET route and records bounded throttle evidence', async () => {
@@ -256,4 +307,68 @@ test('a redirect away from the verified host is a bounded negative response, not
   );
   assert.equal(result.coverage?.requestsBlocked, 0);
   assert.equal(result.coverage?.checks?.some(check => !check.complete), false);
+});
+
+test('a confirmed bot challenge stops queued module probes before they reach the target', async () => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://abcdefghijklmnopqrst.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= `test-service-role-${'x'.repeat(32)}`;
+  const { deepScanDomain } = await import('../lib/deep-scanner');
+  const requests: string[] = [];
+  const transport = async (input: URL | string): Promise<Response> => {
+    const url = new URL(input.toString());
+    requests.push(url.pathname);
+    if (url.pathname === '/app') {
+      return new Response('<!doctype html><html><body>fixture</body></html>', {
+        status: 200, headers: { 'content-type': 'text/html' },
+      });
+    }
+    return new Response('Attention Required | Cloudflare', {
+      status: 403,
+      headers: { 'cf-mitigated': 'challenge', 'cf-ray': 'fixture' },
+    });
+  };
+  await assert.rejects(
+    deepScanDomain(
+      { hostname: 'fixture.example', startUrl: 'https://fixture.example/app' },
+      'deep', undefined, { transport, selectedPhaseIds: ['files'] },
+    ),
+    (error: unknown) => error instanceof Error && error.name === 'ScanAccessPausedError',
+  );
+  assert.deepEqual(requests, ['/app', '/.env']);
+});
+
+test('a catch-all application shell is not mistaken for files, admin tools, listings, docs, APIs, or diagnostics', async () => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://abcdefghijklmnopqrst.supabase.co';
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= `test-service-role-${'x'.repeat(32)}`;
+  const { deepScanDomain } = await import('../lib/deep-scanner');
+  const shell = '<!doctype html><html><head><title>Product</title></head><body><main>Welcome to the product</main></body></html>';
+  const transport = async (input: URL | string): Promise<Response> => {
+    const url = new URL(input.toString());
+    if (url.protocol === 'http:') {
+      return new Response(null, { status: 301, headers: { location: `https://${url.hostname}${url.pathname}` } });
+    }
+    return new Response(shell, {
+      status: 200,
+      headers: {
+        'content-type': 'text/html',
+        'content-security-policy': "default-src 'self'; frame-ancestors 'none'",
+        'strict-transport-security': 'max-age=31536000',
+        'x-frame-options': 'DENY',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'strict-origin',
+        'permissions-policy': 'camera=()',
+      },
+    });
+  };
+  const result = await deepScanDomain(
+    { hostname: 'fixture.example', startUrl: 'https://fixture.example/app' },
+    'deep', undefined,
+    { transport, selectedPhaseIds: ['files', 'admin', 'dirlist', 'serverstatus', 'forced', 'graphql', 'apidocs'] },
+  );
+  const forbiddenPrefixes = ['exposed-', 'admin-', 'directory-', 'diagnostic-', 'auth-unprotected', 'graphql-', 'api-docs-'];
+  assert.deepEqual(
+    result.findings.filter(finding => forbiddenPrefixes.some(prefix => finding.id.startsWith(prefix))),
+    [],
+  );
+  assert.equal(result.coverage?.checks?.every(check => check.complete), true);
 });

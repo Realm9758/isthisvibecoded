@@ -7,6 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "scan-worker": "node --conditions=react-server --import tsx scripts/scan-worker.ts",
     "typecheck": "next typegen && tsc --noEmit --incremental false",
     "test": "tsc -p tsconfig.test.json && node --import ./tests/support/alias-hook.mjs --test .test-dist/tests/*.test.js",
     "check": "npm run typecheck && npm run test && npm run lint && npm run build"
@@ -18,7 +19,8 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "server-only": "0.0.1",
-    "stripe": "^22.0.1"
+    "stripe": "^22.0.1",
+    "tsx": "^4.20.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -517,6 +517,213 @@ create index if not exists deep_scans_user_created_idx
 create index if not exists deep_scans_domain_created_idx
   on public.deep_scans (domain, created_at desc);
 
+-- Durable deep-scan jobs -------------------------------------------------
+-- The web request only creates a job. A dedicated worker with fixed egress
+-- leases it, writes a replayable event ledger, and persists the final report.
+
+create table if not exists public.deep_scan_jobs (
+  id                         text primary key,
+  user_id                    text not null references public.users(id) on delete cascade,
+  domain                     text not null,
+  start_url                  text not null,
+  status                     text not null default 'queued',
+  selected_phase_ids         jsonb not null,
+  rate_limit_path            text,
+  authorization_terms_version text not null,
+  authorization_accepted_at bigint not null,
+  verification_snapshot      jsonb not null,
+  current_pass               text,
+  current_phase_id           text,
+  checkpoint                 integer not null default 0,
+  checkpoint_data            text,
+  access_diagnostic          jsonb,
+  result_scan_id             text references public.deep_scans(id) on delete set null,
+  quota_key                  text,
+  quota_state                text not null default 'pending',
+  lease_owner                text,
+  lease_expires_at           bigint,
+  waiting_expires_at         bigint,
+  cancel_requested           boolean not null default false,
+  error                      text,
+  created_at                 bigint not null,
+  updated_at                 bigint not null,
+  constraint deep_scan_jobs_status_check check (status in (
+    'queued', 'perimeter_running', 'waiting_for_access', 'application_running',
+    'retry_wait', 'finalizing', 'complete', 'failed', 'cancelled'
+  )),
+  constraint deep_scan_jobs_pass_check check (current_pass is null or current_pass in ('perimeter', 'application')),
+  constraint deep_scan_jobs_quota_check check (quota_state in ('pending', 'committed', 'refunded')),
+  constraint deep_scan_jobs_scope_check check (jsonb_typeof(selected_phase_ids) = 'array'),
+  constraint deep_scan_jobs_rate_path_check check (
+    rate_limit_path is null or (
+      char_length(rate_limit_path) between 1 and 300
+      and left(rate_limit_path, 1) = '/'
+      and position('?' in rate_limit_path) = 0
+      and position('#' in rate_limit_path) = 0
+    )
+  ),
+  constraint deep_scan_jobs_time_check check (created_at >= 0 and updated_at >= created_at)
+);
+
+-- Additive migration support for installations that created the job table
+-- before owner-selected rate-limit paths were introduced.
+alter table public.deep_scan_jobs
+  add column if not exists rate_limit_path text,
+  add column if not exists checkpoint_data text;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'deep_scan_jobs_rate_path_check'
+      and conrelid = 'public.deep_scan_jobs'::regclass
+  ) then
+    alter table public.deep_scan_jobs add constraint deep_scan_jobs_rate_path_check check (
+      rate_limit_path is null or (
+        char_length(rate_limit_path) between 1 and 300
+        and left(rate_limit_path, 1) = '/'
+        and position('?' in rate_limit_path) = 0
+        and position('#' in rate_limit_path) = 0
+      )
+    );
+  end if;
+end;
+$$;
+
+create unique index if not exists deep_scan_jobs_active_domain_idx
+  on public.deep_scan_jobs (domain)
+  where status in ('queued', 'perimeter_running', 'waiting_for_access', 'application_running', 'retry_wait', 'finalizing');
+create index if not exists deep_scan_jobs_worker_idx
+  on public.deep_scan_jobs (status, lease_expires_at, created_at);
+create index if not exists deep_scan_jobs_user_idx
+  on public.deep_scan_jobs (user_id, created_at desc);
+
+create table if not exists public.deep_scan_events (
+  sequence   bigint generated always as identity primary key,
+  job_id     text not null references public.deep_scan_jobs(id) on delete cascade,
+  event_type text not null,
+  payload    jsonb not null,
+  created_at bigint not null,
+  constraint deep_scan_events_type_check check (event_type in (
+    'manifest', 'job_state', 'perimeter', 'phase', 'probe', 'result', 'error'
+  )),
+  constraint deep_scan_events_payload_check check (jsonb_typeof(payload) in ('object', 'array')),
+  constraint deep_scan_events_created_check check (created_at >= 0)
+);
+
+create index if not exists deep_scan_events_replay_idx
+  on public.deep_scan_events (job_id, sequence);
+create index if not exists deep_scan_events_expiry_idx
+  on public.deep_scan_events (created_at);
+
+create or replace function public.claim_deep_scan_job(
+  claimant_worker_id text,
+  lease_timestamp bigint,
+  lease_expiry bigint
+)
+returns setof public.deep_scan_jobs
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare claimed_id text;
+begin
+  select candidate.id into claimed_id
+  from public.deep_scan_jobs candidate
+  where candidate.cancel_requested = false
+    and candidate.status in ('queued', 'perimeter_running', 'application_running', 'retry_wait', 'finalizing')
+    and (candidate.lease_expires_at is null or candidate.lease_expires_at < lease_timestamp)
+  order by candidate.created_at asc
+  for update skip locked
+  limit 1;
+
+  if claimed_id is null then return; end if;
+
+  return query
+  update public.deep_scan_jobs job
+  set lease_owner = claimant_worker_id,
+      lease_expires_at = lease_expiry,
+      updated_at = lease_timestamp
+  where job.id = claimed_id
+  returning job.*;
+end;
+$$;
+
+create or replace function public.renew_deep_scan_job_lease(
+  claim_job_id text,
+  claimant_worker_id text,
+  lease_timestamp bigint,
+  lease_expiry bigint
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.deep_scan_jobs job
+  set lease_expires_at = lease_expiry,
+      updated_at = lease_timestamp
+  where job.id = claim_job_id
+    and job.lease_owner = claimant_worker_id
+    and job.status not in ('complete', 'failed', 'cancelled');
+  return found;
+end;
+$$;
+
+create or replace function public.cleanup_deep_scan_events(expiry_timestamp bigint)
+returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare removed bigint;
+begin
+  delete from public.deep_scan_events
+  where created_at < expiry_timestamp
+    and job_id in (
+      select id from public.deep_scan_jobs
+      where status in ('complete', 'failed', 'cancelled')
+    );
+  get diagnostics removed = row_count;
+  return removed;
+end;
+$$;
+
+create or replace function public.expire_deep_scan_access_waits(current_timestamp_ms bigint)
+returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare expired bigint;
+begin
+  update public.deep_scan_jobs
+  set status = 'failed',
+      current_pass = null,
+      current_phase_id = null,
+      lease_owner = null,
+      lease_expires_at = null,
+      error = 'The 24-hour firewall access setup window expired.',
+      updated_at = current_timestamp_ms
+  where status = 'waiting_for_access'
+    and waiting_expires_at is not null
+    and waiting_expires_at < current_timestamp_ms;
+  get diagnostics expired = row_count;
+  return expired;
+end;
+$$;
+
+-- Queue and lease operations are worker-only. SECURITY DEFINER functions
+-- otherwise inherit PostgreSQL's default PUBLIC execute permission.
+revoke all on function public.claim_deep_scan_job(text, bigint, bigint) from public, anon, authenticated;
+revoke all on function public.renew_deep_scan_job_lease(text, text, bigint, bigint) from public, anon, authenticated;
+revoke all on function public.cleanup_deep_scan_events(bigint) from public, anon, authenticated;
+revoke all on function public.expire_deep_scan_access_waits(bigint) from public, anon, authenticated;
+grant execute on function public.claim_deep_scan_job(text, bigint, bigint) to service_role;
+grant execute on function public.renew_deep_scan_job_lease(text, text, bigint, bigint) to service_role;
+grant execute on function public.cleanup_deep_scan_events(bigint) to service_role;
+grant execute on function public.expire_deep_scan_access_waits(bigint) to service_role;
+
 -- Ironclad lane model ------------------------------------------------------
 -- deep_scans becomes the single store for both lanes. Existing rows are deep
 -- scans, which is what the default records. user_id becomes nullable so an
@@ -1073,6 +1280,8 @@ alter table public.verification_tokens enable row level security;
 alter table public.verification_events enable row level security;
 alter table public.verification_provider_connections enable row level security;
 alter table public.deep_scans enable row level security;
+alter table public.deep_scan_jobs enable row level security;
+alter table public.deep_scan_events enable row level security;
 alter table public.comments enable row level security;
 alter table public.comment_likes enable row level security;
 alter table public.scan_likes enable row level security;

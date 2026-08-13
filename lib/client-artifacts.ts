@@ -42,8 +42,22 @@ export function extractSameOriginScriptUrls(html: string, baseUrl: string, limit
   const origin = new URL(baseUrl).origin;
   const found: string[] = [];
   const seen = new Set<string>();
-  for (const tag of html.match(/<script\b[^>]*>/gi) ?? []) {
-    const match = /\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'=<>`]+))/i.exec(tag);
+  const tags = [
+    ...(html.match(/<script\b[^>]*>/gi) ?? []),
+    ...(html.match(/<link\b[^>]*>/gi) ?? []).filter(tag => {
+      const rel = /\brel\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'=<>`]+))/i.exec(tag);
+      const as = /\bas\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'=<>`]+))/i.exec(tag);
+      const relValue = (rel?.[1] ?? rel?.[2] ?? rel?.[3] ?? '').toLowerCase();
+      const asValue = (as?.[1] ?? as?.[2] ?? as?.[3] ?? '').toLowerCase();
+      return relValue.split(/\s+/).includes('modulepreload')
+        || (relValue.split(/\s+/).includes('preload') && asValue === 'script');
+    }),
+  ];
+  for (const tag of tags) {
+    const attribute = tag.toLowerCase().startsWith('<script') ? 'src' : 'href';
+    const match = attribute === 'src'
+      ? /\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'=<>`]+))/i.exec(tag)
+      : /\bhref\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'=<>`]+))/i.exec(tag);
     const raw = match?.[1] ?? match?.[2] ?? match?.[3];
     if (!raw) continue;
     try {
@@ -59,6 +73,30 @@ export function extractSameOriginScriptUrls(html: string, baseUrl: string, limit
     }
   }
   return found;
+}
+
+/** Follow concrete JavaScript chunk URLs that a downloaded bundle or manifest advertises. */
+export function extractSameOriginJavaScriptLiterals(
+  sources: readonly string[],
+  baseUrl: string,
+  limit = 12,
+): string[] {
+  const origin = new URL(baseUrl).origin;
+  const urls = new Set<string>();
+  for (const source of sources) {
+    for (const match of source.matchAll(/["'`](\/?[A-Za-z0-9_./-]+\.m?js(?:\?[A-Za-z0-9_.~=&%-]{0,160})?)["'`]/g)) {
+      try {
+        const url = new URL(match[1], baseUrl);
+        url.hash = '';
+        if (url.origin !== origin || !/\.m?js(?:$|\?)/i.test(url.href)) continue;
+        urls.add(url.href);
+        if (urls.size >= limit) return [...urls];
+      } catch {
+        // Ignore malformed or cross-origin literals.
+      }
+    }
+  }
+  return [...urls];
 }
 
 export function extractClientArtifacts(source: string): ClientArtifacts {
