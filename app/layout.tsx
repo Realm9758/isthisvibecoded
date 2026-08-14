@@ -30,6 +30,17 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+      <head>
+        {/*
+          Scroll reveals are applied by JavaScript. With scripting off nothing
+          ever adds .is-in, so without this the marketing pages would render as
+          an empty column. A stylesheet cannot test for scripting, so the
+          override has to ride here.
+        */}
+        <noscript>
+          <style>{'[data-reveal]{opacity:1!important;transform:none!important;filter:none!important}.rule-draw{transform:scaleX(1)!important}'}</style>
+        </noscript>
+      </head>
       <body className="min-h-screen bg-[#0a0a0f] text-[#e8e8f0] antialiased">
         <Providers>
           <Navbar />

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { NotificationBell } from './NotificationBell';
 import { apiPath } from '@/lib/site';
@@ -44,7 +44,23 @@ function IconChevron() {
 export function Navbar() {
   const { user, loading, logout } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const router = useRouter();
+
+  /*
+   * At the very top of a page the bar has nothing to separate itself from, and
+   * a solid strip with a border there just crops the hero. So it starts
+   * invisible and materialises once there is content passing underneath it.
+   *
+   * The listener is passive and only ever flips a boolean, so a scroll that
+   * does not cross the threshold costs one comparison.
+   */
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 40);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
   async function handleLogout() {
     await logout();
@@ -53,8 +69,11 @@ export function Navbar() {
 
   return (
     <nav
-      className="sticky top-0 z-40 px-6 backdrop-blur-xl border-b"
-      style={{ background: 'rgba(0,0,0,0.82)', borderColor: 'var(--border)' }}
+      className="sticky top-0 z-40 px-6 backdrop-blur-xl border-b transition-colors duration-300"
+      style={{
+        background: scrolled ? 'rgba(0,0,0,0.82)' : 'transparent',
+        borderColor: scrolled ? 'var(--border)' : 'transparent',
+      }}
     >
       <div className="max-w-6xl mx-auto flex items-center h-16 gap-8">
 

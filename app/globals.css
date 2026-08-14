@@ -12,8 +12,8 @@
 
 :root {
   --bg:        #000000;
-  --surface:   #0a0a0b;
-  --surface-2: #0e0e10;
+  --surface:   #0c0c0e;
+  --surface-2: #121215;
   --border:    rgba(255, 255, 255, 0.08);
   --border-2:  rgba(255, 255, 255, 0.14);
 
@@ -34,6 +34,21 @@
 
   --background: var(--bg);
   --foreground: var(--text);
+
+  /*
+   * Motion tokens. One easing curve carries almost everything: expo-out is
+   * fast at the start and settles slowly, which reads as a machine finishing
+   * work rather than an object bouncing. The spring is reserved for the two
+   * moments a finding lands, where a small overshoot is the point.
+   */
+  --dur-fast: 180ms;
+  --dur:      420ms;
+  --dur-slow: 900ms;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* A lit card: hairline ring plus a wide, very dim accent bloom under it. */
+  --glow-accent: 0 0 0 1px var(--accent-line), 0 8px 40px -12px rgba(59, 130, 246, 0.45);
 }
 
 html,
@@ -121,6 +136,13 @@ body {
 
 /* ── Motion ────────────────────────────────────────── */
 
+/*
+ * Everything below animates transform, opacity, filter or clip-path and
+ * nothing else. No animation on this page may change a box's size or
+ * position in flow, because the landing page runs a looping demo and a
+ * canvas at the same time and cannot afford layout on a frame budget.
+ */
+
 @keyframes pulse-glow {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
@@ -141,9 +163,51 @@ body {
   100% { transform: translateX(100%); }
 }
 
-.animate-fade-in-up { animation: fade-in-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+/* Vertical scan band crossing a card while its demo runs. */
+@keyframes sweep-y {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { transform: translateY(1200%); opacity: 0; }
+}
+
+/* A finding row arriving: rises, overshoots a hair, settles. */
+@keyframes finding-land {
+  0%   { opacity: 0; transform: translateY(10px) scale(0.985); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/*
+ * One-shot severity wash behind a row that just landed. Kept very low: this
+ * sits behind white body text, and anything stronger turns the row into a
+ * solid colour block for the better part of a second.
+ */
+@keyframes sev-flash {
+  0%   { opacity: 0.14; }
+  100% { opacity: 0; }
+}
+
+/* Conic ring sweeping a card border on hover. */
+@keyframes border-trace {
+  to { transform: rotate(1turn); }
+}
+
+@keyframes caret-blink {
+  0%, 45%   { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
+/* Hairline drawing itself along its own length. */
+@keyframes draw-x {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+.animate-fade-in-up { animation: fade-in-up 0.45s var(--ease-out-expo) forwards; }
 .animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
 .animate-spin-slow  { animation: spin-slow 3s linear infinite; }
+.animate-caret      { animation: caret-blink 1.06s steps(1, end) infinite; }
+.animate-sweep-y    { animation: sweep-y 2.4s var(--ease-out-expo) infinite; }
 
 .scan-sweep::after {
   content: '';
@@ -153,14 +217,209 @@ body {
   animation: scan-sweep 1.8s ease-in-out infinite;
 }
 
+/*
+ * Scroll reveal. A shared IntersectionObserver (components/landing/useReveal)
+ * adds .is-in exactly once, so an element that has arrived stays arrived even
+ * if the reader scrolls back past it. The blur is what separates this from a
+ * plain fade: content resolves into focus rather than just appearing.
+ */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(18px);
+  filter: blur(6px);
+  transition:
+    opacity   var(--dur-slow) var(--ease-out-expo) var(--reveal-delay, 0ms),
+    transform var(--dur-slow) var(--ease-out-expo) var(--reveal-delay, 0ms),
+    filter    var(--dur-slow) var(--ease-out-expo) var(--reveal-delay, 0ms);
+  will-change: opacity, transform;
+}
+
+[data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+  filter: none;
+  will-change: auto;
+}
+
+/*
+ * Without JavaScript nothing ever adds .is-in, and a reveal-based page would
+ * render as an empty black column. The <noscript> override in app/layout.tsx
+ * resolves every reveal to its rest state so the page still reads with
+ * scripting off. It lives there rather than here because a stylesheet cannot
+ * ask whether scripting is enabled.
+ */
+
+
+/* Variant: arrives from the left, for rail tiles and list rows. */
+[data-reveal='x'] { transform: translateX(-14px); }
+
+/* Variant: no travel, used where a shifted element would clip its container. */
+[data-reveal='fade'] { transform: none; }
+
+/*
+ * Hairline that draws itself once its section is in view. The element is a
+ * 1px box; only scaleX animates, so it never reflows its neighbours.
+ */
+.rule-draw {
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-slow) var(--ease-out-expo) var(--reveal-delay, 0ms);
+}
+
+.rule-draw.is-in { transform: scaleX(1); }
+
+/*
+ * Animated card ring. A conic gradient rotates inside a masked pseudo-element
+ * so only the 1px border band shows it. Masking keeps the sweep off the card
+ * contents and off the compositor's hot path.
+ */
+.trace-border {
+  position: relative;
+  isolation: isolate;
+}
+
+.trace-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(
+    from 0turn,
+    transparent 0deg,
+    var(--accent) 40deg,
+    transparent 110deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: 0;
+  transition: opacity var(--dur) ease;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.trace-border:hover::before,
+.trace-border:focus-within::before {
+  opacity: 1;
+  animation: border-trace 3.2s linear infinite;
+}
+
+/*
+ * Rolling counter. The digit column translates by whole line-heights, so the
+ * strip must be exactly one line tall and the digits tabular, or the roll
+ * lands between rows.
+ */
+.digit-window {
+  display: inline-block;
+  overflow: hidden;
+  height: 1em;
+  line-height: 1;
+  vertical-align: -0.06em;
+  font-variant-numeric: tabular-nums;
+}
+
+.digit-strip {
+  display: block;
+  transition: transform var(--dur-slow) var(--ease-out-expo) var(--reveal-delay, 0ms);
+}
+
+.digit-strip > span {
+  display: block;
+  height: 1em;
+  line-height: 1;
+}
+
+/*
+ * Accordion height without measuring anything in JS. A 0fr grid row has zero
+ * resolved height; 1fr takes the content's height, and grid-template-rows is
+ * animatable, so the open/close tween needs no ResizeObserver.
+ */
+.acc-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur) var(--ease-out-expo);
+}
+
+.acc-body > * { overflow: hidden; }
+
+details[open] > .acc-body,
+.acc-body.is-open { grid-template-rows: 1fr; }
+
+/* Underline that grows from the leading edge on hover. */
+.link-underline {
+  position: relative;
+}
+
+.link-underline::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-fast) var(--ease-out-expo);
+}
+
+.link-underline:hover::after,
+.link-underline:focus-visible::after { transform: scaleX(1); }
+
+/* Sheen crossing a solid button on hover. */
+.sheen { position: relative; overflow: hidden; }
+
+.sheen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.28) 50%, transparent 70%);
+  transform: translateX(-100%);
+  transition: transform 620ms var(--ease-out-expo);
+  pointer-events: none;
+}
+
+.sheen:hover::after { transform: translateX(100%); }
+
+/*
+ * Reduced motion. Every looping or travelling animation is disabled and every
+ * reveal resolves to its rest state, so the page is fully readable with no
+ * timers running. The JS hooks make the same check and skip their rAF loops
+ * entirely rather than relying on this block alone.
+ */
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in-up,
   .animate-pulse-glow,
   .animate-spin-slow,
-  .scan-sweep::after {
-    animation: none;
+  .animate-caret,
+  .animate-sweep-y,
+  .scan-sweep::after,
+  .trace-border::before,
+  .trace-border:hover::before,
+  .trace-border:focus-within::before {
+    animation: none !important;
   }
+
   .animate-fade-in-up { opacity: 1; transform: none; }
+
+  [data-reveal],
+  [data-reveal='x'],
+  [data-reveal='fade'] {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+    transition: none !important;
+  }
+
+  .rule-draw    { transform: scaleX(1) !important; transition: none !important; }
+  .digit-strip,
+  .acc-body,
+  .sheen::after,
+  .link-underline::after { transition: none !important; }
 }
 
 /* ── Form ──────────────────────────────────────────── */
@@ -187,8 +446,17 @@ input::placeholder {
   nav,
   footer,
   button,
+  canvas,
+  [data-decorative],
   [data-print-hide] {
     display: none !important;
+  }
+
+  /* Anything mid-reveal must print as arrived, not as an empty box. */
+  [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
   }
 
   * {
