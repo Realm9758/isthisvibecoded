@@ -5,7 +5,7 @@ import { claimHeldScan } from '@/lib/claim-scan';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { ACCOUNT_POLICY_VERSION, isValidDisplayHandle } from '@/lib/policy';
+import { ACCOUNT_POLICY_VERSION, DISPLAY_HANDLE_HTML_PATTERN, isValidDisplayHandle } from '@/lib/policy';
 import { apiPath } from '@/lib/site';
 import { LANE_CHECK_COUNTS } from '@/lib/scan-lanes';
 
@@ -188,7 +188,7 @@ export default function SignupPage() {
                     onChange={e => setName(e.target.value)}
                     required
                     maxLength={40}
-                    pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,39}"
+                    pattern={DISPLAY_HANDLE_HTML_PATTERN}
                     title="Use letters, numbers, dots, underscores, or hyphens; start with a letter or number."
                     autoComplete="username"
                     aria-describedby="handle-privacy-note"
